@@ -7,7 +7,9 @@
 //   only names the tables and options, shows what the core reports and can cancel it. Each hit
 //   opens the table data tab filtered to its row by the core's filter.
 
+import { useConnectionName } from "../folders";
 import { Channel } from "@tauri-apps/api/core";
+import { explorerSession } from "../windowContext";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -17,13 +19,14 @@ import {
   type DataSearchLimitsItem,
   type SearchHitItem,
 } from "../api";
-import { useCatalog, type CatalogSchema } from "../catalog";
+import { catalogKey, catalogKeyOfTag, catalogKeyParts, searchCatalog, useCatalog, type CatalogSchema } from "../catalog";
 import { openTableData } from "../connect";
 import { type NameHit, schemasWithoutColumns, searchableTables, searchNames } from "../dbSearch";
 import { startJob, type Job } from "../jobs";
 import { ended, failed, markCancelling, searching, startedRun, withEvent, type SearchedTable, type SearchRun } from "../searchRun";
 import { useApp } from "../store";
 import { explorerSessionOpen } from "../tabState";
+import { connectionOfTag, connectionTag, databaseOf, keyOf, listedConnection, tabConnection, type ConnectionKey } from "../connectionKey";
 import { openFound } from "./OpenObjectDialog";
 import { HideSidePanelButton } from "./SidePanelButtons";
 
@@ -42,7 +45,6 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-const keyOf = (connectionId: string, schema: string) => `${connectionId}\u0000${schema}`;
 const tableKey = (schema: string, table: string) => `${schema}\u0000${table}`;
 
 type Mode = "names" | "data";
@@ -103,24 +105,25 @@ function NameSearch({ query, hidden, openFirst }: { query: string; hidden: boole
   const [openError, setOpenError] = useState<string | null>(null);
   const attempted = useRef(new Set<string>());
   const deferred = useDeferredValue(query);
-  const list = useMemo(() => Object.values(schemas), [schemas]);
+  const catalog = useMemo(() => Object.values(schemas), [schemas]);
+  const list = useMemo(() => searchCatalog(catalog), [catalog]);
 
   // Each loaded schema's columns, read once when a search first needs them (ADR-043); a schema
   // the explorer reads again is published without them and read again here.
   const missing = useMemo(
-    () => (columns && deferred.trim() ? schemasWithoutColumns(list).filter((s) => !attempted.current.has(keyOf(s.connectionId, s.schema))) : []),
-    [columns, deferred, list],
+    () => (columns && deferred.trim() ? schemasWithoutColumns(catalog).filter((s) => !attempted.current.has(catalogKey(s.connection, s.schema))) : []),
+    [columns, deferred, catalog],
   );
   useEffect(() => {
     if (missing.length === 0) return;
-    for (const entry of missing) attempted.current.add(keyOf(entry.connectionId, entry.schema));
+    for (const entry of missing) attempted.current.add(catalogKey(entry.connection, entry.schema));
     setReading((n) => n + missing.length);
     void (async () => {
       for (const entry of missing) {
-        const key = keyOf(entry.connectionId, entry.schema);
+        const key = catalogKey(entry.connection, entry.schema);
         try {
-          const read = await call(commands.listColumns(`meta:${entry.connectionId}`, entry.schema));
-          useCatalog.getState().setColumns(entry.connectionId, entry.schema, read);
+          const read = await call(commands.listColumns(explorerSession(entry.connection), entry.schema));
+          useCatalog.getState().setColumns(entry.connection, entry.schema, read);
           setFailures((f) => {
             if (!(key in f)) return f;
             const next = { ...f };
@@ -144,24 +147,26 @@ function NameSearch({ query, hidden, openFirst }: { query: string; hidden: boole
   }, [schemas]);
 
   const result = useMemo(() => searchNames(list, deferred, { columns, limit: NAME_LIMIT }), [list, deferred, columns]);
-  const connectionName = (id: string) => connections.find((c) => c.id === id)?.name ?? id;
+  /** A connection's name, from its tag. */
+  const connectionName = (tag: string) => connections.find((c) => connectionTag(keyOf(c)) === tag)?.name ?? connectionOfTag(tag)?.id ?? "";
   const groups = useMemo(() => {
     const byConnection = new Map<string, NameHit[]>();
-    for (const hit of result.hits) byConnection.set(hit.connectionId, [...(byConnection.get(hit.connectionId) ?? []), hit]);
+    for (const hit of result.hits) byConnection.set(hit.connection, [...(byConnection.get(hit.connection) ?? []), hit]);
     return [...byConnection.entries()];
   }, [result]);
 
   function open(hit: NameHit) {
     setOpenError(null);
-    const entry: CatalogSchema | undefined = schemas[keyOf(hit.connectionId, hit.schema)];
+    const entry: CatalogSchema | undefined = schemas[catalogKeyOfTag(hit.connection, hit.schema)];
+    if (!entry) return;
     if (hit.kind === "schemaObject") {
-      const object = entry?.others.find((o) => o.name === hit.name && o.kind === hit.type && (o.detail ?? null) === (hit.detail ?? null));
+      const object = entry.others.find((o) => o.name === hit.name && o.kind === hit.type && (o.detail ?? null) === (hit.detail ?? null));
       if (!object) return;
-      openFound(hit.connectionId, { kind: "schemaObject", object }).catch((e: unknown) => setOpenError(t("search.openFailed", { detail: errorText(e) })));
+      openFound(entry.connection, { kind: "schemaObject", object }).catch((e: unknown) => setOpenError(t("search.openFailed", { detail: errorText(e) })));
       return;
     }
-    const object = entry?.relations.find((r) => r.name === hit.name) ?? { schema: hit.schema, name: hit.name, kind: "table", estimatedRows: null, comment: null };
-    void openFound(hit.connectionId, { kind: "relation", object });
+    const object = entry.relations.find((r) => r.name === hit.name) ?? { schema: hit.schema, name: hit.name, kind: "table", estimatedRows: null, comment: null };
+    void openFound(entry.connection, { kind: "relation", object });
   }
   openFirst.current = result.hits[0] ? () => open(result.hits[0]!) : null;
 
@@ -174,8 +179,8 @@ function NameSearch({ query, hidden, openFirst }: { query: string; hidden: boole
       </label>
       {reading > 0 && <div className="search-status muted" role="status">{t("search.readingColumns", { count: reading })}</div>}
       {failed.map(([key, detail]) => {
-        const [connectionId, schema] = key.split("\u0000");
-        return <div key={key} className="row-note" role="alert">{t("search.columnsFailed", { schema, connection: connectionName(connectionId ?? ""), detail })}</div>;
+        const parts = catalogKeyParts(key);
+        return <div key={key} className="row-note" role="alert">{t("search.columnsFailed", { schema: parts?.schema ?? "", connection: connectionName(parts?.tag ?? ""), detail })}</div>;
       })}
       {openError && <div className="row-note" role="alert">{openError}</div>}
       {list.length === 0 ? (
@@ -190,9 +195,9 @@ function NameSearch({ query, hidden, openFirst }: { query: string; hidden: boole
             {result.total > result.hits.length ? t("search.namesLimited", { shown: result.hits.length, count: result.total }) : t("search.namesCount", { count: result.total })}
           </div>
           <div className="search-results">
-            {groups.map(([connectionId, hits]) => (
-              <section key={connectionId} aria-label={connectionName(connectionId)}>
-                <div className="group-title">{connectionName(connectionId)}</div>
+            {groups.map(([tag, hits]) => (
+              <section key={tag} aria-label={connectionName(tag)}>
+                <div className="group-title">{connectionName(tag)}</div>
                 {hits.map((hit) => (
                   <button
                     key={`${hit.kind}\u0000${hit.schema}\u0000${hit.name}\u0000${hit.column ?? ""}\u0000${hit.detail ?? ""}`}
@@ -217,12 +222,19 @@ function NameSearch({ query, hidden, openFirst }: { query: string; hidden: boole
 
 function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; start: React.MutableRefObject<(() => void) | null> }) {
   const { t } = useTranslation("shell");
+  const shownName = useConnectionName();
   const schemas = useCatalog((s) => s.schemas);
   const connections = useApp((s) => s.connections);
   const connected = useApp((s) => s.explorerConnected);
-  const activeConnection = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab)?.connectionId ?? null);
+  // The active tab's connection, as its tag (text, so the effect below runs only when it changes).
+  const activeConnection = useApp((s) => {
+    const tab = s.tabs.find((item) => item.id === s.activeTab);
+    const connection = tab ? tabConnection(tab) : null;
+    return connection ? connectionTag(connection) : null;
+  });
   const [limits, setLimits] = useState<DataSearchLimitsItem>(FALLBACK_LIMITS);
-  const [connectionId, setConnectionId] = useState("");
+  /** The chosen connection, as its tag (the picker's value); empty: none. */
+  const [connectionTagValue, setConnectionTagValue] = useState("");
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -239,21 +251,32 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
     }).catch(() => undefined);
   }, []);
 
-  const list = useMemo(() => Object.values(schemas), [schemas]);
-  const choices = useMemo(
-    // The data search writes a SELECT per table: only engines queried with SQL (ADR-056).
-    () => connections.filter((c) => c.sql && explorerSessionOpen(connected, c.id) && list.some((s) => s.connectionId === c.id)),
-    [connections, connected, list],
-  );
+  const list = useMemo(() => searchCatalog(Object.values(schemas)), [schemas]);
+  // Each connection, and each other database of one that opens several (ADR-074, SDB-506), whose
+  // tables the explorer has read: the search runs in that database's session, and says which.
+  const choices = useMemo(() => {
+    const tags = [...new Set(list.map((s) => s.connection))];
+    return tags.flatMap((tag) => {
+      const key = connectionOfTag(tag);
+      const listed = key === null ? undefined : listedConnection(connections, key);
+      // The data search writes a SELECT per table: only engines queried with SQL (ADR-056).
+      if (key === null || !listed?.sql || !explorerSessionOpen(connected, key)) return [];
+      const database = databaseOf(key);
+      // With the folder where another listed connection has the same name (ADR-075).
+      const name = shownName(listed);
+      return [{ tag, key, name: database === null ? name : `${name} · ${database}` }];
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }, [connections, connected, list, shownName]);
   // The active tab's connection first, then the first one with tables loaded.
   useEffect(() => {
-    if (choices.some((c) => c.id === connectionId)) return;
-    const next = choices.find((c) => c.id === activeConnection) ?? choices[0];
-    setConnectionId(next?.id ?? "");
+    if (choices.some((c) => c.tag === connectionTagValue)) return;
+    // A connection's own database keeps the pair's tag, so the active tab's connection is it.
+    const next = choices.find((c) => c.tag === activeConnection) ?? choices[0];
+    setConnectionTagValue(next ? next.tag : "");
     setChosen(new Set());
-  }, [choices, connectionId, activeConnection]);
+  }, [choices, connectionTagValue, activeConnection]);
 
-  const tables = useMemo(() => searchableTables(list, connectionId), [list, connectionId]);
+  const tables = useMemo(() => searchableTables(list, connectionTagValue), [list, connectionTagValue]);
   const shown = useMemo(() => {
     const f = filter.trim().toLowerCase();
     return f ? tables.filter((x) => `${x.schema}.${x.table}`.toLowerCase().includes(f)) : tables;
@@ -271,10 +294,10 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
         : null;
 
   async function search() {
-    if (running || blocked) return;
+    const source = connectionOfTag(connectionTagValue);
+    if (running || blocked || !source) return;
     const id = startJob();
     current.current = id;
-    const source = connectionId;
     setRun(startedRun(id, source, chosenTables.length));
     const channel = new Channel<DataSearchEventItem>();
     channel.onmessage = (event) => {
@@ -282,7 +305,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
       setRun((r) => withEvent(r, id, event));
     };
     try {
-      const summary = await call(commands.dataSearch(`meta:${source}`, id.channel, {
+      const summary = await call(commands.dataSearch(explorerSession(source), id.channel, {
         value,
         tables: chosenTables,
         caseSensitive,
@@ -365,8 +388,8 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
         <>
           <label className="modal-field search-field">
             <span>{t("search.connection")}</span>
-            <select value={connectionId} disabled={running} onChange={(e) => { setConnectionId(e.target.value); setChosen(new Set()); }}>
-              {choices.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <select value={connectionTagValue} disabled={running} onChange={(e) => { setConnectionTagValue(e.target.value); setChosen(new Set()); }}>
+              {choices.map((c) => <option key={c.tag} value={c.tag}>{c.name}</option>)}
             </select>
           </label>
           <fieldset className="search-tables" disabled={running}>
@@ -421,7 +444,7 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
           {noColumns > 0 && !running && <div className="muted small search-note">{t("search.noColumns", { count: noColumns })}</div>}
           {run && (
             <div className="search-results">
-              {run.tables.map((outcome) => <TableHits key={tableKey(outcome.schema, outcome.table)} connectionId={run.connectionId} outcome={outcome} />)}
+              {run.tables.map((outcome) => <TableHits key={tableKey(outcome.schema, outcome.table)} connection={run.connection} outcome={outcome} />)}
             </div>
           )}
         </>
@@ -430,13 +453,13 @@ function DataSearch({ value, hidden, start }: { value: string; hidden: boolean; 
   );
 }
 
-function TableHits({ connectionId, outcome }: { connectionId: string; outcome: SearchedTable }) {
+function TableHits({ connection, outcome }: { connection: ConnectionKey; outcome: SearchedTable }) {
   const { t } = useTranslation("shell");
   const name = `${outcome.schema}.${outcome.table}`;
   const { status } = outcome;
   if (status.kind === "failed") return <div className="row-note" role="alert">{t("search.tableFailed", { table: name, detail: status.message })}</div>;
   if (status.kind !== "searched" || status.hits.length === 0) return null;
-  const open = (hit: SearchHitItem) => openTableData(connectionId, `meta:${connectionId}`, outcome.schema, outcome.table, hit.filter ?? "");
+  const open = (hit: SearchHitItem) => openTableData(connection, explorerSession(connection), outcome.schema, outcome.table, hit.filter ?? "");
   return (
     <section aria-label={name}>
       <div className="group-title search-table-title">{name} · {status.hits.length}{status.more ? ` · ${t("search.more")}` : ""}</div>

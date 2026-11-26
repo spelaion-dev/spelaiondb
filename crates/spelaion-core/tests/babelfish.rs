@@ -47,6 +47,7 @@ fn resolved(read_only: bool) -> Option<ResolvedConnection> {
         sqlite3: None,
         file_folder: None,
         databases: None,
+        other_databases: spelaion_config::OtherDatabases::None,
         local_port: LocalPort::Any,
         keepalive: None,
         statement_timeout: Some(Duration::from_secs(20)),
@@ -66,7 +67,7 @@ async fn open(
         OpenOptions {
             tunnels: Arc::new(TunnelPool::new()),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: std::env::temp_dir().join("unused-babelfish-known-hosts"),
             },

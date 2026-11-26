@@ -28,6 +28,10 @@ pub(crate) enum RegionKind {
     QuotedName,
     /// A comment, with its markers (and a line comment's newline).
     Comment,
+    /// A comment whose body the server may run (MySQL's `/*! … */`, MariaDB's `/*M! … */`),
+    /// with its markers. Not code for the readers that look inside code, but it makes its
+    /// statement one: a statement written only as executable comments is a statement.
+    ExecutableComment,
     /// A body quoted by the dialect's own markers (PostgreSQL's `$tag$ … $tag$`).
     QuotedBody,
     /// A client's line of its own, which is not SQL (psql's `\connect`), without its newline.
@@ -54,6 +58,7 @@ impl RegionKind {
             RegionKind::String
             | RegionKind::QuotedName
             | RegionKind::Comment
+            | RegionKind::ExecutableComment
             | RegionKind::QuotedBody
             | RegionKind::CopyData
             | RegionKind::CopyEnd => false,
@@ -70,6 +75,7 @@ impl RegionKind {
             | RegionKind::String
             | RegionKind::QuotedName
             | RegionKind::Comment
+            | RegionKind::ExecutableComment
             | RegionKind::QuotedBody
             | RegionKind::CopyData
             | RegionKind::CopyEnd => None,

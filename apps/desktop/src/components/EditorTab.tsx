@@ -1,16 +1,19 @@
 // An editor tab: its own session in the core (ADR-004), editor, execution and results.
 
+import { useConnectionName } from "../folders";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { type ConnectionKey, connectionOfTag, connectionTag, keyOf, listedConnection, stillOnConnection, tabConnection, tabConnectionOf, tabOnConnection } from "../connectionKey";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import { startJob, type Job } from "../jobs";
-import type { KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
+import type { ExplorerDatabaseItem_Serialize as ExplorerDatabaseItem, KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
 import { DEFAULT_PAGE_SIZE, EDITOR_COMMAND_EVENT, EDITS_COMMAND_EVENT, SAVE_QUERY_EVENT, useApp, type EditorCommand, useDialogs, type FilterMode, type ResultMeta, type ResultTabCommand, type RunState, type SortState, type TableView, type Tab, type Translation } from "../store";
-import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openSession, SCHEMAS_REFRESHED_EVENT, SET_ACTIVE_SCHEMA_EVENT } from "../connect";
+import { confirmOpenTransactions, connectTabFromExplorer, explorerDatabase, openTabSession, schemasRefreshed, SET_ACTIVE_SCHEMA_EVENT, tabLabel } from "../connect";
+import { detachResults, reattachResults, sendMirror, serveRequests, type ResultsMirror, type ResultsRequest } from "../resultsWindow";
 import { connectionTooltip } from "../connectionInfo";
 import { afterRun, endResult, markRefreshable, sameResultColumns, withoutResults, withStartedResult } from "../runResults";
 import { ResultTabList } from "./ResultTabs";
@@ -32,7 +35,7 @@ import { EditorActionsButton } from "./EditorMenu";
 import { SqlEditor, type NameAction, type RunLabel, type RunRequest, type SqlEditorHandle } from "./SqlEditor";
 import { ScriptOutline } from "./ScriptOutline";
 import type { ResolvedName } from "../sqlCompletion";
-import { commandShortcut } from "../shortcuts";
+import { commandShortcut, commandTitle } from "../shortcuts";
 import { TableDataBar } from "./TableDataBar";
 import { TransactionControls } from "./TransactionControls";
 import { TypeBadge } from "./TypeBadge";
@@ -84,6 +87,10 @@ function statementEndKey(end: StatementEndItem): string {
   }
 }
 
+function unknownRequest(request: never): never {
+  throw new Error(`unknown results request: ${JSON.stringify(request as ResultsRequest)}`);
+}
+
 function unknownEnd(end: never): never {
   throw new Error(`unknown statement end: ${JSON.stringify(end)}`);
 }
@@ -103,14 +110,19 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const tabStatus = statusName(tab);
   const running = isRunning(tab);
   const { t, i18n } = useTranslation("editor");
+  const shownName = useConnectionName();
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const connections = useApp((s) => s.connections);
   const updateTab = useApp((s) => s.updateTab);
   const setConnection = useApp((s) => s.setConnection);
   const updateRun = useApp((s) => s.updateRun);
-  const historySaving = useApp((s) => tab.connectionId !== null && s.historySaving.includes(tab.connectionId));
+  const historySaving = useApp((s) => {
+    const connection = tabConnection(tab);
+    return connection !== null && s.historySaving.includes(connectionTag(connection));
+  });
   const workspaceChanging = useApp((s) => s.workspaceChanging);
-  const connection = connections.find((c) => c.id === tab.connectionId) ?? null;
+  const ownConnection = tabConnection(tab);
+  const connection = (ownConnection ? listedConnection(connections, ownConnection) : undefined) ?? null;
   const supportsDatabase = !tab.table && databaseSwitching(connection?.engine);
   // A schema picker where the session has a schema of its own and no database picker does it
   // (PostgreSQL, DuckDB): it shows, and changes, where unqualified names are found (ADR-037).
@@ -127,11 +139,15 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const [database, setDatabase] = useState<string | null>(null);
   const [databaseBusy, setDatabaseBusy] = useState(false);
   const [databaseError, setDatabaseError] = useState(false);
+  /** A PostgreSQL connection that opens several databases (ADR-074, SDB-505): the databases the
+   *  tab can be on, as the core lists them (its connection's own first); null without a choice. */
+  const [tabDatabases, setTabDatabases] = useState<ExplorerDatabaseItem[] | null>(null);
+  const [tabDatabaseBusy, setTabDatabaseBusy] = useState(false);
   const [databaseRefresh, setDatabaseRefresh] = useState(0);
   const databaseBusyRef = useRef(false);
   const workspace = useApp((s) => s.workspace?.workspace ?? null);
   // SQL completion only where the language is SQL (ADR-056).
-  const completion = useCompletionCatalog(tab.id, tab.connectionId, workspace, database, tabStatus === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null), tab.sql, connection?.engine ?? null);
+  const completion = useCompletionCatalog(tab.id, ownConnection ? connectionTag(ownConnection) : null, workspace, database, tabStatus === "connected" && !tab.table && connection?.sql !== false && (!supportsDatabase || database !== null), tab.sql, connection?.engine ?? null);
   const [editorShare, setEditorShare] = useState(0.42);
   const body = useRef<HTMLDivElement>(null);
   /** This tab's runs, counted: each result remembers which one produced it (SDB-378). */
@@ -209,19 +225,19 @@ export function EditorTab({ tab }: { tab: Tab }) {
    *  opened like this tab's session, or its row in the explorer. The name was resolved from
    *  the catalog already read; a column leads to its table. */
   function showName(name: ResolvedName, action: NameAction) {
-    const connectionId = tab.connectionId;
-    if (!connectionId) return;
+    const connection = tabConnection(tab);
+    if (!connection) return;
     const { schema, name: table } = name.table;
     const app = useApp.getState();
     if (action === "reveal") {
       app.setSidebarSection("connections");
-      app.revealInExplorer({ connectionId, schema, name: table, connect: true });
+      app.revealInExplorer({ connection, schema, name: table, connect: true });
       return;
     }
-    const existing = app.tabs.some((other) => other.connectionId === connectionId && other.tableDetails?.schema === schema
+    const existing = app.tabs.some((other) => tabOnConnection(other, connection) && other.tableDetails?.schema === schema
       && other.tableDetails.name === table && other.tableDetails.kind === "columns");
-    const details = app.addTableDetailsTab(connectionId, schema, table, "columns");
-    if (!existing) connectTabFromExplorer(details, tab.id, explorerDatabase(connectionId, schema) ?? database ?? undefined);
+    const details = app.addTableDetailsTab(connection, schema, table, "columns");
+    if (!existing) connectTabFromExplorer(details, tab.id, explorerDatabase(connection, schema) ?? database ?? undefined);
   }
   useEffect(() => {
     if (!notice) return;
@@ -304,8 +320,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     : (queryTable?.writable ? queryTable : null);
   /** The table whose foreign keys the active result follows. */
   const keyTable = tab.table
-    ? { schema: tab.table.schema, name: tab.table.name, connectionId: tab.connectionId }
-    : (queryTable ? { schema: queryTable.schema, name: queryTable.name, connectionId: tab.connectionId } : undefined);
+    ? { schema: tab.table.schema, name: tab.table.name, connection: tabConnection(tab) }
+    : (queryTable ? { schema: queryTable.schema, name: queryTable.name, connection: tabConnection(tab) } : undefined);
   const checkingEditability = tab.table
     ? primaryKey === null
     : !ended(activeResult) || running || (queryText !== undefined && queryTable === undefined);
@@ -591,12 +607,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const countSequence = useRef(0);
   async function countTable() {
     const view = tab.table;
-    const connectionId = tab.connectionId;
+    const counted = tabConnection(tab);
     const sequence = ++countSequence.current;
     if (!view || !(await ensureConnected())) return;
     const matchingView = () => {
       const current = useApp.getState().tabs.find((item) => item.id === tab.id);
-      if (sequence !== countSequence.current || !current || current.connectionId !== connectionId ||
+      if (sequence !== countSequence.current || !current || !stillOnConnection(current, counted) ||
           !current.table || current.table.schema !== view.schema || current.table.name !== view.name ||
           current.table.filter !== view.filter) return undefined;
       return current.table;
@@ -824,7 +840,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
   async function openTablePage(view: TableView) {
     let first = view;
     if (!view.filter && tab.connectionId) {
-      const saved = await call(commands.tableFilters(tab.connectionId, view.schema, view.name)).catch(() => null);
+      const saved = await call(commands.tableFilters(tabConnectionOf(tab.connectionId, tab.connectionFolder), tab.database ?? null, view.schema, view.name)).catch(() => null);
       if (saved?.default) {
         first = { ...view, filter: saved.default };
         updateTab(tab.id, { table: first });
@@ -854,7 +870,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     });
     if (!name) return;
     try {
-      await call(commands.saveSnippet(name, tab.sql, tab.connectionId));
+      await call(commands.saveSnippet(name, tab.sql, tabConnection(tab)));
       updateTab(tab.id, { snippetName: name });
       useApp.getState().refreshSnippets();
       setNotice({ text: t("snippets.saved", { name }), error: false });
@@ -996,7 +1012,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         }
       });
     return () => { cancelled = true; };
-  }, [supportsDatabase, tab.id, tabStatus, tab.connectionId, running, databaseRefresh]);
+  }, [supportsDatabase, tab.id, tabStatus, tab.connectionId, tab.connectionFolder, running, databaseRefresh]);
 
   // The session's schema, read after connecting and after each script (a SET search_path in
   // it changes it), as the database is.
@@ -1021,7 +1037,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         }
       });
     return () => { cancelled = true; };
-  }, [supportsSchema, tab.id, tabStatus, tab.connectionId, running, schemaRefresh]);
+  }, [supportsSchema, tab.id, tabStatus, tab.connectionId, tab.connectionFolder, running, schemaRefresh]);
 
   async function changeSchema(next: string) {
     if (!next || schemaBusy) return;
@@ -1034,6 +1050,47 @@ export function EditorTab({ tab }: { tab: Tab }) {
     } finally {
       setSchemaBusy(false);
       setSchemaRefresh((n) => n + 1);
+    }
+  }
+
+  // Which databases a PostgreSQL tab can be on is the core's answer, read once it connects.
+  useEffect(() => {
+    if (tab.table || tabStatus !== "connected" || connection?.engine !== "postgres") {
+      setTabDatabases(null);
+      return;
+    }
+    let cancelled = false;
+    void call(commands.connectionDatabases(tab.id))
+      .then((listed) => { if (!cancelled) setTabDatabases(listed.kind === "several" ? listed.databases : null); })
+      .catch(() => { if (!cancelled) setTabDatabases(null); });
+    return () => { cancelled = true; };
+  }, [tab.id, tab.table, tabStatus, connection?.engine, tab.database]);
+
+  /** Another database for a PostgreSQL tab (ADR-074 point 4): a disconnect and a connect, never
+   *  a switch. Refused while a script runs (the core refuses too), asked about like any disconnect
+   *  while a transaction is open (ADR-031); nothing is run again, and the rows on screen, read by
+   *  the old session, stop being editable (ADR-061). The old session stays if the new one fails. */
+  async function changeTabDatabase(next: string) {
+    const own = tabDatabases?.find((d) => d.own)?.name ?? null;
+    if (!next || next === (tab.database ?? own) || running || tabDatabaseBusy) return;
+    if (pendingCount > 0 || saving.now() || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+    if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
+    // The old session stays if the new one fails: the tab is still connected to it.
+    const current = useApp.getState().tabs.find((item) => item.id === tab.id);
+    const before = current ? serverVersion(current) : null;
+    setTabDatabaseBusy(true);
+    setConnection(tab.id, CONNECTING);
+    try {
+      const version = await call(commands.changeTabDatabase(tab.id, next));
+      updateTab(tab.id, { database: next === own ? null : next });
+      setConnection(tab.id, connectedWith({ version }));
+      updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
+      setQueryTarget(null);
+    } catch (e) {
+      setConnection(tab.id, before !== null ? connectedWith({ version: before }) : DISCONNECTED);
+      setNotice({ text: t("databaseChangeFailed", { database: next, detail: message(e) }), error: true });
+    } finally {
+      setTabDatabaseBusy(false);
     }
   }
 
@@ -1109,7 +1166,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     }
     setConnection(tab.id, CONNECTING);
     try {
-      const session = await openSession(tab.id, tab.connectionId);
+      // On the database the tab is on (ADR-074, SDB-505), never quietly another.
+      const session = await openTabSession(tab.id, tabConnectionOf(tab.connectionId, tab.connectionFolder));
       if (session === null) {
         setConnection(tab.id, DISCONNECTED);
         return false;
@@ -1157,7 +1215,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (await ensureConnected()) setNotice({ text: t("reconnected"), error: false });
   }
 
-  async function changeConnection(id: string) {
+  /** `value`: the picked connection's tag, or "" for none. */
+  async function changeConnection(value: string) {
     if (pendingCount > 0 || saving.now() || queryPageBusy.current) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (!(await confirmOpenTransactions([tab.id], "disconnect"))) return;
     await call(commands.disconnect(tab.id)).catch(() => undefined);
@@ -1165,7 +1224,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
     updateRun(tab.id, (r) => ({ ...r, results: r.results.map((result) => ({ ...result, paging: undefined })) }));
     // The rows on screen came from the other connection: read-only until run again (SDB-137).
     setQueryTarget(null);
-    updateTab(tab.id, { connectionId: id || null, connectionState: DISCONNECTED });
+    // Another connection starts on its own database (ADR-074, SDB-505).
+    const picked = connectionOfTag(value);
+    updateTab(tab.id, { connectionId: picked?.id ?? null, connectionFolder: picked?.folder ?? null, database: null, connectionState: DISCONNECTED });
   }
 
   // "Run…" on a routine (ADR-047): the whole script once, as soon as the tab is connected and
@@ -1255,7 +1316,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     if (!refreshingEdits && (pendingCount > 0 || saving.now())) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     if (queryPageBusy.current || startingRun.current || restoringView.current) return;
     if (!request.text.trim() || running || databaseBusyRef.current || useApp.getState().workspaceChanging ||
-        (tab.connectionId && useApp.getState().historySaving.includes(tab.connectionId))) return;
+        (tabConnection(tab) && useApp.getState().historySaving.includes(connectionTag(tabConnection(tab)!)))) return;
     startingRun.current = true;
     try {
     if (!(await ensureConnected())) return;
@@ -1476,7 +1537,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
         }, runId));
         useApp.getState().refreshHistory();
         if (mayChangeCompletionCatalog(request.text, connection?.engine ?? null)) {
-          window.dispatchEvent(new CustomEvent(SCHEMAS_REFRESHED_EVENT, { detail: tab.connectionId }));
+          if (tab.connectionId) schemasRefreshed(tabConnectionOf(tab.connectionId, tab.connectionFolder));
         }
         notifyFinished(tab, summary, elapsedMs);
         break;
@@ -1555,30 +1616,123 @@ export function EditorTab({ tab }: { tab: Tab }) {
         break;
     }
   };
-  const maximized = !tab.table && (tab.resultsMaximized ?? false);
+  // Results shown in their own window leave the editor the whole tab, never maximized.
+  const maximized = !tab.table && !tab.resultsWindow && (tab.resultsMaximized ?? false);
   const kind = connection?.kind ?? null;
+  const refreshDisabled = running || historySaving || databaseBusy || tabStatus !== "connected" || workspaceChanging || savingEdits || pageLoading || refreshRestoring;
+  // What the results panel calls back, the same whether it is here or in a window of its own
+  // (SDB-30: the results window asks, and these carry it out).
+  const resultsCallbacks = {
+    onCancelRun: () => void cancelRun(),
+    onQuerySort: tab.table ? undefined : sortQuery,
+    onRefresh: (result: number, row: number) => {
+      if (pendingCount > 0 || saving.now()) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
+      if (tab.table) void loadPage(tab.table);
+      else void refreshQuery(result, row);
+    },
+    onLoadMore: loadMoreQueryRows,
+    onRunAgain: runFreedAgain,
+    onCountQuery: (id: number) => void countQueryResult(id),
+    onQueryPageSize: changeQueryPageSize,
+    onGoToRow: (result: number, row: number) => {
+      if (tab.table) goToTableRow(row);
+      else void goToQueryRow(result, row);
+    },
+    onLoadRows: (result: number, until: number | null) => loadQueryRowsUntil(result, until),
+    onCancelLoad: cancelRowLoad,
+    onSelect: (id: number | null) => updateRun(tab.id, (r) => ({ ...r, activeResult: id })),
+    onSorted: (result: number, sort: SortState[]) =>
+      updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) })),
+    onColumnFiltered: (result: number, columnFilters: ColumnFilterItem[], rows: number, total: number, filterMode?: FilterMode) =>
+      updateRun(tab.id, (r) => ({
+        ...r,
+        results: r.results.map((x) => (x.id === result ? { ...x, columnFilters, filterMode, rows, total } : x)),
+      })),
+    onFiltered: (result: number, filter: string | undefined, rows: number, total: number) =>
+      updateRun(tab.id, (r) => ({
+        ...r,
+        results: r.results.map((x) => (x.id === result ? { ...x, filter, rows, total } : x)),
+      })),
+  };
+  const resultsWindow = tab.table ? undefined : tab.resultsWindow;
+  const mirror: ResultsMirror = {
+    tab: tab.id,
+    name: tabLabel(tab),
+    connection: ownConnection,
+    run: tab.run,
+    running,
+    connectFailed: connectFailure(tab) !== null,
+    runStatus: runStatusLine,
+    cancelRequested,
+    refreshDisabled,
+    restoringView: refreshRestoring,
+  };
+  const latestResults = useRef({ callbacks: resultsCallbacks, mirror });
+  latestResults.current = { callbacks: resultsCallbacks, mirror };
+  // Every change of what the panel would show goes to the results window.
+  useEffect(() => {
+    if (resultsWindow) void sendMirror(resultsWindow, mirror).catch(() => undefined);
+  }, [resultsWindow, tab.run, tab.connectionId, tab.connectionFolder, mirror.name, running, mirror.connectFailed, runStatusLine, cancelRequested, refreshDisabled, refreshRestoring]);
+  // Its requests, carried out by this tab as its own panel's would be.
+  useEffect(() => {
+    if (!resultsWindow) return;
+    return serveRequests(tab.id, (request) => {
+      const { callbacks, mirror: now } = latestResults.current;
+      switch (request.kind) {
+        case "hello": return sendMirror(resultsWindow, now);
+        case "select": return callbacks.onSelect(request.id);
+        case "sorted": return callbacks.onSorted(request.result, request.sort);
+        case "filtered": return callbacks.onFiltered(request.result, request.filter, request.rows, request.total);
+        case "columnFiltered": return callbacks.onColumnFiltered(request.result, request.columnFilters, request.rows, request.total, request.filterMode);
+        case "refresh": return callbacks.onRefresh(request.result, request.row);
+        case "loadMore": return callbacks.onLoadMore(request.result);
+        case "runAgain": return callbacks.onRunAgain(request.result);
+        case "countQuery": return callbacks.onCountQuery(request.result);
+        case "queryPageSize": return callbacks.onQueryPageSize(request.size);
+        case "goToRow": return callbacks.onGoToRow(request.result, request.row);
+        case "loadRows": return callbacks.onLoadRows(request.result, request.until);
+        case "cancelLoad": return callbacks.onCancelLoad();
+        case "cancelRun": return callbacks.onCancelRun();
+        case "querySort": return callbacks.onQuerySort ? callbacks.onQuerySort(request.result, request.sort) : false;
+        default: return unknownRequest(request);
+      }
+    });
+  }, [tab.id, resultsWindow]);
+  // A tab that closes (or leaves with its folder) takes its results window with it.
+  const shownElsewhere = useRef<string | undefined>(undefined);
+  shownElsewhere.current = resultsWindow;
+  useEffect(() => () => {
+    if (shownElsewhere.current) void reattachResults(tab.id).catch(() => undefined);
+  }, [tab.id]);
+  const detach = async () => {
+    try {
+      const label = await detachResults(tab.id, tabLabel(tab));
+      updateTab(tab.id, { resultsWindow: label });
+    } catch (e) {
+      setNotice({ text: t("detach.failed", { reason: message(e) }), error: true });
+    }
+  };
   const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} title={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
       <span className="sr-only" role="status">{runStatusLine}</span>
       {variablesOpen && !tab.table && (
-        <VariablesDialog tabId={tab.id} connectionId={tab.connectionId} connectionName={connection?.name ?? null} onClose={() => setVariablesOpen(false)} />
+        <VariablesDialog tabId={tab.id} connection={tabConnection(tab)} connectionName={connection?.name ?? null} onClose={() => setVariablesOpen(false)} />
       )}
       <div className="toolbar">
         <select
-          value={tab.connectionId ?? ""}
+          value={ownConnection ? connectionTag(ownConnection) : ""}
           onChange={(e) => void changeConnection(e.target.value)}
           aria-label={t("connection")}
           // The chosen connection's description, which an open list may not show per option.
           title={(() => {
-            const chosen = connections.find((c) => c.id === tab.connectionId);
-            return chosen ? connectionTooltip(chosen) : t("connection");
+            return connection ? connectionTooltip(connection) : t("connection");
           })()}
           disabled={running || databaseBusy || tabStatus === "connecting" || historySaving || workspaceChanging || activeResult?.paging?.loading}>
           <option value="">{t("noConnection")}</option>
           {connections.map((c) => (
-            <option key={c.id} value={c.id} title={connectionTooltip(c)}>
-              {c.name} ({c.engine}
+            <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))} title={connectionTooltip(c)}>
+              {shownName(c)} ({c.engine}
               {c.kind ? `, ${c.kind.name}` : c.env ? `, ${c.env}` : ""})
             </option>
           ))}
@@ -1592,6 +1746,21 @@ export function EditorTab({ tab }: { tab: Tab }) {
         ) : (
           <button className="ghost" disabled={tabStatus === "connecting" || workspaceChanging} onClick={() => void ensureConnected()}>{t("connectToChooseDatabase")}</button>
         ))}
+        {tabDatabases && tabStatus === "connected" && (
+          <select
+            aria-label={t("database")}
+            title={t("databasePostgresHint")}
+            name="tab-database"
+            value={tab.database ?? tabDatabases.find((d) => d.own)?.name ?? ""}
+            onChange={(e) => void changeTabDatabase(e.target.value)}
+            disabled={running || tabDatabaseBusy || historySaving || workspaceChanging || activeResult?.paging?.loading}
+          >
+            {/* A database with a connection of its own opens only there (ADR-074 point 3). */}
+            {tabDatabases.filter((d) => !d.ownedBy).map((d) => (
+              <option key={d.name} value={d.name}>{d.own ? t("databaseOwn", { name: d.name }) : d.name}</option>
+            ))}
+          </select>
+        )}
         {supportsSchema && tabStatus === "connected" && (
           <select
             aria-label={t("schema")}
@@ -1674,6 +1843,8 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
               <li key={i}>
                 {note.kind === "connectionMissing"
                   ? t("restore.connectionMissing", { connection: note.connection })
+                  : note.kind === "databaseMissing"
+                    ? t("restore.databaseMissing", { database: note.database })
                   : note.kind === "fileUnreadable"
                     ? t("restore.fileUnreadable", { message: note.message })
                     : t(`restore.${note.kind}`)}
@@ -1687,6 +1858,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
         {tab.table && (
           <TableDataBar
             view={tab.table}
+            database={tab.database ?? null}
             shown={tab.run?.results[0] ? (tab.run.results[0].total ?? tab.run.results[0].rows) : null}
             busy={running || savingEdits || pageLoading}
             onChange={changeView}
@@ -1697,7 +1869,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             editable={primaryKey === null ? null : primaryKey.length > 0 && !connection?.readOnly}
             readOnlyConnection={connection?.readOnly ?? false}
             pending={pendingCount}
-            connectionId={tab.connectionId}
+            connection={ownConnection}
             session={tab.id}
             columns={tableColumns}
             loaded={!!tab.run && !running && !tab.run.error && tab.run.results.length > 0}
@@ -1707,7 +1879,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
         <>
         {/* Maximized results hide the editor without unmounting it: its text, undo and
             cursor stay as they were. */}
-        <div style={{ flex: `${editorShare} 1 0` }} className="editor-pane" hidden={maximized}>
+        <div style={{ flex: resultsWindow ? "1 1 0" : `${editorShare} 1 0` }} className="editor-pane" hidden={maximized}>
           <div className="editor-actions" role="toolbar" aria-label={t("editorActions")}>
             {running ? (
               <button className="editor-action editor-action-cancel" aria-label={t("cancel")} title={t("cancel")} disabled={cancelRequested} onClick={() => void cancelRun()}>
@@ -1774,7 +1946,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
           : !tab.table && completion.loading ? <div className="muted small" role="status">{t("completion.loading")}</div> : null}
         <div
           className="divider"
-          hidden={maximized}
+          hidden={maximized || resultsWindow !== undefined}
           onPointerDown={startDrag}
           onDoubleClick={() => setEditorShare(0.42)}
           role="separator"
@@ -1796,62 +1968,42 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
         />
         </>
         )}
+        {resultsWindow ? (
+          // The results are in their own window (SDB-30): the run's status stays here, with the
+          // way to that window and back.
+          <div className="results-detached" role="status">
+            <Icon name="detach" />
+            <span className="results-detached-text">{running ? runStatusLine : t("detach.shownElsewhere")}</span>
+            <button onClick={() => void detach()}>{t("detach.show")}</button>
+            <button onClick={() => void reattachResults(tab.id).catch((e: unknown) => setNotice({ text: t("detach.failed", { reason: message(e) }), error: true }))}>{t("detach.reattach")}</button>
+          </div>
+        ) : (
         <div style={{ flex: tab.table || maximized ? "1 1 0" : `${1 - editorShare} 1 0` }} className="results-pane">
           {planOpen && plan ? <PlanViewer key={plan.id} summary={plan} controls={planControls} onBack={() => { setPlan(null); setPlanOpen(false); }} /> : <>{planOpen && planControls}<Results
             maximize={tab.table ? undefined : { maximized, onToggle: () => toggleResultsMaximized(tab.id) }}
+            onDetach={tab.table ? undefined : () => void detach()}
             run={tab.run}
             running={running}
-            connectFailed={connectFailure(tab) !== null}
+            connectFailed={mirror.connectFailed}
             runStatus={runStatusLine}
             cancelRequested={cancelRequested}
-            onCancelRun={() => void cancelRun()}
             session={tab.id}
-            connectionId={tab.connectionId}
+            connection={ownConnection}
             table={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, orderBy: tab.table.orderBy } : null}
             serverSort={tab.table ? { sort: tab.table.sort ?? NO_TABLE_SORT, onSort: (sort) => void sortTable(sort) } : undefined}
-            onQuerySort={tab.table ? undefined : sortQuery}
-            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0, all: undefined, total: undefined }), connectionId: tab.connectionId } : undefined}
+            tableData={tab.table ? { schema: tab.table.schema, name: tab.table.name, filter: tab.table.filter, onFilter: (filter) => changeView({ filter, page: 0, all: undefined, total: undefined }), connection: ownConnection } : undefined}
             keyTable={keyTable}
             editing={editing}
             columnComments={tab.table ? columnComments : undefined}
             editingState={editingState}
             pendingEdits={pendingCount > 0}
-            refreshDisabled={running || historySaving || databaseBusy || tabStatus !== "connected" || workspaceChanging || savingEdits || pageLoading || refreshRestoring}
+            refreshDisabled={refreshDisabled}
             restoringView={refreshRestoring}
-            onRefresh={(result, row) => {
-              if (pendingCount > 0 || saving.now()) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
-              if (tab.table) void loadPage(tab.table);
-              else void refreshQuery(result, row);
-            }}
-            onLoadMore={loadMoreQueryRows}
-            onRunAgain={runFreedAgain}
-            onCountQuery={(id) => void countQueryResult(id)}
-            onQueryPageSize={changeQueryPageSize}
             rowOffset={tab.table && !tab.table.all ? tab.table.page * tab.table.pageSize : 0}
-            onGoToRow={(result, row) => {
-              if (tab.table) goToTableRow(row);
-              else void goToQueryRow(result, row);
-            }}
-            onLoadRows={(result, until) => loadQueryRowsUntil(result, until)}
-            onCancelLoad={cancelRowLoad}
-            onSelect={(id) => updateRun(tab.id, (r) => ({ ...r, activeResult: id }))}
-            onSorted={(result, sort) =>
-              updateRun(tab.id, (r) => ({ ...r, results: r.results.map((x) => (x.id === result ? { ...x, sort } : x)) }))
-            }
-            onColumnFiltered={(result, columnFilters, rows, total, filterMode) =>
-              updateRun(tab.id, (r) => ({
-                ...r,
-                results: r.results.map((x) => (x.id === result ? { ...x, columnFilters, filterMode, rows, total } : x)),
-              }))
-            }
-            onFiltered={(result, filter, rows, total) =>
-              updateRun(tab.id, (r) => ({
-                ...r,
-                results: r.results.map((x) => (x.id === result ? { ...x, filter, rows, total } : x)),
-              }))
-            }
+            {...resultsCallbacks}
           /></>}
         </div>
+        )}
       </div>
     </div>
   );
@@ -1885,7 +2037,7 @@ function errorRun(text: string, translation?: Translation, results: RunState["re
   };
 }
 
-function Results({
+export function Results({
   run,
   running,
   connectFailed,
@@ -1893,7 +2045,7 @@ function Results({
   cancelRequested,
   onCancelRun,
   session,
-  connectionId,
+  connection,
   table,
   onSelect,
   onSorted,
@@ -1919,9 +2071,12 @@ function Results({
   onLoadRows,
   onCancelLoad,
   maximize,
+  onDetach,
 }: {
   /** The button that hides the SQL editor (SQL tabs only). */
   maximize?: { maximized: boolean; onToggle(): void };
+  /** Shows the results in a window of their own (SDB-30; SQL tabs only, not in that window). */
+  onDetach?: () => void;
   run: RunState | null;
   /** Its run is going (`tabState.ts`'s `isRunning`). */
   running: boolean;
@@ -1931,7 +2086,7 @@ function Results({
   cancelRequested: boolean;
   onCancelRun(): void;
   session: string;
-  connectionId: string | null;
+  connection: ConnectionKey | null;
   table: { schema: string; name: string; filter: string; orderBy: string } | null;
   onSelect(id: number | null): void;
   onSorted(result: number, sort: SortState[]): void;
@@ -1940,9 +2095,9 @@ function Results({
   serverSort?: { sort: SortState[]; onSort(sort: SortState[]): void };
   /** Reads a paged query again from the server in a sort's order (see `ResultGrid`). */
   onQuerySort?(result: number, sort: SortState[]): Promise<boolean>;
-  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
+  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connection: ConnectionKey | null };
   /** The table whose foreign keys the result follows (SDB-93). */
-  keyTable?: { schema: string; name: string; connectionId: string | null };
+  keyTable?: { schema: string; name: string; connection: ConnectionKey | null };
   editing?: GridEditing;
   columnComments?: Record<string, string>;
   editingState: GridEditingState;
@@ -1980,7 +2135,7 @@ function Results({
   /** The rows each grid has selected (positions, not values), for the Transpose button. */
   const selectedRows = useRef<Record<number, number[]>>({});
   // A connection that could not open may need a plugin that is not installed.
-  const connectionEngine = useApp((s) => s.connections.find((c) => c.id === connectionId)?.engine ?? null);
+  const connectionEngine = useApp((s) => (connection ? listedConnection(s.connections, connection)?.engine ?? null : null));
   const maximizeButton = maximize && (
     <button
       className={`ghost results-maximize${maximize.maximized ? " active" : ""}`}
@@ -2032,7 +2187,7 @@ function Results({
             key={`export-${active.id}`}
             result={active}
             session={session}
-            connectionId={connectionId}
+            connection={connection}
             sql={table ? null : (active.sql ?? null)}
             table={table}
             hidden={hiddenColumns[active.id] ?? []}
@@ -2068,6 +2223,16 @@ function Results({
             <Icon name="transpose" />
           </button>
         </div>}
+        {onDetach && (
+          <button
+            className="ghost results-maximize results-detach"
+            aria-label={commandTitle(t("detach.action"), "results.detach")}
+            title={commandTitle(t("detach.action"), "results.detach")}
+            onClick={onDetach}
+          >
+            <Icon name="detach" />
+          </button>
+        )}
         {maximizeButton}
       </div>
       {running && <ResultRunProgress key={run.startedAt} startedAt={run.startedAt} status={runStatus} cancelRequested={cancelRequested} onCancel={onCancelRun} />}

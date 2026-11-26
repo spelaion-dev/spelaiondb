@@ -3,8 +3,17 @@
 - `crates/spelaion-core`: `open_connection` (resolved configuration → tunnel from the
   `TunnelPool` if any → driver → `Session`), `Session` (splits and runs scripts: stop,
   continue or ask on an error, with a statement timeout and a summary; the "ask" pause and its
-  ticket are in `script.rs`, ADR-035) and `ResultStore` (results in the core, served in Arrow
-  IPC windows).
+  ticket are in `script.rs`, ADR-035; with `ScriptOptions::statement_savepoints`, the user's
+  setting, a savepoint of the core's around each of the user's statements in a transaction on
+  PostgreSQL rolls back only a failed one, ADR-086: never around transaction control, never in
+  the history, `transaction::statement_savepoint` says which engines, `tests/script_runs.rs`)
+  and `ResultStore` (results in the core, served in Arrow IPC windows).
+  The `TunnelPool` shares one SSH chain between connections only when `tunnel_pool_key`
+  (`open.rs`) is the same: the connection's layer, the folder whose profile it is, the teams'
+  `known_hosts` it is checked against (ADR-075: two folders' profiles of the same name and
+  settings, or one profile checked against different folders' host keys, are never one chain),
+  its name, settings, proxy, SSM and hops. A new field of `ResolvedTunnel` that changes what
+  the chain is or how it is verified goes into that key.
   A stored result's end is one type, `ResultEnd` (SDB-367, ADR-060): `Loading`, `Whole`, or
   `Partial(PartialReason)` (cancelled, failed, timed out, connection lost). Only `session.rs`
   sets it, where a statement's stream stops (and `end_on_panic` for a run that panics), and it
@@ -99,7 +108,9 @@
   from `Dialect::sql_mode`): the guard asks if any reading is risky and a read-only connection
   refuses unless every reading passes; the default reading is always one of them.
   A SQL Server batch the parser cannot read (T-SQL needs no `;`) is read token by token: a
-  `DROP`, `TRUNCATE`, `DELETE` or `UPDATE` word in it asks. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
+  `DROP`, `TRUNCATE`, `DELETE` or `UPDATE` word in it asks. The guard's first word is the
+  dialect's scanner's where the dialect has one (`Dialect::first_word`, SDB-455: SQL Server);
+  otherwise `Lexical` reads it through the dialect's `code_ranges`. `health.rs` keeps idle sessions alive, marks a session lost (ADR-028) and
   closes the ones a connection type says are idle too long, never with a transaction open
   (ADR-029): every use goes through its `Tracked` connection, and
   nothing is ever reconnected or re-run there. `transaction.rs` (ADR-031) is an editor tab's
@@ -133,7 +144,14 @@
   `er/` is the ER diagram, ADR-046: the model read from the explorer's catalog, its layered layout
   computed once per model and display options, and its Mermaid and DBML text, which must parse
   with their own tools: `tests/er_diagram.rs` writes `apps/desktop/scripts/fixtures/er` and
-  `scripts/er-text.test.mjs` parses them; `SPELAION_UPDATE_ER_FIXTURES=1` writes them again)
+  `scripts/er-text.test.mjs` parses them; `SPELAION_UPDATE_ER_FIXTURES=1` writes them again;
+  `er/saved.rs` is a saved diagram, ADR-084: an arrangement (scope, display options, table
+  positions, notes, groups) kept in the store as a versioned JSON document of its own types,
+  checked when saved and every time it is read back, never applied in part; `layout::arrange`
+  places it: placed tables where they were, new ones laid out among themselves below them,
+  gone ones where they were, notes wrapped and groups framed by the core so the image exports
+  match; `tests/er_diagram.rs` saves one on every engine and opens it again after reopening the
+  store)
   and `cursor.rs` finds the statement under the editor's cursor, says what Run will send
   (`run_target`, the Run button's label) and writes the text of the statements picked from a
   selection or from the cursor to the end (`pick_statements`, `from_cursor`): the rest written
@@ -225,12 +243,44 @@
   page's before it is kept and again each time it is read, and a stored default that no longer
   passes is handed back as refused, never as a filter. Like `table_data.rs`, any change there
   needs tests that try to get around it.
+  `other_database.rs` (ADR-074, SDB-493) is a PostgreSQL connection's other databases, every
+  decision in the core. `connection_databases` answers what a connection opens: its own
+  database first, then what the server lists (`list_databases` on its own session) narrowed
+  exactly to the file's `databases` (or all of them with `all_databases`); a plugin or a
+  server that cannot list them leaves `OwnOnly` with the reason. `open_other_database` opens
+  a new session (never a switch) from the connection's resolved definition with only
+  `params.database` changed and the default schema unset (it is the own database's), through
+  `open_connection`, so the route (the same `TunnelPool` entry), the read-only mode, masking,
+  the type and the setup statements are the connection's. It refuses, each with its own
+  `OtherDatabaseError`: an engine or a server family that is not PostgreSQL itself (asked to
+  the server, never the file), a pooler, a file that names no other database, a name it does
+  not name (exactly: PostgreSQL's names are case-sensitive), a name the server does not list
+  for the user (templates included), and a database another connection with the same login
+  (`session_source::same_login`, or its file's host, port and user when it does not resolve)
+  has as its own, naming that connection. Agents never come here: the MCP server opens the
+  file's `database` only. `change_session_database` (SDB-505) is a tab's change of database:
+  refused while its session runs a script (`OtherDatabaseError::Running`), then
+  `open_other_database`, which also goes back to the connection's own database, as its saved
+  file opens it, from a session on another. `file_opens_database` is whether a file still
+  opens a database, for restored tabs (`open_tabs.rs`, `RestoreNote::DatabaseMissing`).
+  `tests/postgres_other_databases.rs` opens one through the two-hop
+  tunnel and tries each refusal; `spelaion-mcp`'s tests keep an agent on `all_databases` to
+  its own database.
   Server observation (the process monitor's other views): `observe.rs` runs each statement
   only after `classify_read_only` accepts it, as session metadata; `locks.rs` reads each
   engine's locks and waits and builds the blocking tree (ending a blocker always goes through
   `processes.rs`'s `control_process`), `server_settings.rs` the settings, variables and status,
   `table_stats.rs` a table's sizes and row estimate from the catalog; `tests/server_observation.rs`
   makes one session wait for another's row lock on every engine and checks the pair.
+  `dashboard.rs` (SDB-192) is the monitor's live dashboard: a sampler job the core owns
+  (ADR-060), one `DashboardState` with its `DashboardPhase` (sampling, paused, failed, stopped)
+  published on a watch and moved only by its task. It reads one statement per sample through
+  `observe::read` (PostgreSQL's `pg_stat_activity`, `pg_stat_database` and WAL position, MySQL's
+  and MariaDB's `SHOW GLOBAL STATUS`, SQL Server's `sys.dm_os_performance_counters`), turns
+  counters into rates, keeps the last 360 samples in memory only, reads nothing while hidden
+  (`set_visible`), holds its session weakly and stops when its handle is dropped. The desktop's
+  `dashboard.rs` keeps one sampler per monitor session and only forwards its state;
+  `tests/server_dashboard.rs` samples around known work on every engine.
   `geometry.rs` (ADR-045) reads geometry values into GeoJSON for the cell panel's map: PostGIS's
   EWKB (its hexadecimal text), MySQL's SRID + WKB, SpatiaLite's and GeoPackage's blobs,
   DuckDB's WKB and SQL Server's CLR serialization (MS-SSCLRT, SDB-213), as untrusted bytes
@@ -246,7 +296,15 @@
   nothing after it).
   `tests/geometry.rs` converts each engine's points, lines and polygons (PostGIS in the test
   PostgreSQL's `spelaion_gis` database). The tile server is a personal preference
-  (`spelaion-store`'s `map.rs`), off by default and checked before it is saved.
+  (`spelaion-store`'s `map.rs`), off by default and checked before it is saved, its
+  attribution's link too (`check_attribution_link`). `tiles.rs` fetches every tile (ADR-085):
+  the page asks by view and `z/x/y`, the core builds the address from the stored server and
+  refuses with tiles off; a disk cache next to `state.db` honours `Cache-Control`, `Expires` and
+  `ETag` (7 days when unreadable) with conditional requests; two requests at a time, 300 per map
+  view; only PNG, JPEG or WebP; `OPENSTREETMAP` is the one preset, chosen only by the user. The
+  transport is `crates/spelaion-tile-http` (its User-Agent `TILE_USER_AGENT`, no referrer or
+  cookies, `https://` or `http://` to this computer, redirects only to `https://`), tested
+  against a local server in `tests/local_server.rs`: **no test ever asks an outside host**.
   `display.rs` (SDB-385) is how the grid shows values: `strftime` patterns for dates, times
   and timestamps, a number's marks, a display time zone (jiff; values without a zone are never
   converted) and how binary reads. Display only: `window_ipc` serves each cell as the database
@@ -471,7 +529,18 @@
   `spelaion-config::atomic_file`, which keeps the mode and follows links, a content hash that
   refuses to overwrite a file changed on disk); `open_tabs.rs` keeps the open tabs (`TabKeeper`
   writes them at most a second after a change) and checks them before they come back
-  (`restore_tabs`): never results, secrets or session state, and nothing is run.
+  (`restore_tabs`): never results, secrets or session state, and nothing is run. A tab belongs
+  to its connection's folder (ADR-075, SDB-501): `tab_scope` keeps a folder's connection's tab
+  under that folder and a personal connection's, or one without a connection, under the
+  window's empty key; `window_sets` splits a window's tabs that way, each with its place in the
+  window (`open_tabs.window_position`), and gives every open folder a set, so a folder whose
+  tabs were all closed keeps none while a closed folder keeps its own; `TabKeeper::update_window`
+  writes them together (`Store::save_window_tabs`, one transaction). `restore_window_tabs` puts
+  the open folders' and the window's sets back in the window's order (tabs kept before places
+  existed after the others, folder by folder), each connection looked up only in the folder it
+  was kept under. History and saved queries list every open folder's and the personal ones
+  (`history_page`, `snippet_page` and the rest take the open folders' keys; each entry has its
+  `workspace`).
   `session_setup.rs` (ADR-037) applies a connection's `[session]` table every time a session
   opens (isolation level, default schema, setup statements), from `open_connection`; on a
   read-only connection, a Production type and sessions that only read

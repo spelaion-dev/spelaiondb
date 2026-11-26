@@ -36,13 +36,62 @@ create table table_filter_defaults (
 );
 ";
 
+/// The connection's other databases (ADR-074, SDB-505): a table's filters are kept per database,
+/// empty for the connection's own. SQLite cannot change a primary key, so both tables are made
+/// again with the database in theirs and every row copied into them as it was, its database
+/// empty: what a row meant, it still means.
+pub(crate) const BY_DATABASE: &str = "
+create table table_filter_history_by_database (
+    workspace   text not null,
+    connection  text not null,
+    database    text not null default '',
+    schema      text not null,
+    name        text not null,
+    filter      text not null check (length(filter) between 1 and 4000),
+    used_ms     integer not null,
+    primary key (workspace, connection, database, schema, name, filter)
+);
+insert into table_filter_history_by_database
+    (workspace, connection, database, schema, name, filter, used_ms)
+    select workspace, connection, '', schema, name, filter, used_ms from table_filter_history;
+drop index table_filter_history_recent;
+drop table table_filter_history;
+alter table table_filter_history_by_database rename to table_filter_history;
+create index table_filter_history_recent
+    on table_filter_history(workspace, connection, database, schema, name, used_ms desc);
+create table table_filter_defaults_by_database (
+    workspace   text not null,
+    connection  text not null,
+    database    text not null default '',
+    schema      text not null,
+    name        text not null,
+    filter      text not null check (length(filter) between 1 and 4000),
+    primary key (workspace, connection, database, schema, name)
+);
+insert into table_filter_defaults_by_database
+    (workspace, connection, database, schema, name, filter)
+    select workspace, connection, '', schema, name, filter from table_filter_defaults;
+drop table table_filter_defaults;
+alter table table_filter_defaults_by_database rename to table_filter_defaults;
+";
+
 /// A table of a connection, as the store names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilteredTable {
     pub workspace: String,
     pub connection: String,
+    /// The other database of the connection it is in (ADR-074, SDB-505); `None` for the
+    /// connection's own, as every row written before databases had a level.
+    pub database: Option<String>,
     pub schema: String,
     pub name: String,
+}
+
+impl FilteredTable {
+    /// The database as the store keeps it: empty for the connection's own.
+    fn database(&self) -> &str {
+        self.database.as_deref().unwrap_or("")
+    }
 }
 
 /// `filter` as it is kept: trimmed, and `None` when there is nothing to keep (blank, too
@@ -70,11 +119,13 @@ impl Store {
         // Never the same instant as another: two filters used within one millisecond still
         // have an order.
         transaction.execute(
-            "insert into table_filter_history (workspace, connection, schema, name, filter, used_ms)
-             values (?1, ?2, ?3, ?4, ?5, max(?6, coalesce((
+            "insert into table_filter_history
+                 (workspace, connection, database, schema, name, filter, used_ms)
+             values (?1, ?2, ?7, ?3, ?4, ?5, max(?6, coalesce((
                 select max(used_ms) + 1 from table_filter_history
-                where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4), 0)))
-             on conflict (workspace, connection, schema, name, filter)
+                where workspace = ?1 and connection = ?2 and database = ?7 and schema = ?3
+                  and name = ?4), 0)))
+             on conflict (workspace, connection, database, schema, name, filter)
              do update set used_ms = excluded.used_ms",
             params![
                 table.workspace,
@@ -82,22 +133,25 @@ impl Store {
                 table.schema,
                 table.name,
                 filter,
-                now_ms()
+                now_ms(),
+                table.database()
             ],
         )?;
         transaction.execute(
             "delete from table_filter_history
-             where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4
-               and filter not in (
+             where workspace = ?1 and connection = ?2 and database = ?6 and schema = ?3
+               and name = ?4 and filter not in (
                 select filter from table_filter_history
-                where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4
+                where workspace = ?1 and connection = ?2 and database = ?6 and schema = ?3
+                  and name = ?4
                 order by used_ms desc limit ?5)",
             params![
                 table.workspace,
                 table.connection,
                 table.schema,
                 table.name,
-                TABLE_FILTER_HISTORY as i64
+                TABLE_FILTER_HISTORY as i64,
+                table.database()
             ],
         )?;
         transaction.commit()?;
@@ -108,7 +162,8 @@ impl Store {
     pub fn table_filter_history(&self, table: &FilteredTable) -> Result<Vec<String>, StoreError> {
         let mut statement = self.conn.prepare(
             "select filter from table_filter_history
-             where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4
+             where workspace = ?1 and connection = ?2 and database = ?6 and schema = ?3
+               and name = ?4
              order by used_ms desc limit ?5",
         )?;
         let rows = statement.query_map(
@@ -117,7 +172,8 @@ impl Store {
                 table.connection,
                 table.schema,
                 table.name,
-                TABLE_FILTER_HISTORY as i64
+                TABLE_FILTER_HISTORY as i64,
+                table.database()
             ],
             |r| r.get(0),
         )?;
@@ -132,14 +188,15 @@ impl Store {
     ) -> Result<(), StoreError> {
         self.conn.execute(
             "delete from table_filter_history
-             where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4
-               and filter = ?5",
+             where workspace = ?1 and connection = ?2 and database = ?6 and schema = ?3
+               and name = ?4 and filter = ?5",
             params![
                 table.workspace,
                 table.connection,
                 table.schema,
                 table.name,
-                filter.trim()
+                filter.trim(),
+                table.database()
             ],
         )?;
         Ok(())
@@ -154,8 +211,15 @@ impl Store {
             .conn
             .query_row(
                 "select filter from table_filter_defaults
-                 where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4",
-                params![table.workspace, table.connection, table.schema, table.name],
+                 where workspace = ?1 and connection = ?2 and database = ?5 and schema = ?3
+                   and name = ?4",
+                params![
+                    table.workspace,
+                    table.connection,
+                    table.schema,
+                    table.name,
+                    table.database()
+                ],
                 |r| r.get(0),
             )
             .optional()?)
@@ -172,8 +236,15 @@ impl Store {
         let Some(filter) = filter else {
             self.conn.execute(
                 "delete from table_filter_defaults
-                 where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4",
-                params![table.workspace, table.connection, table.schema, table.name],
+                 where workspace = ?1 and connection = ?2 and database = ?5 and schema = ?3
+                   and name = ?4",
+                params![
+                    table.workspace,
+                    table.connection,
+                    table.schema,
+                    table.name,
+                    table.database()
+                ],
             )?;
             return Ok(());
         };
@@ -183,16 +254,17 @@ impl Store {
             )));
         };
         self.conn.execute(
-            "insert into table_filter_defaults (workspace, connection, schema, name, filter)
-             values (?1, ?2, ?3, ?4, ?5)
-             on conflict (workspace, connection, schema, name)
+            "insert into table_filter_defaults (workspace, connection, database, schema, name, filter)
+             values (?1, ?2, ?6, ?3, ?4, ?5)
+             on conflict (workspace, connection, database, schema, name)
              do update set filter = excluded.filter",
             params![
                 table.workspace,
                 table.connection,
                 table.schema,
                 table.name,
-                filter
+                filter,
+                table.database()
             ],
         )?;
         Ok(())
@@ -209,6 +281,7 @@ mod tests {
         FilteredTable {
             workspace: workspace.into(),
             connection: connection.into(),
+            database: None,
             schema: "public".into(),
             name: name.into(),
         }
@@ -259,6 +332,11 @@ mod tests {
             table("/other", "shop", "orders"),
             table("/repo", "other", "orders"),
             table("/repo", "shop", "customers"),
+            // The same table of another database of the connection (ADR-074, SDB-505).
+            FilteredTable {
+                database: Some("billing".into()),
+                ..orders.clone()
+            },
             FilteredTable {
                 schema: "audit".into(),
                 ..orders.clone()

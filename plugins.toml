@@ -113,34 +113,34 @@ program_sha256 = "cdb3f2aeb15c49a524f79f42ed40404738fcb30d7490cbb1330a640842301e
 [[plugin]]
 name = "spelaiondb-plugin-postgres"
 repository = "spelaion-dev/spelaiondb-plugin-postgres"
-version = "0.1.7"
-protocol = "1.3"
+version = "0.1.9"
+protocol = "1.4"
 engines = ["postgres"]
 min_app = "0.10.0"
 
 [plugin.platform.aarch64-apple-darwin]
-archive = "spelaiondb-plugin-postgres-0.1.7-aarch64-apple-darwin.tar.gz"
-archive_sha256 = "315c112b0c82dcb1035766fa4396a4022de6570e752c3bbf088c8131549ef719"
-archive_size = 2550309
-program_sha256 = "ff688c04566dfd218e53e4dbb36e206dfa3c654dd2067a53a9c099035ba7e357"
+archive = "spelaiondb-plugin-postgres-0.1.9-aarch64-apple-darwin.tar.gz"
+archive_sha256 = "f5e887f3b6e51aacdaa1490d5af56792b78bab544570672fdb455aed7c8553a1"
+archive_size = 2553622
+program_sha256 = "1e1face9a6509be5a76fcc299ef942ffc3310edd7a9a4e895b32747b1014b54f"
 
 [plugin.platform.x86_64-apple-darwin]
-archive = "spelaiondb-plugin-postgres-0.1.7-x86_64-apple-darwin.tar.gz"
-archive_sha256 = "f71858e8c0384f55e05d55f5f64650dce5b96b29646fd79ad413e43cc65d2098"
-archive_size = 2749708
-program_sha256 = "6bf64992c612df7b10cd90f07365631c171b089ccf1b796b74ae911909cbdccf"
+archive = "spelaiondb-plugin-postgres-0.1.9-x86_64-apple-darwin.tar.gz"
+archive_sha256 = "6ec89c8ae3ab5722f0f5bdbf96cd1a0fe97d1a1bba1de377cfb76dc5d2b0d288"
+archive_size = 2749712
+program_sha256 = "95573580a4722e36716f0d95dfbbb299d54c21616c3e0ceec5cc6317c4f7e933"
 
 [plugin.platform.x86_64-pc-windows-msvc]
-archive = "spelaiondb-plugin-postgres-0.1.7-x86_64-pc-windows-msvc.tar.gz"
-archive_sha256 = "2ca531ce73364e868e97dbd21cad1a33760c61be17fd72e233cca361a6c4a637"
-archive_size = 2749337
-program_sha256 = "7b580d06ab22716de2340c6cda42c600bb76c39fa48ec365c4dd8c7cfa8b9577"
+archive = "spelaiondb-plugin-postgres-0.1.9-x86_64-pc-windows-msvc.tar.gz"
+archive_sha256 = "b9d18b8dc460f9139d04a6f7bf4dbad41d22b8f0df5fbbd4969a12ddc72b5440"
+archive_size = 2762432
+program_sha256 = "710ac8758a9731d969bdd2135fb98571a376c34ebaabcb8e17e5e2deee779de7"
 
 [plugin.platform.x86_64-unknown-linux-gnu]
-archive = "spelaiondb-plugin-postgres-0.1.7-x86_64-unknown-linux-gnu.tar.gz"
-archive_sha256 = "e6d3b659643411cc6f495332d5caaafd387be4ab61e42e259e59100132b1d61a"
-archive_size = 2991602
-program_sha256 = "f0b2b2e467253cef1bd9b5420a9ec48882ef42b22c96d33664b7c3d21c682d6c"
+archive = "spelaiondb-plugin-postgres-0.1.9-x86_64-unknown-linux-gnu.tar.gz"
+archive_sha256 = "f78e7e2645f37e1808dce187d1bc424ec2571bbe0cc3d767fa87187aa8858731"
+archive_size = 3001238
+program_sha256 = "844b07de5738ef0489a7e208ba63c3de6b98e207899f2c0515f0f7e6c1397415"
 
 # DuckDB.
 [[plugin]]

@@ -3,6 +3,7 @@
 // catalog, the dialog shows it as it follows the form, and Apply runs exactly that script.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { listedConnection, type ConnectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { AlterationPreviewItem, ColumnEditItem_Serialize as ColumnEditItem, DroppedConstraintItem, TableAlterationItem, TableStructureItem_Serialize as TableStructureItem } from "../bindings";
@@ -13,7 +14,7 @@ import { confirmShown, usePreviewThenApply } from "../useDialogState";
 
 export function StructureDialog({
   session,
-  connectionId,
+  identity,
   schema,
   table,
   columns: only,
@@ -22,7 +23,7 @@ export function StructureDialog({
   onDone,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   schema: string;
   table: string;
   /** The columns to show; all of them when absent. */
@@ -34,7 +35,7 @@ export function StructureDialog({
   onDone(): void;
 }) {
   const { t } = useTranslation("shell");
-  const connection = useApp((s) => s.connections.find((c) => c.id === connectionId));
+  const connection = useApp((s) => listedConnection(s.connections, identity));
   const [structure, setStructure] = useState<TableStructureItem | null>(null);
   const [edits, setEdits] = useState<ColumnEditItem[]>([]);
   /** The table's comment as typed (SDB-393). */
@@ -105,8 +106,8 @@ export function StructureDialog({
 
   function openInEditor() {
     if (preview.kind !== "ready") return;
-    const tab = useApp.getState().addTab(connectionId, preview.value.sql);
-    connectTabFromExplorer(tab, session, explorerDatabase(connectionId, schema));
+    const tab = useApp.getState().addTab(identity, preview.value.sql);
+    connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
     onClose();
   }
 

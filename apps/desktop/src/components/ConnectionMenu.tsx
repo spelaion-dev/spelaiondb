@@ -6,8 +6,11 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ConnectionItem } from "../api";
 import { useApp } from "../store";
+import { keyOf } from "../connectionKey";
 import { disconnectAll, hasSessions } from "../connectionControl";
 import { ariaKeyShortcuts, shortcutText } from "../shortcuts";
+import { openConnectionWindow } from "../resultsWindow";
+import { windowConnection } from "../windowContext";
 
 /** The actions that need the explorer node's own state; the rest only need the store. */
 export interface ConnectionMenuActions {
@@ -119,11 +122,13 @@ export function ConnectionMenu({
     >
       {/* Open: what double-clicking the row does, then what needs the connection opened. */}
       {item(t("newQuery"), actions.newQuery)}
-      {connected && item(t("openByName.menu"), () => app().setOpenObject({ connectionId: connection.id }), { shortcut: "openByName" })}
+      {/* Its own window, with its own tabs and sessions (SDB-30); not from that window. */}
+      {windowConnection() === null && item(t("openWindow"), () => void openConnectionWindow(connection))}
+      {connected && item(t("openByName.menu"), () => app().setOpenObject({ connection: keyOf(connection) }), { shortcut: "openByName" })}
       {connected && item(t("refreshAllSchemas"), actions.refresh, { shortcut: "refresh" })}
       <hr />
       {/* The connection's own settings and what the explorer shows of it. */}
-      {item(t("connections:edit"), () => app().setConnectionDialog({ kind: "edit", id: connection.id }))}
+      {item(t("connections:edit"), () => app().setConnectionDialog({ kind: "edit", connection: keyOf(connection) }))}
       {item(t("connections:configureFilters"), actions.configureFilters)}
       {connected && actions.createSchema && item(t("create.schema"), actions.createSchema)}
       {connected && actions.backup && (
@@ -146,7 +151,7 @@ export function ConnectionMenu({
           <hr />
           {/* Every connection's sessions at once (SDB-395), asking first what would be lost. */}
           {item(t("connections:control.disconnectAll"), () => void disconnectAll(null))}
-          {hasSessions(connection.id) && item(t("connections:control.disconnectOthersHere"), () => void disconnectAll(connection.id))}
+          {hasSessions(keyOf(connection)) && item(t("connections:control.disconnectOthersHere"), () => void disconnectAll(keyOf(connection)))}
         </>
       )}
       <hr />

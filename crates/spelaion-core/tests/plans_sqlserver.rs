@@ -43,6 +43,7 @@ async fn open(read_only: bool) -> Option<OpenConnection> {
         sqlite3: None,
         file_folder: None,
         databases: None,
+        other_databases: spelaion_config::OtherDatabases::None,
         local_port: LocalPort::Any,
         keepalive: None,
         statement_timeout: Some(Duration::from_secs(10)),
@@ -57,7 +58,7 @@ async fn open(read_only: bool) -> Option<OpenConnection> {
             OpenOptions {
                 tunnels: Arc::new(TunnelPool::new()),
                 known_hosts: KnownHosts {
-                    team_file: None,
+                    team_files: Vec::new(),
                     user_file: None,
                     app_file: std::env::temp_dir().join("unused-sqlserver-plan-known-hosts"),
                 },

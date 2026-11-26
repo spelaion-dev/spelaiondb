@@ -1,11 +1,26 @@
 {
+  "databases": {
+    "own": "{{name}} (its own)",
+    "toggle": "Expand or collapse database {{name}}",
+    "menu": "Database {{name}}",
+    "disconnect": "Disconnect",
+    "ownedHint": "{{name}} has a connection of its own, {{connection}}: it opens there, with that connection's settings.",
+    "openOwner": "Open in {{connection}}",
+    "ownOnly": "Only its own database is shown: {{reason}}"
+  },
   "queryTab": "Query {{number}}",
-  "openFolderTitle": "Open folder with .spelaion/",
+  "openFolderTitle": "Add a folder with .spelaion/",
   "personal": "Personal",
   "noFolder": "No folder open",
-  "openAnotherFolder": "Open another folder",
+  "openAnotherFolder": "Add or close folders",
   "folderMenu": "Folders",
-  "openFolderMenu": "Open folder…",
+  "openFolderMenu": "Add folder…",
+  "openFolders": "Open folders",
+  "closeFolder": "Close {{name}}",
+  "foldersOpen_one": "{{count}} folder",
+  "foldersOpen_other": "{{count}} folders",
+  "folderGroup": "Connections of {{name}}",
+  "folderEmpty": "No connections in this folder.",
   "recentFolders": "Recent folders",
   "noRecentFolders": "No recent folders yet.",
   "recentFolderMissing": "{{path}} is not there any more",
@@ -78,6 +93,7 @@
     "views": {
       "processes": "Processes",
       "locks": "Locks",
+      "dashboard": "Dashboard",
       "settings": "Settings"
     }
   },
@@ -93,6 +109,7 @@
   "hideNames": "Hide the {{count}} chosen",
   "showOnlyNames": "Show only the {{count}} chosen",
   "newQuery": "New query",
+  "openWindow": "Open in a new window",
   "loadingDetails": "Loading table details…",
   "connecting": "Connecting…",
   "quickFilter": "Filter the explorer",
@@ -430,6 +447,7 @@
     "failed": "Could not change the account: {{detail}}"
   },
   "privileges": {
+    "database": "Grants in database",
     "menu": "Privileges…",
     "title": "Privileges of {{name}}",
     "has": "What it has",
@@ -599,7 +617,7 @@
       "close": "Close with an open transaction?",
       "disconnect": "Disconnect with an open transaction?",
       "quit": "Quit with an open transaction?",
-      "folder": "Open another folder with an open transaction?"
+      "folder": "Close the folder with an open transaction?"
     },
     "explanation_one": "This tab has a transaction open. Its session will end, and the server rolls back what was not committed:",
     "explanation_other": "These tabs have a transaction open. Their sessions will end, and the server rolls back what was not committed:",
@@ -609,13 +627,13 @@
       "close": "Close and roll back",
       "disconnect": "Disconnect and roll back",
       "quit": "Quit and roll back",
-      "folder": "Open and roll back"
+      "folder": "Close folder and roll back"
     },
     "titleRunning": {
       "close": "Close while a query runs?",
       "disconnect": "Disconnect while a query runs?",
       "quit": "Quit while a query runs?",
-      "folder": "Open another folder while a query runs?"
+      "folder": "Close the folder while a query runs?"
     },
     "running_one": "This tab's query is still running. It will be cancelled:",
     "running_other": "These tabs have queries still running. They will be cancelled:",
@@ -623,13 +641,13 @@
       "close": "Close and cancel",
       "disconnect": "Disconnect and cancel",
       "quit": "Quit and cancel",
-      "folder": "Open and cancel"
+      "folder": "Close folder and cancel"
     },
     "titleUnsaved": {
       "close": "Close with unsaved row changes?",
       "disconnect": "Disconnect with unsaved row changes?",
       "quit": "Quit with unsaved row changes?",
-      "folder": "Open another folder with unsaved row changes?"
+      "folder": "Close the folder with unsaved row changes?"
     },
     "unsaved_one": "This tab has row changes that were not applied. They will be lost:",
     "unsaved_other": "These tabs have row changes that were not applied. They will be lost:",
@@ -638,7 +656,22 @@
       "close": "Close and discard",
       "disconnect": "Disconnect and discard",
       "quit": "Quit and discard",
-      "folder": "Open and discard"
+      "folder": "Close folder and discard"
+    },
+    "titleUnkept": {
+      "close": "Close the window with SQL that is not saved?",
+      "disconnect": "Disconnect with SQL that is not saved?",
+      "quit": "Quit with SQL that is not saved?",
+      "folder": "Close the folder with SQL that is not saved?"
+    },
+    "unkept_one": "This tab's SQL is kept only in this window. It will be lost:",
+    "unkept_other": "These tabs' SQL is kept only in this window. It will be lost:",
+    "unkeptHint": "To keep it, cancel and save it to a file, or copy it to a tab of the main window.",
+    "proceedUnkept": {
+      "close": "Close and discard",
+      "disconnect": "Disconnect and discard",
+      "quit": "Quit and discard",
+      "folder": "Close folder and discard"
     }
   },
   "exportTable": "Export…",
@@ -763,6 +796,36 @@
     "waitCount_other": "{{count}} waits",
     "visibility": "Seeing every session's locks needs permissions: PROCESS and performance_schema on MySQL, VIEW SERVER STATE on SQL Server."
   },
+  "serverDashboard": {
+    "starting": "Starting…",
+    "sampling": "Sampling every {{seconds}} s while this view is shown",
+    "paused": "Paused while hidden",
+    "failedStatus": "Stopped after an error",
+    "stopped": "Stopped",
+    "memoryOnly": "Kept in memory only, for the last 30 minutes.",
+    "failed": "Could not read the server's counters: {{detail}}",
+    "tryAgain": "Try again",
+    "firstSample": "Taking the first sample…",
+    "chartLabel": "{{title}}, {{count}} samples. Left and right arrows move between samples.",
+    "sessions": "Sessions",
+    "connected": "Connected",
+    "active": "Active",
+    "waiting": "Waiting",
+    "transactions": "Transactions",
+    "perSecond": "Per second",
+    "reads": "Logical reads",
+    "pagesPerSecond": "Pages per second",
+    "readsHint": "Blocks or pages read, from memory or from disk.",
+    "log": "Log writes",
+    "written": "Written",
+    "logHint": "Bytes written to the server's log (WAL, redo log or transaction log): what every change costs.",
+    "waitingHint": {
+      "postgres": "Waiting: active sessions waiting on a lock, I/O or another server event. This monitor's own session is left out.",
+      "mysql": "Waiting: InnoDB row-lock waits. This monitor's own connection is left out.",
+      "mariadb": "Waiting: InnoDB row-lock waits. This monitor's own connection is left out.",
+      "sqlserver": "Waiting: user requests with a wait type. This monitor's own session is left out."
+    }
+  },
   "serverSettings": {
     "search": "Search settings…",
     "kind": "Kind",
@@ -844,7 +907,63 @@
     "relation": "{{name}}: {{from}} → {{to}}",
     "focus": "Focus on this table",
     "openData": "Open data",
-    "openStructure": "Open structure"
+    "openStructure": "Open structure",
+    "save": "Save",
+    "saveTitle": "Save the diagram",
+    "saveAsTitle": "Save as a new diagram",
+    "name": "Name",
+    "saveConfirm": "Save",
+    "more": "More diagram actions",
+    "saveAs": "Save as…",
+    "rename": "Rename…",
+    "renameTitle": "Rename the diagram",
+    "renameConfirm": "Rename",
+    "layOutAgain": "Lay out again",
+    "delete": "Delete saved diagram…",
+    "deleteTitle": "Delete saved diagram?",
+    "deleteBody": "\"{{name}}\" is deleted from this computer: its positions, notes and groups are lost. The tables in the database are not touched.",
+    "deleteAction": "Delete diagram",
+    "deleted": "Deleted the saved diagram {{name}}",
+    "deleteFailed": "Could not delete the saved diagram: {{detail}}",
+    "savedDiagram": "Saved as {{name}}",
+    "saveDiagramFailed": "Could not save the diagram: {{detail}}",
+    "openFailed": "Could not open the saved diagram: {{detail}}",
+    "unsaved": "Unsaved changes",
+    "closeUnsaved": "The diagram has changes that were not saved. Discard them and close this tab?",
+    "closeUnsavedMany_one": "{{count}} diagram has changes that were not saved ({{tabs}}). Discard them and close?",
+    "closeUnsavedMany_other": "{{count}} diagrams have changes that were not saved ({{tabs}}). Discard them and close?",
+    "addNote": "Add note",
+    "noteTitle": "Note",
+    "noteText": "Text",
+    "noteConfirm": "Done",
+    "editNote": "Edit note…",
+    "deleteNote": "Delete note",
+    "group": "Group…",
+    "groupTitle": "Group of tables",
+    "groupName": "Name",
+    "groupConfirm": "Done",
+    "editGroup": "Edit group…",
+    "ungroup": "Ungroup",
+    "removeFromGroup": "Remove from group",
+    "color": "Color",
+    "colors": {
+      "gray": "Gray",
+      "blue": "Blue",
+      "green": "Green",
+      "amber": "Amber",
+      "red": "Red",
+      "purple": "Purple"
+    },
+    "cancel": "Cancel",
+    "gone": "Not in the database",
+    "goneTip": "{{name}} is not read in this diagram any more. It stays where it was until you remove it.",
+    "removeTable": "Remove from diagram",
+    "new": "New",
+    "newTip": "Not in the saved diagram: placed below the others. Saving keeps it where it is.",
+    "newCount_one": "{{formattedCount}} new table since the diagram was saved.",
+    "newCount_other": "{{formattedCount}} new tables since the diagram was saved.",
+    "goneCount_one": "{{formattedCount}} table of the saved diagram is not in the database.",
+    "goneCount_other": "{{formattedCount}} tables of the saved diagram are not in the database."
   },
   "maintenance": {
     "menu": "Maintenance",

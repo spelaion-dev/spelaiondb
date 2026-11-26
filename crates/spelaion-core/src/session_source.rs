@@ -57,7 +57,7 @@ pub fn carried_password(
 }
 
 /// The same engine, server, user and route (tunnel hops, proxy, SSM, Kubernetes).
-fn same_login(old: &ResolvedConnection, new: &ResolvedConnection) -> bool {
+pub(crate) fn same_login(old: &ResolvedConnection, new: &ResolvedConnection) -> bool {
     let target = |c: &ResolvedConnection| {
         (
             c.engine,

@@ -274,7 +274,7 @@ async fn plans_return_the_core_tree_and_cache_complete_pages_without_rerunning()
         OpenOptions {
             tunnels: server.state.tunnels.clone(),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: dir.join("known_hosts"),
             },
@@ -466,7 +466,7 @@ async fn server_plans_return_the_core_tree_and_never_analyze() {
             OpenOptions {
                 tunnels: server.state.tunnels.clone(),
                 known_hosts: KnownHosts {
-                    team_file: None,
+                    team_files: Vec::new(),
                     user_file: None,
                     app_file: dir.join("known_hosts"),
                 },
@@ -1233,6 +1233,154 @@ async fn removing_trust_hides_the_repositorys_connections() {
     assert_eq!(rows(&db), 1);
 }
 
+/// ADR-075 (SDB-495): two repositories may each have an `orders`; the audit log tells their
+/// calls apart by the folder each server serves, and a personal connection's has none.
+#[tokio::test]
+async fn audit_entries_record_the_folder_the_server_serves() {
+    let user_dir = temp("folder-user");
+    let mut roots = Vec::new();
+    for name in ["folder-a", "folder-b"] {
+        let repo = temp(name);
+        let db = database(&repo);
+        let connections = repo.join(".spelaion/connections");
+        std::fs::create_dir_all(&connections).unwrap();
+        std::fs::write(
+            connections.join("orders.toml"),
+            writable_connection(&db, ""),
+        )
+        .unwrap();
+        let config = spelaion_config::load(Some(&repo), &user_dir);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        TrustStore::load(&user_dir).unwrap().trust(&config).unwrap();
+        let server = server(Some(&repo), &user_dir, false);
+        let read = query(&server, "orders", "select count(*) from notes").await;
+        assert!(!refused(&read), "{}", body(&read));
+        let last = &app_store(&user_dir).recent(1).unwrap()[0];
+        assert_eq!(last.connection, "orders", "the id agents see stays the id");
+        let root = std::fs::canonicalize(&repo).unwrap().display().to_string();
+        assert_eq!(last.folder.as_deref(), Some(root.as_str()));
+        roots.push(root);
+    }
+    assert_ne!(roots[0], roots[1]);
+    let p = personal(false);
+    let read = query(&p.server, "~/notes", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+    assert_eq!(app_store(&p.user_dir).recent(1).unwrap()[0].folder, None);
+}
+
+/// ADR-075 (SDB-503): the MCP page's local restriction of one folder's connection, set in the
+/// scope the page shows for that row (`agents_by_folder`, with every folder open), is what a
+/// server started in that folder obeys; a server started in the other folder, on a connection
+/// of the same id, keeps writing. The restriction is a safeguard: it must land where it says.
+#[tokio::test]
+async fn the_restriction_set_for_one_folders_row_holds_for_a_server_started_there() {
+    let user_dir = temp("restrict-folder-user");
+    let mut repos = Vec::new();
+    for name in ["restrict-a", "restrict-b"] {
+        let repo = temp(name);
+        let db = database(&repo);
+        let connections = repo.join(".spelaion/connections");
+        std::fs::create_dir_all(&connections).unwrap();
+        std::fs::write(connections.join("shop.toml"), writable_connection(&db, "")).unwrap();
+        let config = spelaion_config::load(Some(&repo), &user_dir);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        TrustStore::load(&user_dir).unwrap().trust(&config).unwrap();
+        repos.push((repo, db));
+    }
+    // The page's list, with both folders open and `b` the one shown.
+    let open: Vec<std::sync::Arc<spelaion_config::Config>> = repos
+        .iter()
+        .map(|(repo, _)| std::sync::Arc::new(spelaion_config::load(Some(repo), &user_dir)))
+        .collect();
+    let history = spelaion_core::QueryHistory::open(spelaion_config::state_db(&user_dir)).unwrap();
+    let trust = TrustStore::load(&user_dir).unwrap();
+    let groups = spelaion_core::agents_by_folder(&open, &open[1], &trust, &history).await;
+    // The row of `a`'s `shop`, though `a` is not the folder shown.
+    let row = &groups[0].connections[0];
+    assert_eq!(row.entry.id.to_string(), "shop");
+    history
+        .set_mcp_connection_read_only(
+            row.override_scope.clone().expect("a scope"),
+            row.entry.id.to_string(),
+            true,
+        )
+        .await
+        .unwrap();
+    let in_a = server(Some(&repos[0].0), &user_dir, false);
+    let in_b = server(Some(&repos[1].0), &user_dir, false);
+    let refused_write = write(&in_a, "shop", INSERT).await;
+    assert!(refused(&refused_write), "{}", body(&refused_write));
+    assert!(
+        body(&refused_write).contains("local MCP restriction"),
+        "{}",
+        body(&refused_write)
+    );
+    assert_eq!(rows(&repos[0].1), 1);
+    let allowed = write(&in_b, "shop", INSERT).await;
+    assert!(!refused(&allowed), "{}", body(&allowed));
+    assert_eq!(rows(&repos[1].1), 2);
+    // And the page reads it back on that row only.
+    let groups = spelaion_core::agents_by_folder(&open, &open[1], &trust, &history).await;
+    assert_eq!(groups[0].connections[0].read_only_override, Some(true));
+    assert_eq!(groups[1].connections[0].read_only_override, Some(false));
+}
+
+/// ADR-075 point 9 (SDB-503): a server serves the one folder it is started in and the personal
+/// connections, never the folders the app has open. Another trusted folder the window holds,
+/// remembered in the personal folder as the app keeps it, lends it nothing: not its
+/// connections, not its connection of the same id.
+#[tokio::test]
+async fn a_server_lists_nothing_of_another_folder_the_app_has_open() {
+    let user_dir = temp("open-folders-user");
+    let mut repos = Vec::new();
+    for (name, id) in [("open-a", "orders"), ("open-b", "billing")] {
+        let repo = temp(name);
+        let db = database(&repo);
+        let connections = repo.join(".spelaion/connections");
+        std::fs::create_dir_all(&connections).unwrap();
+        // Both have `shared`; only `b` has `billing`.
+        for file in [format!("{id}.toml"), "shared.toml".to_string()] {
+            std::fs::write(connections.join(file), writable_connection(&db, "")).unwrap();
+        }
+        let config = spelaion_config::load(Some(&repo), &user_dir);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        TrustStore::load(&user_dir).unwrap().trust(&config).unwrap();
+        repos.push(repo);
+    }
+    // The window holds both folders open, as the desktop remembers them.
+    std::fs::write(
+        user_dir.join("desktop-open-folders.json"),
+        serde_json::json!({ "schema_version": 1, "folders": repos }).to_string(),
+    )
+    .unwrap();
+    let server = server(Some(&repos[0]), &user_dir, false);
+    let list = listed(&server).await;
+    assert!(list.contains("- orders"), "{list}");
+    assert!(list.contains("- shared"), "{list}");
+    assert!(
+        !list.contains("billing"),
+        "another open folder's connection: {list}"
+    );
+    assert_eq!(
+        list.matches("- shared").count(),
+        1,
+        "one connection per id: {list}"
+    );
+    let other = query(&server, "billing", "select count(*) from notes").await;
+    assert_eq!(code(&other).0, "not_exposed", "{}", body(&other));
+    // `shared` is this folder's, and its calls are recorded under this folder only.
+    let read = query(&server, "shared", "select count(*) from notes").await;
+    assert!(!refused(&read), "{}", body(&read));
+    let root = std::fs::canonicalize(&repos[0])
+        .unwrap()
+        .display()
+        .to_string();
+    assert_eq!(
+        app_store(&user_dir).recent(1).unwrap()[0].folder.as_deref(),
+        Some(root.as_str())
+    );
+}
+
 #[tokio::test]
 async fn a_broken_file_exposes_nothing_until_it_is_fixed() {
     let p = personal(false);
@@ -1565,7 +1713,7 @@ async fn admin_connection(server: &SpelaionMcp, id: &str, user_dir: &Path) -> Op
         OpenOptions {
             tunnels: server.state.tunnels.clone(),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: user_dir.join("known_hosts"),
             },
@@ -1717,7 +1865,7 @@ async fn tunnelled_sessions_ended_by_the_server_are_replaced() {
             OpenOptions {
                 tunnels: Arc::new(TunnelPool::new()),
                 known_hosts: KnownHosts {
-                    team_file: None,
+                    team_files: Vec::new(),
                     user_file: None,
                     app_file: user_dir.join("known_hosts"),
                 },
@@ -2127,4 +2275,40 @@ async fn catalog_answers_on_thousands_of_tables_stay_within_the_limit() {
     assert!(column.ends_with('…'), "{column}");
     assert!(column.chars().count() < 260, "{}", column.len());
     assert!(!text.contains("fake_column"), "{text}");
+}
+
+/// ADR-074 point 8: a connection that opens every database of its server is still, to agents,
+/// its own database alone. Its sessions open the file's `database`, and it is listed once.
+#[tokio::test]
+async fn an_agent_on_a_connection_with_all_databases_reaches_only_its_own_database() {
+    let Ok(address) = std::env::var("SPELAION_TEST_PG") else {
+        eprintln!("SPELAION_TEST_PG not set: agents and all_databases not tested");
+        return;
+    };
+    let (host, port) = address.rsplit_once(':').unwrap();
+    let user_dir = temp("all-databases");
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    std::fs::write(
+        user_dir.join("connections/wide.toml"),
+        postgres_connection(
+            host,
+            Some(port),
+            "spelaion-mcp-all-databases",
+            "all_databases = true",
+            true,
+        ),
+    )
+    .unwrap();
+    let server = server(None, &user_dir, false);
+    let answer = query(&server, "~/wide", "select current_database() as here").await;
+    let text = body(&answer);
+    assert!(text.contains("\"spelaion\""), "{text}");
+    assert!(!text.contains("postgres\""), "{text}");
+    let listed = listed(&server).await;
+    assert_eq!(
+        listed.lines().filter(|l| l.contains("~/wide")).count(),
+        1,
+        "{listed}"
+    );
+    assert!(!listed.contains("spelaion_gis"), "{listed}");
 }

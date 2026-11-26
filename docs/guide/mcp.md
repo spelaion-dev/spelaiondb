@@ -29,6 +29,15 @@ claude mcp add spelaiondb -- spelaiondb mcp
 Every tool call, run or refused, is recorded on your computer: the MCP page's Activity tab
 shows, filters, exports and clears it (secrets masked), and so does `spelaiondb audit`.
 
+An agent's server serves one folder, the one it is started in or given with
+`spelaiondb mcp --workspace <folder>`, and your personal connections; it never serves the other
+folders the app has open (ADR-075). With several folders open, the page's Security tab lists
+each folder's connections under it, each with what agents can do there as that folder decides
+(its trust, its types and its local restriction, kept per folder), then your personal
+connections. The Activity tab shows each call's folder and filters by it; the CSV and JSON
+exports carry it in a `folder` column. Calls on personal connections, and calls recorded
+before 0.17, have no folder.
+
 ## Why a call was refused or failed
 
 When a tool call is refused or fails, the agent gets the same sentence as before and, in the

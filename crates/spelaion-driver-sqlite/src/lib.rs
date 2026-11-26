@@ -158,6 +158,8 @@ enum Command {
     Schemas(Reply<Vec<SchemaInfo>>),
     Objects(String, Reply<Vec<ObjectInfo>>),
     Describe(String, String, Reply<TableInfo>),
+    /// Every table of a schema, its five queries in one turn of the thread (SDB-220).
+    DescribeAll(String, Reply<Vec<TableInfo>>),
     Referencing(String, String, Reply<Vec<ReferencingKey>>),
     /// A catalog query from `catalog.rs`.
     Catalog(String, Reply<Vec<catalog::Row>>),
@@ -207,6 +209,9 @@ fn actor(
             }
             Command::Describe(schema, name, reply) => {
                 let _ = reply.send(introspect::describe_table(&conn, &schema, &name));
+            }
+            Command::DescribeAll(schema, reply) => {
+                let _ = reply.send(introspect::describe_tables(&conn, &schema));
             }
             Command::Referencing(schema, name, reply) => {
                 let _ = reply.send(introspect::list_referencing_keys(&conn, &schema, &name));
@@ -359,6 +364,13 @@ impl Connection for SqliteConnection {
         let (schema, name) = (schema.to_string(), name.to_string());
         self.ask(|reply| Command::Referencing(schema, name, reply))
             .await
+    }
+
+    async fn describe_tables(&self, schema: &str) -> Result<Option<Vec<TableInfo>>> {
+        let schema = schema.to_string();
+        self.ask(|reply| Command::DescribeAll(schema, reply))
+            .await
+            .map(Some)
     }
 
     async fn list_columns(&self, schema: &str) -> Result<Vec<SchemaColumn>> {

@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.16.0"
+version = "0.17.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/spelaion-dev/spelaiondb"
@@ -23,6 +23,7 @@ spelaion-ssh = { path = "crates/spelaion-ssh" }
 spelaion-store = { path = "crates/spelaion-store" }
 spelaion-mcp = { path = "crates/spelaion-mcp" }
 spelaion-https = { path = "crates/spelaion-https" }
+spelaion-tile-http = { path = "crates/spelaion-tile-http" }
 
 anyhow = "1"
 arrow = { version = "60", default-features = false, features = ["ipc"] }

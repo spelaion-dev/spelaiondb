@@ -94,7 +94,7 @@ async fn after_a_saved_edit_a_session_made_from_an_open_one_uses_the_saved_file(
         OpenOptions {
             tunnels: Arc::new(TunnelPool::new()),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: folder.user().join("known_hosts"),
             },
@@ -234,4 +234,61 @@ fn the_typed_password_goes_only_to_the_same_login_on_the_same_route() {
     // one, never the typed one.
     let from_env = resolved(&base.replace("{ secret = \"prompt\" }", "{ secret = \"env:PATH\" }"));
     assert!(carried_password(&old, &from_env, Some(&typed)).is_none());
+}
+
+/// Several folders open (ADR-075, SDB-526): a personal connection's session is not reused
+/// once a folder it reads changed (here folder B's types, which tighten it), while folder A's
+/// connection, which never reads B, keeps reusing its own.
+#[test]
+fn a_change_in_another_open_folder_stops_reusing_a_personal_connections_session() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let base = std::env::temp_dir().join(format!(
+        "spelaion-session-source-folders-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let write = |relative: &str, content: &str| {
+        let path = base.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    };
+    let sqlite = |env: &str| {
+        format!("schema_version = 1\nengine = \"sqlite\"\nenv = \"{env}\"\ndatabase = \"app.db\"\n")
+    };
+    write("user/connections/mine.toml", &sqlite("prod"));
+    write("a/.spelaion/connections/orders.toml", &sqlite("prod"));
+    write(
+        "b/.spelaion/connection-types.toml",
+        "schema_version = 1\n\n[types.prod]\nconfirm_execution = true\n",
+    );
+    let user = base.join("user");
+    let definition = |id: &ConnectionId| {
+        let a = load(Some(&base.join("a")), &user);
+        let b = load(Some(&base.join("b")), &user);
+        a.connection_definition_open(id, true, &[(&a, true), (&b, true)])
+    };
+    let mine = personal("mine");
+    let orders = ConnectionId {
+        source: Source::Workspace,
+        path: "orders".into(),
+    };
+    let (opened_mine, opened_orders) = (definition(&mine).unwrap(), definition(&orders).unwrap());
+    assert_eq!(
+        source_session(&opened_mine, definition(&mine).as_ref()),
+        SourceSession::Current
+    );
+
+    write(
+        "b/.spelaion/connection-types.toml",
+        "schema_version = 1\n\n[types.prod]\nconfirm_execution = true\nmanual_commit = true\n",
+    );
+    assert_eq!(
+        source_session(&opened_mine, definition(&mine).as_ref()),
+        SourceSession::Changed
+    );
+    assert_eq!(
+        source_session(&opened_orders, definition(&orders).as_ref()),
+        SourceSession::Current
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }

@@ -1,4 +1,7 @@
 {
+  "databaseOwn": "{{name}} (la suya)",
+  "databasePostgresHint": "Base de datos: elegir otra desconecta esta pestaña y la conecta a esa. No se vuelve a ejecutar nada, y las filas en pantalla dejan de poder editarse.",
+  "databaseChangeFailed": "No se pudo conectar a {{database}}: {{detail}}",
   "connection": "Conexión",
   "editorMenu": {
     "run": "Ejecutar",
@@ -926,6 +929,16 @@
   },
   "maximizeResults": "Maximizar los resultados ({{shortcut}})",
   "restoreResults": "Mostrar el editor ({{shortcut}})",
+  "detach": {
+    "action": "Mostrar los resultados en una ventana nueva",
+    "shownElsewhere": "Los resultados se muestran en su propia ventana.",
+    "show": "Mostrar la ventana de resultados",
+    "reattach": "Volver a acoplar los resultados",
+    "failed": "No se pudo abrir la ventana de resultados: {{reason}}",
+    "heading": "Resultados de {{name}}",
+    "waiting": "Esperando a la pestaña del editor…",
+    "reattachHint": "Los vuelve a mostrar en la pestaña del editor y cierra esta ventana."
+  },
   "files": {
     "sqlFiles": "Archivos SQL",
     "allFiles": "Todos los archivos",
@@ -961,6 +974,7 @@
     "close": "Cerrar"
   },
   "restore": {
+    "databaseMissing": "Su conexión ya no abre {{database}}: se conecta a la base de datos propia de la conexión.",
     "connectionMissing": "La conexión «{{connection}}» ya no existe: elige otra para ejecutar esta pestaña.",
     "fileMissing": "El archivo ya no está en el disco: este es el texto que tenía la pestaña, sin guardar.",
     "fileUnreadable": "No se pudo leer el archivo ({{message}}): este es el texto que tenía la pestaña, sin guardar.",

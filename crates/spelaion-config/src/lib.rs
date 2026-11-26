@@ -23,7 +23,9 @@ mod edit;
 mod engine_change;
 pub mod engine_options;
 mod error;
+mod folders;
 mod heidisql;
+mod identity;
 mod import;
 mod import_sources;
 mod linux_dirs;
@@ -68,6 +70,7 @@ pub use edit::{
 pub use engine_change::EngineChange;
 pub use error::{ConfigError, ProblemKind, ResolveError};
 pub use heidisql::{HeidiSqlError, heidisql_has_registry, read_heidisql, read_heidisql_registry};
+pub use identity::{ConnectionKey, canonical_folder, folder_scope, repository_scope};
 pub use import::{
     DuplicateAction, ImportClient, ImportPlan, ImportedConnection, ImportedPassword, ImportedProxy,
     ImportedSsh, ImportedTls, KeychainItem, SavedSecrets, TargetFolder, find_duplicate,
@@ -98,8 +101,8 @@ pub use name_pattern::{
 pub use pgadmin::{PgadminError, pgadmin_dir, read_pgadmin};
 pub use relocate::{Moved, connection_move_target, move_connection};
 pub use resolve::{
-    LocalPort, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes, ResolvedProxy,
-    ResolvedSession, ResolvedSsm, ResolvedTunnel, Resolver, TunnelSettings,
+    LocalPort, OtherDatabases, Password, ResolvedConnection, ResolvedHop, ResolvedKubernetes,
+    ResolvedProxy, ResolvedSession, ResolvedSsm, ResolvedTunnel, Resolver, TunnelSettings,
 };
 pub use secrets::{
     KEYCHAIN_NOT_KEPT, KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef,

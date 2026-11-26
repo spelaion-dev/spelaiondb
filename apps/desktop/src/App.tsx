@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import { ExportDialog } from "./components/ExportDialog";
@@ -29,7 +29,11 @@ import { CommandPalette } from "./components/CommandPalette";
 import { OpenObjectDialog } from "./components/OpenObjectDialog";
 import { TableDetailsView } from "./components/TableDetailsDialog";
 import { ErDiagramView } from "./components/ErDiagram";
-import { EXPLORER_SESSION_CLOSED_EVENT, answerQuitRequest } from "./connect";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { answerQuitRequest, answerWindowCloseRequest, explorerSessionClosed, newQueryOnConnection, tabLabel } from "./connect";
+import { connectionTag, keyOf, listedConnection, type ConnectionKey } from "./connectionKey";
+import { explorerConnectionOf, windowConnection, windowContext } from "./windowContext";
+import { DEFAULT_SHARE, MAX_SHARE, MIN_SHARE, paneOf, resized, type Pane, type SplitLayout } from "./splitView";
 import { commandSpec, globalCommandFor, type CommandId } from "./commandRegistry";
 import { commandShortcut, commandTitle } from "./shortcuts";
 import { activeContext, isCommandId, runCommand } from "./commands";
@@ -54,6 +58,8 @@ export default function App() {
   // panel, never the whole window (SDB-110).
   const tabIds = useApp(useShallow((s) => s.tabs.map((tab) => tab.id)));
   const activeTab = useApp((s) => s.activeTab);
+  const layout = useApp((s) => s.layout);
+  const workspaceRef = useRef<HTMLDivElement>(null);
   const historyOpen = useApp((s) => s.historyOpen);
   const snippetsOpen = useApp((s) => s.snippetsOpen);
   const settingsOpen = useApp((s) => s.settingsOpen);
@@ -99,7 +105,7 @@ export default function App() {
     if (saved.width !== width) void setSidePanel(saved.hidden, width);
   };
   const paletteOpen = useApp((s) => s.paletteOpen);
-  const [processConnection, setProcessConnection] = useState<string | null>(null);
+  const [processConnection, setProcessConnection] = useState<ConnectionKey | null>(null);
   const connections = useApp((s) => s.connections);
   const workspaceChanging = useApp((s) => s.workspaceChanging);
   // The MCP server page fills the window: it has no sidebar.
@@ -108,7 +114,7 @@ export default function App() {
   useEffect(() => {
     setSidebarSection((section) => (section === "mcp" ? "connections" : section));
   }, [activeTab, tabIds.length]);
-  const selectedProcessConnection = connections.find((connection) => connection.id === processConnection);
+  const selectedProcessConnection = processConnection === null ? undefined : listedConnection(connections, processConnection);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const sidebarDrag = useRef<{ x: number; width: number } | null>(null);
   const maxSidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, windowWidth - EDITOR_MIN - ACTIVITY_WIDTH));
@@ -136,8 +142,17 @@ export default function App() {
   }
 
   useEffect(() => {
-    // The open folder's tabs come back disconnected, with their text (ADR-036).
+    const context = windowContext();
+    const ownConnection = windowConnection();
     void loadConnections().finally(async () => {
+      // A connection's own window (SDB-30) starts with a new query on it, connected as a
+      // double click in the explorer connects one; nothing of the folder's tabs comes with it,
+      // and nothing it opens is kept for the next start.
+      if (ownConnection !== null) {
+        if (listedConnection(useApp.getState().connections, ownConnection)) newQueryOnConnection(ownConnection);
+        return;
+      }
+      // The open folder's tabs come back disconnected, with their text (ADR-036).
       await restoreTabs();
       const path = await commands.startupPlanPath();
       if (path) await openSavedPlan(path);
@@ -147,18 +162,23 @@ export default function App() {
     });
     // Which engines need a plugin that is not installed (ADR-055), for the picker and failures.
     watchPlugins();
-    const unlisten = events.interactionRequest.listen((e) =>
+    // What the core sends to this window only (SDB-30) is heard on this window: a plain
+    // `listen` would also hear what is meant for another one.
+    const here = getCurrentWebviewWindow();
+    const unlisten = events.interactionRequest(here).listen((e) =>
       useDialogs.getState().pushInteraction({ id: e.payload.id, request: e.payload.request }),
     );
     // Nobody waits for that answer any more (a stopped connection test, ADR-032).
-    const unlistenClosed = events.interactionClosed.listen((e) => useDialogs.getState().popInteraction(e.payload.id));
+    const unlistenClosed = events.interactionClosed(here).listen((e) => useDialogs.getState().popInteraction(e.payload.id));
     // A tab whose session died, or was closed for being idle (ADR-029), shows it; nothing
-    // reconnects or re-runs on its own (ADR-028). The explorer's own session collapses.
+    // reconnects or re-runs on its own (ADR-028). The explorer's own session collapses. Session
+    // keys never repeat between windows, so another window's sessions change nothing here.
     const unlistenLost = events.sessionLost.listen((e) => {
       const { session, reason, idleSeconds, openTransaction } = e.payload;
       useApp.getState().setConnection(session, sessionLost(reason, idleSeconds, openTransaction));
-      if (session.startsWith("meta:")) {
-        window.dispatchEvent(new CustomEvent(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connectionId: session.slice("meta:".length), idleSeconds } }));
+      const explorerConnection = explorerConnectionOf(session);
+      if (explorerConnection !== null) {
+        explorerSessionClosed(explorerConnection, idleSeconds);
       }
     });
     // The core keeps each editor tab's transaction (ADR-031); the tab only shows it.
@@ -174,9 +194,16 @@ export default function App() {
       useApp.getState().updateTab(e.payload.session, { runState: e.payload.state });
     });
     // Closing the window with sessions open: the core held it; the UI quits or asks (SDB-140).
-    const unlistenQuit = events.quitRequested.listen(() => void answerQuitRequest());
+    // Only the main window quits; a connection window closes itself (SDB-30).
+    const unlistenQuit = context.kind === "main"
+      ? events.quitRequested(here).listen(() => void answerQuitRequest())
+      : events.windowCloseRequested(here).listen(() => void answerWindowCloseRequest());
     // A second launch (or Finder) asked this window to open something (SDB-397).
-    const unlistenLaunch = events.launchRequested.listen((e) => void openLaunchRequest(e.payload.request));
+    const unlistenLaunch = events.launchRequested(here).listen((e) => void openLaunchRequest(e.payload.request));
+    // A tab's results window closed (SDB-30): the tab shows its results again.
+    const unlistenResults = events.resultsWindowClosed(here).listen((e) => {
+      useApp.getState().updateTab(e.payload.tab, { resultsWindow: undefined });
+    });
     // Global shortcuts: the registry's (commandRegistry.ts), the same commands as the menus and
     // the command palette. Ctrl+Tab is the tab bar's switcher (TabBar.tsx).
     const onKey = (e: KeyboardEvent) => {
@@ -201,6 +228,7 @@ export default function App() {
       void unlistenRun.then((f) => f());
       void unlistenQuit.then((f) => f());
       void unlistenLaunch.then((f) => f());
+      void unlistenResults.then((f) => f());
       window.removeEventListener("keydown", onKey);
     };
   }, []);
@@ -269,7 +297,13 @@ export default function App() {
         <ReleaseNotesDialog />
         <TabBar hidden={sidebarSection === "processes" || sidebarSection === "mcp"} />
         <div className="workspace-content">
-          <div className="editor-workspace" hidden={sidebarSection === "processes" || sidebarSection === "mcp"}>
+          <div
+            ref={workspaceRef}
+            className={`editor-workspace${layout.kind === "split" ? ` split-${layout.direction}` : ""}`}
+            style={splitTemplate(layout)}
+            hidden={sidebarSection === "processes" || sidebarSection === "mcp"}
+          >
+            {layout.kind === "split" && <SplitResizer layout={layout} workspace={workspaceRef} />}
             {tabIds.length === 0 ? (
               <div className="welcome">
                 <p className="welcome-eyebrow">{t("welcomeEyebrow")}</p>
@@ -284,12 +318,13 @@ export default function App() {
                 <p className="welcome-shortcut">{t("commands.paletteHint", { shortcut: commandShortcut("palette.show") })}</p>
               </div>
             ) : (
-              // All mounted (the editor keeps its state); only the active one is visible.
-              tabIds.map((id) => <TabPanel key={id} id={id} active={id === activeTab} />)
+              // All mounted (the editor keeps its state); only the active one is visible, or the
+              // two panes of a split (SDB-30).
+              tabIds.map((id) => <TabPanel key={id} id={id} active={id === activeTab} pane={paneOf(layout, id)} />)
             )}
           </div>
           {sidebarSection === "processes" && (selectedProcessConnection
-            ? <ScreenBoundary screen="process monitor"><ProcessMonitor key={selectedProcessConnection.id} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} /></ScreenBoundary>
+            ? <ScreenBoundary screen="process monitor"><ProcessMonitor key={connectionTag(keyOf(selectedProcessConnection))} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} /></ScreenBoundary>
             : <div className="process-welcome"><h2>{t("shell:processMonitor.title")}</h2><p>{t("shell:processMonitor.choose")}</p></div>)}
           {sidebarSection === "mcp" && <ScreenBoundary screen="mcp"><McpPage /></ScreenBoundary>}
           {historyOpen && <HistoryPanel />}
@@ -297,13 +332,13 @@ export default function App() {
         </div>
       </main>
       {connectionDialog && (
-        <AddConnection key={connectionDialog.kind === "edit" ? connectionDialog.id : connectionDialog.imports ? "import" : "add"} dialog={connectionDialog} />
+        <AddConnection key={connectionDialog.kind === "edit" ? connectionTag(connectionDialog.connection) : connectionDialog.imports ? "import" : "add"} dialog={connectionDialog} />
       )}
       {deletingConnection && <DeleteConnection key={deletingConnection.id} connection={deletingConnection} />}
       {movingConnection && <MoveConnection key={movingConnection.id} connection={movingConnection} />}
       {settingsOpen && <SettingsDialog onClose={closeSettings} />}
       {openObject && (
-        <OpenObjectDialog initialConnection={openObject.connectionId} onClose={() => useApp.getState().setOpenObject(null)} />
+        <OpenObjectDialog initialConnection={openObject.connection} onClose={() => useApp.getState().setOpenObject(null)} />
       )}
       {paletteOpen && <CommandPalette onClose={() => useApp.getState().setPaletteOpen(false)} />}
       <ExplorerDialogHost />
@@ -318,13 +353,98 @@ export default function App() {
   );
 }
 
-/** One tab's panel. It reads its own tab, and is memoized on its id and visibility, so a change
- *  to one tab (a run's progress, its connection) re-renders only that tab (SDB-110). */
-const TabPanel = memo(function TabPanel({ id, active }: { id: string; active: boolean }) {
+/** The grid tracks of a split: the first pane's share, the separator, the rest. */
+function splitTemplate(layout: SplitLayout): CSSProperties | undefined {
+  switch (layout.kind) {
+    case "single":
+      return undefined;
+    case "split": {
+      const tracks = `minmax(0, ${layout.share}fr) auto minmax(0, ${1 - layout.share}fr)`;
+      return layout.direction === "right" ? { gridTemplateColumns: tracks } : { gridTemplateRows: tracks };
+    }
+    default:
+      return unknownSplit(layout);
+  }
+}
+
+function unknownSplit(layout: never): never {
+  throw new Error(`unknown split layout: ${JSON.stringify(layout)}`);
+}
+
+/** Between the two panes of a split: dragged, or moved with the arrows (Shift: bigger steps),
+ *  Home / End to its limits; a double click makes the panes equal. */
+function SplitResizer({ layout, workspace }: { layout: Extract<SplitLayout, { kind: "split" }>; workspace: RefObject<HTMLDivElement | null> }) {
+  const { t } = useTranslation("app");
+  const across = layout.direction === "right";
+  const setShare = (share: number) => {
+    const app = useApp.getState();
+    app.setLayout(resized(app.layout, share));
+  };
+  const shareAt = (e: { clientX: number; clientY: number }) => {
+    const rect = workspace.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return across ? (e.clientX - rect.left) / rect.width : (e.clientY - rect.top) / rect.height;
+  };
+  return (
+    <div
+      className="split-resizer"
+      role="separator"
+      tabIndex={0}
+      aria-orientation={across ? "vertical" : "horizontal"}
+      aria-label={t("split.resize")}
+      title={t("split.resizeHint")}
+      aria-valuemin={Math.round(MIN_SHARE * 100)}
+      aria-valuemax={Math.round(MAX_SHARE * 100)}
+      aria-valuenow={Math.round(layout.share * 100)}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+        const share = shareAt(e);
+        if (share !== null) setShare(share);
+      }}
+      onPointerUp={(e) => {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+      }}
+      onDoubleClick={() => setShare(DEFAULT_SHARE)}
+      onKeyDown={(e) => {
+        const step = e.shiftKey ? 0.1 : 0.02;
+        const back = across ? "ArrowLeft" : "ArrowUp";
+        const forward = across ? "ArrowRight" : "ArrowDown";
+        if (e.key === back) setShare(layout.share - step);
+        else if (e.key === forward) setShare(layout.share + step);
+        else if (e.key === "Home") setShare(MIN_SHARE);
+        else if (e.key === "End") setShare(MAX_SHARE);
+        else return;
+        e.preventDefault();
+      }}
+    />
+  );
+}
+
+/** One tab's panel. It reads its own tab, and is memoized on its id, visibility and pane, so a
+ *  change to one tab (a run's progress, its connection) re-renders only that tab (SDB-110). In a
+ *  split, a click or the focus inside the other pane makes its tab the active one. */
+const TabPanel = memo(function TabPanel({ id, active, pane }: { id: string; active: boolean; pane: Pane | null }) {
+  const { t: translate } = useTranslation("app");
   const t = useApp((s) => s.tabs.find((tab) => tab.id === id));
   if (!t) return null;
+  const takeFocus = pane !== null && !active ? () => useApp.getState().setActiveTab(id) : undefined;
   return (
-    <div className="tab-panel" hidden={!active}>
+    <div
+      id={`pane-${id}`}
+      className={`tab-panel${pane !== null && active ? " focused-pane" : ""}`}
+      data-pane={pane ?? undefined}
+      role={pane !== null ? "region" : undefined}
+      aria-label={pane !== null ? translate("split.pane", { name: tabLabel(t) }) : undefined}
+      tabIndex={pane !== null ? -1 : undefined}
+      hidden={!active && pane === null}
+      onPointerDownCapture={takeFocus}
+      onFocusCapture={takeFocus}
+    >
       <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
         {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
       </ScreenBoundary>

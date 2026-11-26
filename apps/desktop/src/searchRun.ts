@@ -9,6 +9,7 @@
 // finished search back to "running, cancelling", and nothing would ever end it again: the panel
 // stayed at "Cancelling…" with Cancel disabled.
 
+import type { ConnectionKey } from "./connectionIdentity.ts";
 import type { DataSearchEventItem, DataSearchOutcome, TableStatusItem } from "./api";
 
 /** A table the search has read, and what it found there. */
@@ -28,7 +29,8 @@ export type SearchPhase =
 /** `I` is whatever tells two runs apart: the panel uses the search's job (SDB-369). */
 export interface SearchRun<I = number> {
   id: I;
-  connectionId: string;
+  /** The connection searched (ADR-075). */
+  connection: ConnectionKey;
   /** The tables it reads. */
   total: number;
   tables: SearchedTable[];
@@ -36,8 +38,8 @@ export interface SearchRun<I = number> {
 }
 
 /** A search that starts: nothing read yet. */
-export function startedRun<I>(id: I, connectionId: string, total: number): SearchRun<I> {
-  return { id, connectionId, total, tables: [], phase: { kind: "running", current: null } };
+export function startedRun<I>(id: I, connection: ConnectionKey, total: number): SearchRun<I> {
+  return { id, connection, total, tables: [], phase: { kind: "running", current: null } };
 }
 
 /** Whether the search is still going (running, or cancelling until the core says it stopped). */

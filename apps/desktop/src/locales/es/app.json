@@ -8,6 +8,23 @@
   "resizeSidebar": "Ajustar la anchura del panel de conexiones",
   "resizeSidebarHint": "Arrastra para ajustar el panel de conexiones. Doble clic para restablecer.",
   "preferenceLoadError": "No se pudieron cargar tus preferencias:",
+  "detach": {
+    "windowTitle": "Resultados de {{name}} — SpelaionDB",
+    "connectionTitle": "{{name}} — SpelaionDB",
+    "results": "Mostrar los resultados en una ventana nueva",
+    "reattach": "Volver a acoplar los resultados",
+    "openConnection": "Abrir la conexión en una ventana nueva",
+    "closeWindow": "Cerrar esta ventana"
+  },
+  "split": {
+    "right": "Dividir a la derecha",
+    "down": "Dividir hacia abajo",
+    "close": "Cerrar la división",
+    "focusOther": "Ir al otro panel dividido",
+    "resize": "Cambiar el tamaño de los paneles divididos",
+    "resizeHint": "Arrastra para cambiar el tamaño de los paneles. Doble clic para igualarlos.",
+    "pane": "{{name}}, panel dividido"
+  },
   "update": {
     "available": "Hay una nueva versión de SpelaionDB, la {{version}} (tienes la {{current}}).",
     "install": "Instalar y reiniciar",
@@ -92,6 +109,7 @@
     "maximizeResults": "Maximizar los resultados",
     "restoreEditor": "Restaurar el editor",
     "saveQuery": "Guardar la consulta",
+    "saveDiagram": "Guardar el diagrama",
     "cancelQuery": "Cancelar la consulta",
     "undoEdit": "Deshacer el último cambio pendiente",
     "redoEdit": "Rehacer el cambio pendiente deshecho",
@@ -119,6 +137,8 @@
     "connection": "Conexión",
     "recentFile": "Archivo reciente",
     "recentFolder": "Carpeta reciente",
+    "savedDiagram": "Diagrama ER guardado",
+    "savedDiagramUnreadable": "no se puede leer",
     "hint": "Comandos, conexiones, archivos recientes y los objetos que ha cargado el explorador. {{enter}} lo ejecuta.",
     "actionHint": "{{enter}} ejecuta la acción; {{escape}} vuelve atrás.",
     "nothing": "Ningún comando ni objeto coincide. Los objetos aparecen al abrir su esquema en el explorador.",

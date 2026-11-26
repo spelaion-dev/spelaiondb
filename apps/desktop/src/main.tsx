@@ -1,5 +1,8 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { commands } from "./api";
+import { ResultsWindow } from "./components/ResultsWindow";
+import { setWindowContext, windowContext } from "./windowContext";
 import { ScreenBoundary } from "./components/ScreenBoundary";
 import "./i18n";
 import { usePreferences } from "./preferences";
@@ -25,13 +28,24 @@ if (!root) throw new Error("missing #root");
 // wrong ones; a failure is shown in the app instead of blocking it.
 // The user's shortcuts too (SDB-447): the first render already shows and takes their keys; a
 // failure leaves the defaults.
-void Promise.all([usePreferences.getState().load(), useShortcuts.getState().load()])
+// What this window shows comes from the core (SDB-30): the main window, a connection's window
+// or a tab's results; a failure to ask is the main window, as before there were others.
+void Promise.all([
+  usePreferences.getState().load(),
+  useShortcuts.getState().load(),
+  commands.windowContext().then(setWindowContext, () => undefined),
+])
   .finally(() => {
+    const context = windowContext();
     // A screen that fails shows its own panel (SDB-398); this one catches whatever is left.
-    createRoot(root).render(<ScreenBoundary screen="app" className="screen-failed-app"><App /></ScreenBoundary>);
+    createRoot(root).render(
+      <ScreenBoundary screen="app" className="screen-failed-app">
+        {context.kind === "results" ? <ResultsWindow context={context} /> : <App />}
+      </ScreenBoundary>,
+    );
     // The user's snippets and the template of new scripts: read once, before a tab is opened
     // by hand. They are text for the editor; a failure only leaves the built-in snippets.
     void useSnippets.getState().load();
-    // After the first render: a slow network never delays the window.
-    void useUpdate.getState().start();
+    // After the first render: a slow network never delays the window. Once, from the main one.
+    if (context.kind === "main") void useUpdate.getState().start();
   });

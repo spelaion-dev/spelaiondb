@@ -1475,6 +1475,7 @@ mod tests {
             sqlite3: None,
             file_folder: None,
             databases: None,
+            other_databases: spelaion_config::OtherDatabases::None,
             local_port: spelaion_config::LocalPort::Any,
             keepalive: None,
             statement_timeout: None,

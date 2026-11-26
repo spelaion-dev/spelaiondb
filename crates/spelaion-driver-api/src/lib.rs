@@ -375,6 +375,15 @@ pub trait Connection: Send + Sync {
         }
         Ok(columns)
     }
+    /// Every table of `schema` (the tables, partitioned tables and foreign tables of
+    /// [`Connection::list_objects`]), each described exactly as [`Connection::describe_table`]
+    /// describes it, ordered by name, in a few catalog queries instead of several per table
+    /// (SDB-220): what a large ER diagram reads, which over a slow tunnel would otherwise wait
+    /// for many round trips per table. `None`: this engine has no such read, and the caller
+    /// describes each table on its own.
+    async fn describe_tables(&self, _schema: &str) -> Result<Option<Vec<TableInfo>>> {
+        Ok(None)
+    }
     /// Functions, sequences, triggers, types… of a schema (ADR-024), ordered by name. Engines
     /// without any return none.
     async fn list_schema_objects(&self, _schema: &str) -> Result<Vec<SchemaObject>> {

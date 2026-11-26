@@ -6,6 +6,8 @@
 // (`ExplorerDialogHost`): the core writes and shows the SQL first, and runs it (ADR-026).
 
 import { create } from "zustand";
+import { explorerSession } from "./windowContext";
+import { databaseOf, keyOf, sameConnection, tabOnConnection, type ConnectionKey } from "./connectionKey";
 import {
   call,
   commands,
@@ -19,7 +21,7 @@ import {
   type ServerObjectItem,
   type SqlTemplateItem,
 } from "./api";
-import { connectTabFromExplorer, EXPLORER_REFRESH_EVENT, explorerDatabase, SET_ACTIVE_SCHEMA_EVENT } from "./connect";
+import { connectTabFromExplorer, explorerDatabase, refreshExplorer, SET_ACTIVE_SCHEMA_EVENT } from "./connect";
 import { openDiagram } from "./diagramTabs";
 import { useApp } from "./store";
 import { useExport } from "./components/ExportDialog";
@@ -27,8 +29,8 @@ import { useCopy } from "./components/CopyDialog";
 import { useImport } from "./components/ImportDialog";
 import { isConnected, isRunning } from "./tabState";
 
-/** The explorer's own session on a connection, which reads its catalog. */
-export const explorerSession = (connectionId: string) => `meta:${connectionId}`;
+/** The explorer's own session on a connection, which reads its catalog: this window's (SDB-30). */
+export { explorerSession };
 
 // ------------------------------------------------------------------- what the engine offers
 
@@ -117,24 +119,24 @@ export const isPlainTable = (object: ObjectItem) => !isView(object) && object.ki
 
 /** SQL written by the core, in a new tab of the connection (on the schema's database where the
  *  engine has one per schema): nothing runs unless `run` (a routine's "Run…"). */
-export function openSqlTab(connectionId: string, session: string, schema: string | undefined, sql: string, run = false) {
-  const tab = useApp.getState().addTab(connectionId, sql);
+export function openSqlTab(connection: ConnectionKey, session: string, schema: string | undefined, sql: string, run = false) {
+  const tab = useApp.getState().addTab(connection, sql);
   // "Run…": the tab runs its script once connected, asking the call's parameters first.
   if (run) useApp.getState().updateTab(tab, { runOnOpen: true });
-  connectTabFromExplorer(tab, session, schema === undefined ? undefined : explorerDatabase(connectionId, schema));
+  connectTabFromExplorer(tab, session, schema === undefined ? undefined : explorerDatabase(connection, schema));
 }
 
 /** Pages of the table in a table data tab (double-click or "View rows"). */
-export function openRelationRows(connectionId: string, session: string, object: ObjectItem) {
-  const tab = useApp.getState().addTableTab(connectionId, object.schema, object.name);
-  connectTabFromExplorer(tab, session, explorerDatabase(connectionId, object.schema));
+export function openRelationRows(connection: ConnectionKey, session: string, object: ObjectItem) {
+  const tab = useApp.getState().addTableTab(connection, object.schema, object.name);
+  connectTabFromExplorer(tab, session, explorerDatabase(connection, object.schema));
 }
 
 /** One of the core's statements for the relation: previewed in the SQL dialog, or (`inEditor`)
  *  opened in a new editor tab. Nothing runs. */
-export async function openRelationSql(connectionId: string, session: string, object: ObjectItem, template: SqlTemplateItem, inEditor = false) {
+export async function openRelationSql(connection: ConnectionKey, session: string, object: ObjectItem, template: SqlTemplateItem, inEditor = false) {
   const sql = await call(commands.tableSql(session, object.schema, object.name, template));
-  if (inEditor) openSqlTab(connectionId, session, object.schema, sql);
+  if (inEditor) openSqlTab(connection, session, object.schema, sql);
   else openGeneratedSql(sql);
 }
 
@@ -144,29 +146,29 @@ export async function openRelationDdl(session: string, object: ObjectItem) {
 }
 
 /** "Edit source": the core writes the view as the statement that replaces it (ADR-047). */
-export async function editViewSource(connectionId: string, session: string, object: ObjectItem) {
+export async function editViewSource(connection: ConnectionKey, session: string, object: ObjectItem) {
   const sql = await call(commands.editableSource(session, { kind: "view", schema: object.schema, name: object.name }));
-  openSqlTab(connectionId, session, object.schema, sql);
+  openSqlTab(connection, session, object.schema, sql);
 }
 
 /** The export dialog for these tables (one, or every one chosen with Ctrl+click). */
-export function exportRelations(connectionId: string, session: string, tables: { schema: string; name: string }[]) {
-  useExport.getState().open({ kind: "tables", session, connectionId, tables });
+export function exportRelations(connection: ConnectionKey, session: string, tables: { schema: string; name: string }[]) {
+  useExport.getState().open({ kind: "tables", session, connection, tables });
 }
 
 /** The import dialog into this table. */
-export function importIntoTable(connectionId: string, session: string, object: ObjectItem) {
-  useImport.getState().open({ session, connectionId, schema: object.schema, table: object.name, text: null });
+export function importIntoTable(connection: ConnectionKey, session: string, object: ObjectItem) {
+  useImport.getState().open({ session, connection, schema: object.schema, table: object.name, text: null });
 }
 
 /** Copies the table or view to another connection (ADR-069). */
-export function copyToConnection(connectionId: string, session: string, object: ObjectItem) {
-  useCopy.getState().open({ session, connectionId, schema: object.schema, table: object.name });
+export function copyToConnection(connection: ConnectionKey, session: string, object: ObjectItem) {
+  useCopy.getState().open({ session, connection, schema: object.schema, table: object.name });
 }
 
 /** The ER diagram of the table's related tables, or of the tables chosen with Ctrl+click. */
-export function openRelationDiagram(connectionId: string, session: string, object: ObjectItem, chosen: { schema: string; name: string }[] | null = null) {
-  openDiagram(connectionId, chosen ? { kind: "tables", tables: chosen } : { kind: "focus", schema: object.schema, table: object.name }, session);
+export function openRelationDiagram(connection: ConnectionKey, session: string, object: ObjectItem, chosen: { schema: string; name: string }[] | null = null) {
+  openDiagram(connection, chosen ? { kind: "tables", tables: chosen } : { kind: "focus", schema: object.schema, table: object.name }, session);
 }
 
 // ------------------------------------------------------------------- other schema objects
@@ -187,63 +189,63 @@ export const canGenerateCall = (object: SchemaObjectItem, actions: ObjectActions
   object.kind === "procedure" || (object.kind === "function" && actions?.routineCalls === true);
 
 /** The object's definition, written by the driver, in a new tab: nothing runs. */
-export async function openObjectDefinition(connectionId: string, session: string, object: SchemaObjectItem) {
-  openSqlTab(connectionId, session, object.schema, await call(commands.objectDefinition(session, object)));
+export async function openObjectDefinition(connection: ConnectionKey, session: string, object: SchemaObjectItem) {
+  openSqlTab(connection, session, object.schema, await call(commands.objectDefinition(session, object)));
 }
 
 /** An object outside every schema (a Materialize cluster, ADR-082), its definition written by
  *  the driver, in a new tab: nothing runs. */
-export async function openServerObjectDefinition(connectionId: string, session: string, object: ServerObjectItem) {
-  openSqlTab(connectionId, session, undefined, await call(commands.serverObjectDefinition(session, object)));
+export async function openServerObjectDefinition(connection: ConnectionKey, session: string, object: ServerObjectItem) {
+  openSqlTab(connection, session, undefined, await call(commands.serverObjectDefinition(session, object)));
 }
 
 /** "Edit source": the core writes the routine as the statement that replaces it (ADR-047). */
-export async function editRoutineSource(connectionId: string, session: string, object: SchemaObjectItem) {
-  openSqlTab(connectionId, session, object.schema, await call(commands.editableSource(session, { kind: "routine", object })));
+export async function editRoutineSource(connection: ConnectionKey, session: string, object: SchemaObjectItem) {
+  openSqlTab(connection, session, object.schema, await call(commands.editableSource(session, { kind: "routine", object })));
 }
 
 /** "Generate call": the routine's call, written by the driver, in a new tab; "Run…" also runs it
  *  there, so the editor asks its parameters and its usual barriers apply (ADR-047). */
-export async function openRoutineCall(connectionId: string, session: string, object: SchemaObjectItem, run = false) {
-  openSqlTab(connectionId, session, object.schema, await call(commands.procedureCall(session, object)), run);
+export async function openRoutineCall(connection: ConnectionKey, session: string, object: SchemaObjectItem, run = false) {
+  openSqlTab(connection, session, object.schema, await call(commands.procedureCall(session, object)), run);
 }
 
 /** The object's bookmark (ADR-026), with its detail (a routine's arguments) to tell overloads apart. */
-export function schemaObjectBookmark(connectionId: string, object: SchemaObjectItem): BookmarkItem {
-  return { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind, detail: object.detail ?? "" };
+export function schemaObjectBookmark(connection: ConnectionKey, object: SchemaObjectItem): BookmarkItem {
+  return { connection: keyOf(connection), database: databaseOf(connection), schema: object.schema, name: object.name, kind: object.kind, detail: object.detail ?? "" };
 }
 
 /** Drop…: the core's SQL shown, with "Cascade" where the engine has it, then run (ADR-026). */
-export function dropSchemaObject(connectionId: string, session: string, object: SchemaObjectItem, onDone?: () => void) {
-  useExplorerDialog.getState().open({ kind: "drop", session, connectionId, schema: object.schema, name: object.name, target: { kind: "schemaObject", object }, onDone });
+export function dropSchemaObject(connection: ConnectionKey, session: string, object: SchemaObjectItem, onDone?: () => void) {
+  useExplorerDialog.getState().open({ kind: "drop", session, connection, schema: object.schema, name: object.name, target: { kind: "schemaObject", object }, onDone });
 }
 
 // ------------------------------------------------------------------------------- schemas
 
 /** A schema's bookmark (ADR-026). */
-export function schemaBookmark(connectionId: string, schema: string): BookmarkItem {
-  return { connection: connectionId, schema, name: "", kind: "schema", detail: "" };
+export function schemaBookmark(connection: ConnectionKey, schema: string): BookmarkItem {
+  return { connection: keyOf(connection), database: databaseOf(connection), schema, name: "", kind: "schema", detail: "" };
 }
 
 /** "Import into a new table…": the import dialog, its table still to be named. */
-export function importIntoNewTable(connectionId: string, session: string, schema: string) {
-  useImport.getState().open({ session, connectionId, schema, table: null, text: null });
+export function importIntoNewTable(connection: ConnectionKey, session: string, schema: string) {
+  useImport.getState().open({ session, connection, schema, table: null, text: null });
 }
 
 /** The ER diagram of the schema, with the connection's object filter (ADR-025). */
-export function openSchemaDiagram(connectionId: string, session: string, schema: string, filter: NameFilter | null) {
-  openDiagram(connectionId, { kind: "schema", schema, filter }, session);
+export function openSchemaDiagram(connection: ConnectionKey, session: string, schema: string, filter: NameFilter | null) {
+  openDiagram(connection, { kind: "schema", schema, filter }, session);
 }
 
 /** "New table…" opens the create table form (ADR-047); another kind opens the core's statement
  *  in a new tab to finish (ADR-026). */
-export async function createInSchema(connectionId: string, session: string, schema: string, kind: CreateKindItem, onDone?: () => void) {
+export async function createInSchema(connection: ConnectionKey, session: string, schema: string, kind: CreateKindItem, onDone?: () => void) {
   if (kind === "table") {
-    useExplorerDialog.getState().open({ kind: "createTable", session, connectionId, schema, onDone });
+    useExplorerDialog.getState().open({ kind: "createTable", session, connection, schema, onDone });
     return;
   }
   const sql = await call(commands.createSql(session, kind, schema));
-  openSqlTab(connectionId, session, kind === "schema" ? undefined : schema, sql);
+  openSqlTab(connection, session, kind === "schema" ? undefined : schema, sql);
 }
 
 /** What a schema's menu creates in it: what the engine creates, but not another schema. */
@@ -252,16 +254,16 @@ export function schemaCreateKinds(actions: ObjectActionsItem | undefined): Creat
 }
 
 /** Drop…: the schema, after its SQL is shown (ADR-026). */
-export function dropSchema(connectionId: string, session: string, schema: string, onDone?: () => void) {
-  useExplorerDialog.getState().open({ kind: "drop", session, connectionId, schema, name: schema, target: { kind: "schema", name: schema }, onDone });
+export function dropSchema(connection: ConnectionKey, session: string, schema: string, onDone?: () => void) {
+  useExplorerDialog.getState().open({ kind: "drop", session, connection, schema, name: schema, target: { kind: "schema", name: schema }, onDone });
 }
 
 /** The editor tab "Set as the editor's schema" applies to: the active query tab, connected to
  *  this connection and idle; `null` when there is none. */
-export function schemaEditorTab(connectionId: string): string | null {
+export function schemaEditorTab(connection: ConnectionKey): string | null {
   const app = useApp.getState();
   const tab = app.tabs.find((t) => t.id === app.activeTab);
-  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && tab.connectionId === connectionId && isConnected(tab) && !isRunning(tab)
+  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && tabOnConnection(tab, connection) && isConnected(tab) && !isRunning(tab)
     ? tab.id
     : null;
 }
@@ -275,12 +277,12 @@ export function setEditorSchema(tabId: string, schema: string) {
 
 /** A relation's bookmark (ADR-026). Its kind comes from the driver as text; the core refuses one
  *  it does not know. */
-export function relationBookmark(connectionId: string, object: ObjectItem): BookmarkItem {
-  return { connection: connectionId, schema: object.schema, name: object.name, kind: object.kind as BookmarkItem["kind"], detail: "" };
+export function relationBookmark(connection: ConnectionKey, object: ObjectItem): BookmarkItem {
+  return { connection: keyOf(connection), database: databaseOf(connection), schema: object.schema, name: object.name, kind: object.kind as BookmarkItem["kind"], detail: "" };
 }
 
 export const sameBookmark = (a: BookmarkItem, b: BookmarkItem) =>
-  a.connection === b.connection && a.schema === b.schema && a.name === b.name && a.kind === b.kind && a.detail === b.detail;
+  sameConnection(a.connection, b.connection) && (a.database ?? null) === (b.database ?? null) && a.schema === b.schema && a.name === b.name && a.kind === b.kind && a.detail === b.detail;
 
 /** Whether an object is bookmarked now. */
 export function isBookmarked(bookmark: BookmarkItem): boolean {
@@ -303,10 +305,10 @@ export async function toggleBookmark(bookmark: BookmarkItem) {
 /** A dialog the explorer's menus and the palette open the same way (`ExplorerDialogHost`). */
 export type ExplorerDialog =
   | { kind: "sql"; sql: string }
-  | { kind: "rename"; session: string; connectionId: string; object: ObjectItem; onDone?(): void }
-  | { kind: "drop"; session: string; connectionId: string; schema: string; name: string; target: ObjectTargetItem; onDone?(): void }
-  | { kind: "duplicate"; session: string; connectionId: string; object: ObjectItem }
-  | { kind: "createTable"; session: string; connectionId: string; schema: string; onDone?(): void };
+  | { kind: "rename"; session: string; connection: ConnectionKey; object: ObjectItem; onDone?(): void }
+  | { kind: "drop"; session: string; connection: ConnectionKey; schema: string; name: string; target: ObjectTargetItem; onDone?(): void }
+  | { kind: "duplicate"; session: string; connection: ConnectionKey; object: ObjectItem }
+  | { kind: "createTable"; session: string; connection: ConnectionKey; schema: string; onDone?(): void };
 
 export const useExplorerDialog = create<{ dialog: ExplorerDialog | null; open(dialog: ExplorerDialog): void; close(): void }>((set) => ({
   dialog: null,
@@ -321,23 +323,23 @@ export function openGeneratedSql(sql: string) {
 
 /** After a rename or a drop: the caller's schema reads its objects again, or (from the palette)
  *  the connection's explorer does. */
-export function changedSchema(connectionId: string, onDone: (() => void) | undefined) {
+export function changedSchema(connection: ConnectionKey, onDone: (() => void) | undefined) {
   if (onDone) onDone();
-  else window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail: connectionId }));
+  else refreshExplorer(connection);
 }
 
 /** Rename…: the new name asked, the core's SQL shown, then run (ADR-026). */
-export function renameRelation(connectionId: string, session: string, object: ObjectItem, onDone?: () => void) {
-  useExplorerDialog.getState().open({ kind: "rename", session, connectionId, object, onDone });
+export function renameRelation(connection: ConnectionKey, session: string, object: ObjectItem, onDone?: () => void) {
+  useExplorerDialog.getState().open({ kind: "rename", session, connection, object, onDone });
 }
 
 /** Drop…: the core's SQL shown, with "Cascade" where the engine has it, then run (ADR-026). */
-export function dropRelation(connectionId: string, session: string, object: ObjectItem, onDone?: () => void) {
+export function dropRelation(connection: ConnectionKey, session: string, object: ObjectItem, onDone?: () => void) {
   const target: ObjectTargetItem = { kind: "relation", schema: object.schema, name: object.name, relation: object.kind };
-  useExplorerDialog.getState().open({ kind: "drop", session, connectionId, schema: object.schema, name: object.name, target, onDone });
+  useExplorerDialog.getState().open({ kind: "drop", session, connection, schema: object.schema, name: object.name, target, onDone });
 }
 
 /** Duplicate table… (SDB-394): a new name and schema, its rows or not, run in a new tab. */
-export function duplicateTable(connectionId: string, session: string, object: ObjectItem) {
-  useExplorerDialog.getState().open({ kind: "duplicate", session, connectionId, object });
+export function duplicateTable(connection: ConnectionKey, session: string, object: ObjectItem) {
+  useExplorerDialog.getState().open({ kind: "duplicate", session, connection, object });
 }

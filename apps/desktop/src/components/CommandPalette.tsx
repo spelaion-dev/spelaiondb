@@ -22,9 +22,13 @@ import {
 } from "../commands";
 import { fuzzyMatch } from "../fuzzy";
 import { openFilePath, recentFiles } from "../sqlFiles";
-import { folderSwitchBlocked, isOpenFolder, recentFolders, switchFolder } from "../folders";
-import type { RecentFolderItem } from "../bindings";
+import { addFolder, folderSwitchBlocked, isOpenFolder, recentFolders } from "../folders";
+import type { RecentFolderItem, SavedDiagramItem_Serialize as SavedDiagramItem } from "../bindings";
+import { call, commands } from "../api";
+import { openSavedDiagram } from "../diagramTabs";
 import { useApp } from "../store";
+import { connectionTag, holdsConnection, keyOf, sameConnection } from "../connectionKey";
+import { windowConnection } from "../windowContext";
 
 /** At most this many matches are listed: typing more narrows them. */
 const MAX_RESULTS = 60;
@@ -34,6 +38,7 @@ type Entry =
   | { kind: "object"; key: string; item: PaletteObject; text: string; detail: string }
   | { kind: "file"; key: string; path: string; text: string; detail: string }
   | { kind: "folder"; key: string; path: string; text: string; detail: string }
+  | { kind: "diagram"; key: string; item: SavedDiagramItem; text: string; detail: string }
   | { kind: "action"; key: string; action: PaletteObjectAction; text: string };
 
 interface Shown {
@@ -80,6 +85,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
   const [recent, setRecent] = useState<RecentFileItem[]>([]);
   // The recent folders (SDB-397), except the open one; none while the folder cannot change.
   const [folders, setFolders] = useState<RecentFolderItem[]>([]);
+  // The open folder's saved ER diagrams (ADR-084).
+  const [diagrams, setDiagrams] = useState<SavedDiagramItem[]>([]);
   const list = useRef<HTMLUListElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const connections = useApp((s) => s.connections);
@@ -91,6 +98,7 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
   useEffect(() => {
     let alive = true;
     void recentFiles().then((files) => alive && setRecent(files.filter((file) => file.exists)));
+    void call(commands.savedDiagrams()).then((list) => alive && setDiagrams(list)).catch(() => undefined);
     if (!folderSwitchBlocked()) {
       void recentFolders().then((list) => alive && setFolders(list.filter((folder) => folder.exists && !isOpenFolder(folder.path))));
     }
@@ -119,24 +127,25 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
   );
 
   const otherEntries = useMemo<Entry[]>(() => {
-    const names = new Map(connections.map((c) => [c.id, c.name]));
+    const names = new Map(connections.map((c) => [connectionTag(keyOf(c)), c.name]));
     const entries: Entry[] = connections.map((connection) => ({
       kind: "object",
-      key: `connection:${connection.id}`,
+      key: `connection:${connectionTag(keyOf(connection))}`,
       item: { kind: "connection", connection },
       text: connection.name,
       detail: t("palette.connection"),
     }));
     for (const schema of Object.values(catalog)) {
-      const connectionName = names.get(schema.connectionId);
+      const tag = connectionTag(schema.connection);
+      const connectionName = names.get(tag);
       // Only what the explorer shows now: a connection still connected there.
-      if (connectionName === undefined || !connected.includes(schema.connectionId)) continue;
+      if (connectionName === undefined || !holdsConnection(connected, schema.connection)) continue;
       // A connection with one unnamed schema (SQLite's "main" is named) shows no schema row.
       if (schema.schema !== "") {
         entries.push({
           kind: "object",
-          key: `schema:${schema.connectionId}:${schema.schema}`,
-          item: { kind: "schema", connectionId: schema.connectionId, schema: schema.schema, filter: schema.filter ?? null },
+          key: `schema:${tag}:${schema.schema}`,
+          item: { kind: "schema", connection: schema.connection, schema: schema.schema, filter: schema.filter ?? null },
           text: schema.schema,
           detail: `${t("shell:kinds.schema")} · ${connectionName}`,
         });
@@ -144,8 +153,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
       for (const object of schema.relations) {
         entries.push({
           kind: "object",
-          key: `relation:${schema.connectionId}:${object.schema}:${object.name}`,
-          item: { kind: "relation", connectionId: schema.connectionId, object },
+          key: `relation:${tag}:${object.schema}:${object.name}`,
+          item: { kind: "relation", connection: schema.connection, object },
           text: object.name,
           detail: `${t(`shell:kinds.${object.kind}`)} · ${object.schema} · ${connectionName}`,
         });
@@ -153,8 +162,8 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
       schema.others.forEach((object, index) => {
         entries.push({
           kind: "object",
-          key: `other:${schema.connectionId}:${object.schema}:${object.kind}:${object.name}:${object.detail ?? ""}:${index}`,
-          item: { kind: "schemaObject", connectionId: schema.connectionId, object },
+          key: `other:${tag}:${object.schema}:${object.kind}:${object.name}:${object.detail ?? ""}:${index}`,
+          item: { kind: "schemaObject", connection: schema.connection, object },
           text: object.detail ? `${object.name}(${object.detail})` : object.name,
           detail: `${t(`shell:kinds.${object.kind}`)} · ${object.schema} · ${connectionName}`,
         });
@@ -166,8 +175,20 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
     for (const folder of folders) {
       entries.push({ kind: "folder", key: `folder:${folder.path}`, path: folder.path, text: folder.name, detail: folder.path });
     }
+    // A connection's own window (SDB-30) offers only that connection's saved diagrams.
+    const only = windowConnection();
+    for (const diagram of diagrams.filter((saved) => only === null || sameConnection(saved.connection, only))) {
+      const connectionName = names.get(connectionTag(diagram.connection)) ?? diagram.connection.id;
+      entries.push({
+        kind: "diagram",
+        key: `diagram:${diagram.id}`,
+        item: diagram,
+        text: diagram.name,
+        detail: diagram.unreadable ? `${connectionName} · ${t("palette.savedDiagramUnreadable")}` : connectionName,
+      });
+    }
     return entries;
-  }, [connections, connected, catalog, recent, folders, t]);
+  }, [connections, connected, catalog, recent, folders, diagrams, t]);
 
   const actionEntries = useMemo<Entry[]>(
     () =>
@@ -225,9 +246,21 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
         window.setTimeout(() => void openFilePath(entry.path), 0);
         break;
       case "folder":
-        // As from the folder menu: it asks first about what closing the sessions would lose.
+        // As from the folder menu: added beside the open folders, closing nothing (ADR-075).
         onClose();
-        window.setTimeout(() => void switchFolder(entry.path), 0);
+        window.setTimeout(() => void addFolder(entry.path), 0);
+        break;
+      case "diagram":
+        // Stays open with the error if the core cannot read it (ADR-084).
+        setBusy(true);
+        try {
+          await openSavedDiagram(entry.item);
+          onClose();
+        } catch (e) {
+          setError({ action: entry.text, detail: errorText(e) });
+        } finally {
+          setBusy(false);
+        }
         break;
       case "object":
         setChosen({ entry, query });
@@ -327,9 +360,15 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
               >
                 <Highlighted text={entry.text} positions={item.positions} muted={entry.kind === "command" ? entry.prefix : 0} />
                 {entry.kind === "command" && entry.shortcut && <span className="menu-shortcut">{entry.shortcut}</span>}
-                {(entry.kind === "object" || entry.kind === "file" || entry.kind === "folder") && (
+                {(entry.kind === "object" || entry.kind === "file" || entry.kind === "folder" || entry.kind === "diagram") && (
                   <span className="palette-detail muted small">
-                    {entry.kind === "file" ? `${t("palette.recentFile")} · ${entry.detail}` : entry.kind === "folder" ? `${t("palette.recentFolder")} · ${entry.detail}` : entry.detail}
+                    {entry.kind === "file"
+                      ? `${t("palette.recentFile")} · ${entry.detail}`
+                      : entry.kind === "folder"
+                        ? `${t("palette.recentFolder")} · ${entry.detail}`
+                        : entry.kind === "diagram"
+                          ? `${t("palette.savedDiagram")} · ${entry.detail}`
+                          : entry.detail}
                   </span>
                 )}
               </li>

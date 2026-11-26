@@ -11,6 +11,7 @@
 import type { RunStateItem, TransactionStatusItem } from "./bindings";
 import type { QuestionKind } from "./dialogStore";
 import type { Tab } from "./store";
+import { connectionTag, holdsConnection, tabConnection, tabOnConnection, type ConnectionKey } from "./connectionIdentity.ts";
 
 /**
  * A tab's connection. Each state carries only what exists in it: a lost session has its reason
@@ -203,30 +204,33 @@ export function savingEdits(tab: Tab): boolean {
 // ------------------------------------------------------------ over every tab
 
 /** Some tab on the connection is busy ({@link isBusy}): it cannot be deleted now. */
-export function connectionBusy(tabs: Tab[], connectionId: string): boolean {
-  return tabs.some((tab) => tab.connectionId === connectionId && isBusy(tab));
+export function connectionBusy(tabs: Tab[], connection: ConnectionKey): boolean {
+  return tabs.some((tab) => tabOnConnection(tab, connection) && isBusy(tab));
 }
 
 /** Some tab uses the connection: it has a session on it, open or opening, or runs on it. */
-export function connectionInUse(tabs: Tab[], connectionId: string): boolean {
-  return tabs.some((tab) => tab.connectionId === connectionId && (hasSession(tab) || isRunning(tab)));
+export function connectionInUse(tabs: Tab[], connection: ConnectionKey): boolean {
+  return tabs.some((tab) => tabOnConnection(tab, connection) && (hasSession(tab) || isRunning(tab)));
 }
 
 /** The connection is open, for the explorer: its own session, or a connected tab's. */
-export function connectionOpen(tabs: Tab[], explorerConnected: string[], connectionId: string): boolean {
-  return explorerConnected.includes(connectionId) || connectedConnections(tabs).includes(connectionId);
+export function connectionOpen(tabs: Tab[], explorerConnected: ConnectionKey[], connection: ConnectionKey): boolean {
+  return holdsConnection(explorerConnected, connection) || connectedConnections(tabs).includes(connectionTag(connection));
 }
 
 /** The connections a connected tab uses, in tab order (repeated when several tabs share one):
  *  what a list that marks open connections subscribes to, so a tab's run does not re-render it. */
 export function connectedConnections(tabs: Tab[]): string[] {
-  return tabs.flatMap((tab) => (tab.connectionId !== null && isConnected(tab) ? [tab.connectionId] : []));
+  return tabs.flatMap((tab) => {
+    const connection = tabConnection(tab);
+    return connection !== null && isConnected(tab) ? [connectionTag(connection)] : [];
+  });
 }
 
 /** The explorer's own session on the connection is open (what the data search and the
  *  explorer's actions run on). */
-export function explorerSessionOpen(explorerConnected: string[], connectionId: string): boolean {
-  return explorerConnected.includes(connectionId);
+export function explorerSessionOpen(explorerConnected: ConnectionKey[], connection: ConnectionKey): boolean {
+  return holdsConnection(explorerConnected, connection);
 }
 
 // ----------------------------------------------------------------- questions

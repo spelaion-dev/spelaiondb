@@ -58,6 +58,22 @@ pub fn describe_table(conn: &rusqlite::Connection, schema: &str, name: &str) -> 
     Ok(table)
 }
 
+/// Every table of `schema`, as [`describe_table`] describes each, in five catalog queries
+/// (SDB-220).
+pub fn describe_tables(conn: &rusqlite::Connection, schema: &str) -> Result<Vec<TableInfo>> {
+    let [objects, columns, indexes, uniques, foreign_keys] = catalog::tables_sql(schema);
+    catalog::tables(
+        schema,
+        &[
+            query(conn, &objects)?,
+            query(conn, &columns)?,
+            query(conn, &indexes)?,
+            query(conn, &uniques)?,
+            query(conn, &foreign_keys)?,
+        ],
+    )
+}
+
 pub fn list_referencing_keys(
     conn: &rusqlite::Connection,
     schema: &str,

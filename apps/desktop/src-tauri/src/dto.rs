@@ -52,11 +52,54 @@ pub struct TableRefItem {
     pub name: String,
 }
 
+/// A connection's identity as the page holds it and sends it back (ADR-075, SDB-495): its
+/// folder (the repository's canonical root as the core wrote it, none for a personal
+/// connection) and its id's text. The core checks both against what is open before using it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionKeyItem {
+    pub folder: Option<String>,
+    pub id: String,
+}
+
+impl ConnectionKeyItem {
+    /// The identity of the connection the local store keeps something under: its `scope` (the
+    /// folder's text, empty for none) and its id (empty for none). A personal connection has
+    /// no folder; a repository one kept outside any folder has no identity it can be found by.
+    pub fn stored(scope: &str, connection: &str) -> Option<Self> {
+        if connection.is_empty() {
+            return None;
+        }
+        match spelaion_config::ConnectionId::parse(connection).source {
+            spelaion_config::Source::User => Some(Self {
+                folder: None,
+                id: connection.to_owned(),
+            }),
+            spelaion_config::Source::Workspace => (!scope.is_empty()).then(|| Self {
+                folder: Some(scope.to_owned()),
+                id: connection.to_owned(),
+            }),
+        }
+    }
+}
+
+impl From<&spelaion_config::ConnectionKey> for ConnectionKeyItem {
+    fn from(key: &spelaion_config::ConnectionKey) -> Self {
+        Self {
+            folder: key.folder().map(|folder| folder.display().to_string()),
+            id: key.id().to_string(),
+        }
+    }
+}
+
 /// An object bookmarked in the explorer (ADR-026).
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct BookmarkItem {
-    pub connection: String,
+    /// The connection's identity (ADR-075).
+    pub connection: ConnectionKeyItem,
+    /// The other database of the connection it is in (ADR-074, SDB-505); `None` for its own.
+    pub database: Option<String>,
     /// The schema the object is in, or the schema itself (with an empty `name`).
     pub schema: String,
     pub name: String,
@@ -154,10 +197,12 @@ impl From<BookmarkKindItem> for spelaion_core::BookmarkKind {
     }
 }
 
-impl From<spelaion_core::Bookmark> for BookmarkItem {
-    fn from(b: spelaion_core::Bookmark) -> Self {
+impl BookmarkItem {
+    /// A stored bookmark, on the connection whose identity is `connection` (ADR-075).
+    pub fn stored(b: spelaion_core::Bookmark, connection: ConnectionKeyItem) -> Self {
         let spelaion_core::Bookmark {
-            connection,
+            connection: _,
+            database,
             schema,
             name,
             kind,
@@ -165,6 +210,7 @@ impl From<spelaion_core::Bookmark> for BookmarkItem {
         } = b;
         Self {
             connection,
+            database,
             schema,
             name,
             kind: kind.into(),
@@ -173,17 +219,20 @@ impl From<spelaion_core::Bookmark> for BookmarkItem {
     }
 }
 
+/// What the store keeps: the connection's id, under its identity's scope.
 impl From<BookmarkItem> for spelaion_core::Bookmark {
     fn from(b: BookmarkItem) -> Self {
         let BookmarkItem {
             connection,
+            database,
             schema,
             name,
             kind,
             detail,
         } = b;
         Self {
-            connection,
+            connection: connection.id,
+            database: database.filter(|d| !d.is_empty()),
             schema,
             name,
             kind: kind.into(),
@@ -1165,6 +1214,8 @@ pub struct MapPreferencesItem {
     /// An image address with `{z}`, `{x}` and `{y}`.
     pub tile_url: String,
     pub tile_attribution: String,
+    /// Where the attribution links to; empty for no link (ADR-085).
+    pub tile_attribution_url: String,
 }
 
 impl From<spelaion_core::MapPreferences> for MapPreferencesItem {
@@ -1174,12 +1225,14 @@ impl From<spelaion_core::MapPreferences> for MapPreferencesItem {
             tile_name,
             tile_url,
             tile_attribution,
+            tile_attribution_url,
         } = p;
         Self {
             tiles,
             tile_name,
             tile_url,
             tile_attribution,
+            tile_attribution_url,
         }
     }
 }
@@ -1191,12 +1244,14 @@ impl From<MapPreferencesItem> for spelaion_core::MapPreferences {
             tile_name,
             tile_url,
             tile_attribution,
+            tile_attribution_url,
         } = p;
         Self {
             tiles,
             tile_name,
             tile_url,
             tile_attribution,
+            tile_attribution_url,
         }
     }
 }
@@ -1421,6 +1476,41 @@ pub struct WorkspaceInfo {
     pub problems: Vec<String>,
 }
 
+/// The folders the window holds open (ADR-075, SDB-500), in the order they were opened. The
+/// page shows the last one (`WorkspaceInfo`) until it shows several.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFoldersItem {
+    pub folders: Vec<OpenFolderItem>,
+}
+
+/// A folder `add_folder` opened, or found open already (ADR-075).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AddedFolderItem {
+    /// Its canonical root, as `OpenFolderItem::root` names it.
+    pub root: String,
+    /// It was not open before: its kept tabs come back (`restore_tabs_for_workspace`).
+    pub added: bool,
+    pub folders: Vec<OpenFolderItem>,
+}
+
+/// One open folder.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFolderItem {
+    /// The path as it was chosen.
+    pub path: String,
+    /// Its canonical root: what `close_folder` takes, and what a connection's folder is.
+    pub root: String,
+    /// It is (inside) a repository: it has a `.spelaion` folder.
+    pub repository: bool,
+    /// The repository is trusted (ADR-022).
+    pub trusted: bool,
+    /// Its configuration files with errors, with file:line:column.
+    pub problems: Vec<String>,
+}
+
 /// What a connection type asks for (ADR-029).
 #[derive(Debug, Clone, Copy, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1594,6 +1684,9 @@ impl From<&spelaion_config::ConnectionType> for ConnectionTypeItem {
 pub struct ConnectionItem {
     /// `prod/orders`, or `~/local` if it is personal.
     pub id: String,
+    /// The folder of its identity (ADR-075): the repository's canonical root, or none for a
+    /// personal connection. With `id`, what every command that takes a connection is given.
+    pub folder: Option<String>,
     pub name: String,
     /// What the database is for, in the user's words; may span lines.
     pub description: Option<String>,
@@ -1732,6 +1825,8 @@ pub struct HistoryItem {
     #[specta(type = specta_typescript::Number)]
     pub at_ms: i64,
     pub connection: String,
+    /// The identity of `connection` (ADR-075): reopening the statement uses that folder's.
+    pub identity: Option<ConnectionKeyItem>,
     pub statement: String,
     #[specta(type = specta_typescript::Number)]
     pub duration_ms: i64,
@@ -1846,6 +1941,8 @@ pub struct SnippetItem {
     pub name: String,
     pub statement: String,
     pub connection: String,
+    /// The identity of `connection` (ADR-075): opening the query uses that folder's.
+    pub identity: Option<ConnectionKeyItem>,
     #[specta(type = specta_typescript::Number)]
     pub updated_ms: i64,
     /// Saved outside any repository: visible from every workspace.
@@ -1859,6 +1956,7 @@ impl From<spelaion_core::Snippet> for SnippetItem {
         Self {
             id: s.id,
             personal: s.workspace.is_empty(),
+            identity: ConnectionKeyItem::stored(&s.workspace, &s.connection),
             name: s.name,
             statement: s.statement,
             connection: s.connection,
@@ -1874,6 +1972,7 @@ impl From<spelaion_core::HistoryEntry> for HistoryItem {
             outcome: entry.outcome().into(),
             id: entry.id,
             at_ms: entry.at_ms,
+            identity: ConnectionKeyItem::stored(&entry.workspace, &entry.connection),
             connection: entry.connection,
             statement: entry.statement,
             duration_ms: entry.duration_ms,
@@ -1920,8 +2019,9 @@ pub enum ConnectOutcome {
     AuthFailed { message: String, can_remember: bool },
     /// The user declined an SSH question or cancelled an authentication prompt.
     Cancelled,
-    /// The repository is not trusted: ask before resolving anything.
-    Untrusted,
+    /// The repository `root` is not trusted: ask before resolving anything. With several
+    /// folders open (ADR-075) it is the folder the connection reads, not always the one shown.
+    Untrusted { root: String },
     /// A repository connection or tunnel is new or changed since the repository was trusted
     /// (ADR-022): show the change and ask before resolving anything.
     Changed {
@@ -1966,7 +2066,10 @@ impl From<spelaion_core::SkippedSetup> for SkippedSetupItem {
 )]
 pub enum EditorAccessOutcome {
     Ready,
-    Untrusted,
+    /// The connection's repository `root` is not trusted.
+    Untrusted {
+        root: String,
+    },
     Changed {
         /// `connection:<id>`, for `accept_change`.
         item: String,
@@ -2392,6 +2495,9 @@ pub struct ScriptPreferencesItem {
     pub notify_after_seconds: u32,
     /// Seconds before "Run anyway" is enabled in a risky statement's confirmation.
     pub confirm_delay_seconds: u32,
+    /// Roll back only a failed statement in a transaction, with a savepoint per statement
+    /// (ADR-086); off by default.
+    pub statement_savepoints: bool,
 }
 
 impl From<spelaion_core::ScriptPreferences> for ScriptPreferencesItem {
@@ -2401,6 +2507,7 @@ impl From<spelaion_core::ScriptPreferences> for ScriptPreferencesItem {
             notify: p.notify,
             notify_after_seconds: p.notify_after_seconds,
             confirm_delay_seconds: p.confirm_delay_seconds,
+            statement_savepoints: p.statement_savepoints,
         }
     }
 }
@@ -2412,6 +2519,7 @@ impl From<ScriptPreferencesItem> for spelaion_core::ScriptPreferences {
             notify: p.notify,
             notify_after_seconds: p.notify_after_seconds,
             confirm_delay_seconds: p.confirm_delay_seconds,
+            statement_savepoints: p.statement_savepoints,
         }
     }
 }
@@ -3855,8 +3963,11 @@ pub struct ConnectionDraftItem {
     /// MySQL and MariaDB: allow the cleartext password plugin (SDB-396). The core opens such a
     /// connection only over a checked certificate or an SSH tunnel.
     pub cleartext_password: bool,
-    /// The databases the connection shows (SDB-396); empty for all of them.
+    /// MySQL, MariaDB and SQL Server: the databases the connection shows (SDB-396); empty for
+    /// all of them. PostgreSQL: the other databases it opens (ADR-074); empty for only its own.
     pub databases: Vec<String>,
+    /// PostgreSQL: it opens every database the server lists (ADR-074).
+    pub all_databases: bool,
     pub user: String,
     pub password_mode: PasswordMode,
     pub password_env: String,
@@ -3923,6 +4034,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             pooler: item.pooler.map(Into::into),
             cleartext_password: item.cleartext_password,
             databases: item.databases,
+            all_databases: item.all_databases,
             user: item.user,
             password: match item.password_mode {
                 PasswordMode::None => PasswordChoice::None,
@@ -4010,6 +4122,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             pooler: draft.pooler.map(Into::into),
             cleartext_password: draft.cleartext_password,
             databases: draft.databases,
+            all_databases: draft.all_databases,
             user: draft.user,
             password_mode,
             password_env,
@@ -4168,11 +4281,11 @@ impl From<KubernetesDraftItem> for spelaion_config::KubernetesDraft {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum KubeEditor {
-    /// The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
-    /// the Kubernetes network profile it uses, whose settings come first.
+    /// The connection form's Kubernetes tab; `editing` is the connection's identity, and
+    /// `profile` the Kubernetes network profile it uses, whose settings come first.
     Connection {
         personal: bool,
-        editing: Option<String>,
+        editing: Option<ConnectionKeyItem>,
         profile: Option<String>,
     },
     /// The network profile editor; `editing` is the profile's name.
@@ -4575,6 +4688,27 @@ mod tests {
             assert_eq!(engine_named(engine.as_str()), Ok(engine));
         }
         assert!(engine_named("snowflake").is_err());
+    }
+
+    /// What the store keeps under a folder names that folder's connection; a personal one has
+    /// no folder wherever it was kept; nothing names no connection (ADR-075, SDB-502).
+    #[test]
+    fn a_stored_connection_names_its_own_folder() {
+        use super::ConnectionKeyItem;
+        let shop = ConnectionKeyItem::stored("/work/shop", "prod/orders").expect("named");
+        assert_eq!(shop.folder.as_deref(), Some("/work/shop"));
+        assert_eq!(shop.id, "prod/orders");
+        let personal = ConnectionKeyItem::stored("/work/shop", "~/local").expect("named");
+        assert_eq!(personal.folder, None);
+        assert_eq!(
+            ConnectionKeyItem::stored("", "~/local")
+                .expect("named")
+                .folder,
+            None
+        );
+        assert!(ConnectionKeyItem::stored("/work/shop", "").is_none());
+        // A repository connection kept outside any folder cannot be told apart from another's.
+        assert!(ConnectionKeyItem::stored("", "prod/orders").is_none());
     }
 
     /// Every kind of object the UI names comes back as itself: `browse_statement` reads it.
@@ -5697,8 +5831,8 @@ pub enum ConnectionTestOutcome {
         /// The connection's TLS does not check its server (SDB-395), from its resolved form.
         tls_warning: Option<TlsWarningItem>,
     },
-    /// The repository is not trusted: ask before resolving anything.
-    Untrusted,
+    /// The repository `root` is not trusted: ask before resolving anything.
+    Untrusted { root: String },
     /// A repository connection or tunnel is new or changed since it was trusted (ADR-022).
     Changed {
         item: String,
@@ -6151,6 +6285,8 @@ pub enum McpReadOnlyReasonItem {
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct McpAccessItem {
+    /// Its folder (ADR-075): the repository's canonical root, none for a personal connection.
+    pub folder: Option<String>,
     pub id: String,
     pub name: String,
     pub engine: String,
@@ -6166,15 +6302,10 @@ pub struct McpAccessItem {
 }
 
 impl McpAccessItem {
-    pub fn new(
-        entry: &spelaion_config::ConnectionEntry,
-        view: spelaion_core::AgentView,
-        kind: Option<ConnectionTypeItem>,
-        restriction_workspace: Option<String>,
-        read_only_override: Option<bool>,
-    ) -> Self {
+    pub fn new(connection: spelaion_core::ConnectionAgents) -> Self {
         use spelaion_core::{AgentAccess, AgentView, ReadOnlyBecause};
-        let (visibility, access, reason) = match view {
+        let entry = &connection.entry;
+        let (visibility, access, reason) = match connection.view {
             AgentView::NotExposed => (McpVisibilityItem::NotExposed, None, None),
             AgentView::UntrustedRepository => (McpVisibilityItem::Untrusted, None, None),
             AgentView::EngineWithoutBarrier | AgentView::FileFolder => {
@@ -6205,6 +6336,10 @@ impl McpAccessItem {
             ),
         };
         Self {
+            folder: connection
+                .key
+                .folder()
+                .map(|folder| folder.display().to_string()),
             id: entry.id.to_string(),
             name: entry.name(),
             engine: entry.file.engine.as_str().into(),
@@ -6212,9 +6347,57 @@ impl McpAccessItem {
             visibility,
             access,
             reason,
-            kind,
-            restriction_workspace,
-            read_only_override,
+            kind: connection.kind.as_ref().map(ConnectionTypeItem::from),
+            restriction_workspace: connection.override_scope,
+            read_only_override: connection.read_only_override,
+        }
+    }
+}
+
+/// Whose connections a group of the MCP page's Security tab holds (ADR-075).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum McpFolderItem {
+    /// An open repository folder: its canonical root, the path it was opened as, and whether
+    /// it is trusted.
+    Repository {
+        root: String,
+        path: String,
+        trusted: bool,
+    },
+    /// The personal connections, which every MCP server serves.
+    Personal,
+}
+
+/// One open folder's connections, or the personal ones, with what agents can do on each as
+/// that folder decides it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAccessGroupItem {
+    pub folder: McpFolderItem,
+    pub connections: Vec<McpAccessItem>,
+}
+
+impl From<spelaion_core::FolderAgents> for McpAccessGroupItem {
+    fn from(group: spelaion_core::FolderAgents) -> Self {
+        Self {
+            folder: match group.folder {
+                spelaion_core::AgentFolder::Repository {
+                    root,
+                    path,
+                    trusted,
+                } => McpFolderItem::Repository {
+                    root: root.display().to_string(),
+                    path: path.display().to_string(),
+                    trusted,
+                },
+                spelaion_core::AgentFolder::Personal => McpFolderItem::Personal,
+            },
+            connections: group
+                .connections
+                .into_iter()
+                .map(McpAccessItem::new)
+                .collect(),
         }
     }
 }
@@ -6264,6 +6447,18 @@ pub struct AuditFilterItem {
     pub tool: Option<String>,
     pub status: Option<AuditStatusItem>,
     pub session: Option<String>,
+    /// Only one folder's entries, or only those with none (ADR-075).
+    pub folder: Option<AuditFolderItem>,
+}
+
+/// The folder the Activity tab keeps (ADR-075).
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AuditFolderItem {
+    /// Entries of this folder: its canonical root, as the log records it.
+    Folder { root: String },
+    /// Entries with no folder: on a personal connection, or written before 0.17.
+    NoFolder,
 }
 
 impl From<AuditFilterItem> for spelaion_core::AuditFilter {
@@ -6273,6 +6468,10 @@ impl From<AuditFilterItem> for spelaion_core::AuditFilter {
             tool: f.tool,
             decision: f.status.map(Into::into),
             session: f.session,
+            folder: f.folder.map(|folder| match folder {
+                AuditFolderItem::Folder { root } => spelaion_core::AuditFolder::Folder(root),
+                AuditFolderItem::NoFolder => spelaion_core::AuditFolder::NoFolder,
+            }),
         }
     }
 }
@@ -6296,6 +6495,9 @@ pub struct AuditEventItem {
     #[specta(type = Option<specta_typescript::Number>)]
     pub duration_ms: Option<i64>,
     pub detail: Option<String>,
+    /// The connection's folder (ADR-075); none for a personal connection, and for entries
+    /// written before 0.17.
+    pub folder: Option<String>,
 }
 
 impl From<spelaion_core::AuditRecord> for AuditEventItem {
@@ -6313,6 +6515,7 @@ impl From<spelaion_core::AuditRecord> for AuditEventItem {
             rows: e.rows,
             duration_ms: e.duration_ms,
             detail: e.detail,
+            folder: e.folder,
         }
     }
 }
@@ -6961,6 +7164,12 @@ pub struct OpenTabItem {
     pub title: Option<String>,
     pub text: String,
     pub connection: Option<String>,
+    /// The other database of its connection it was on (ADR-074, SDB-505); `None` for its own.
+    pub database: Option<String>,
+    /// The folder of its connection, as the page holds it (ADR-075; none for a personal
+    /// connection or none): the core keeps the tab under it (`tab_scope`).
+    #[serde(default)]
+    pub folder: Option<String>,
     pub pinned: bool,
     pub on_error: Option<OnErrorItem>,
     pub timeout_seconds: Option<u32>,
@@ -6974,6 +7183,7 @@ impl From<OpenTabItem> for spelaion_core::SavedTab {
             title: t.title,
             text: t.text,
             connection: t.connection,
+            database: t.database.filter(|d| !d.is_empty()),
             pinned: t.pinned,
             on_error: t.on_error.map(Into::into),
             timeout_seconds: t.timeout_seconds,
@@ -6985,6 +7195,8 @@ impl From<OpenTabItem> for spelaion_core::SavedTab {
                 line_ending: f.format.line_ending.into(),
                 modified: f.modified,
             }),
+            // Its place in the window is the core's to give (`window_sets`).
+            window_position: None,
         }
     }
 }
@@ -6995,6 +7207,8 @@ impl From<spelaion_core::SavedTab> for OpenTabItem {
             title: t.title,
             text: t.text,
             connection: t.connection,
+            database: t.database,
+            folder: None,
             pinned: t.pinned,
             on_error: t.on_error.map(Into::into),
             timeout_seconds: t.timeout_seconds,
@@ -7016,9 +7230,17 @@ impl From<spelaion_core::SavedTab> for OpenTabItem {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RestoreNoteItem {
-    ConnectionMissing { connection: String },
+    ConnectionMissing {
+        connection: String,
+    },
+    /// Its connection no longer opens the database it was on (ADR-074): it is on its own now.
+    DatabaseMissing {
+        database: String,
+    },
     FileMissing,
-    FileUnreadable { message: String },
+    FileUnreadable {
+        message: String,
+    },
     FileChangedOnDisk,
 }
 
@@ -7027,6 +7249,9 @@ impl From<spelaion_core::RestoreNote> for RestoreNoteItem {
         match n {
             spelaion_core::RestoreNote::ConnectionMissing { connection } => {
                 Self::ConnectionMissing { connection }
+            }
+            spelaion_core::RestoreNote::DatabaseMissing { database } => {
+                Self::DatabaseMissing { database }
             }
             spelaion_core::RestoreNote::FileMissing => Self::FileMissing,
             spelaion_core::RestoreNote::FileUnreadable { message } => {
@@ -7042,14 +7267,17 @@ impl From<spelaion_core::RestoreNote> for RestoreNoteItem {
 pub struct RestoredTabItem {
     pub tab: OpenTabItem,
     pub notes: Vec<RestoreNoteItem>,
+    /// Its place in the window when it was kept, if it was kept with one: a folder opened
+    /// again puts its tabs back there among the tabs on screen.
+    #[serde(default)]
+    pub position: Option<u32>,
 }
 
-/// The open folder's kept tabs, checked by the core. They come back disconnected.
+/// The kept tabs of the window and of every open folder (ADR-075), checked by the core and in
+/// the window's order. They come back disconnected.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoredTabsItem {
-    /// Which folder they belong to: sent back with every `save_tabs`.
-    pub scope: String,
     pub tabs: Vec<RestoredTabItem>,
     pub active: Option<u32>,
     /// The personal "reconnect at startup" setting: connect only, never run.

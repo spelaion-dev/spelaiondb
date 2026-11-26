@@ -105,6 +105,9 @@ pub struct SavedTab {
     pub text: String,
     /// Connection id (`~/name` for a personal one); never anything secret.
     pub connection: Option<String>,
+    /// The other database of its connection it was connected to (ADR-074, SDB-505); `None` for
+    /// the connection's own. Restored disconnected, it connects to that database when run.
+    pub database: Option<String>,
     pub pinned: bool,
     pub on_error: Option<ScriptErrorMode>,
     pub timeout_seconds: Option<u32>,
@@ -112,6 +115,9 @@ pub struct SavedTab {
     pub snippet_name: Option<String>,
     /// `Some` for a file tab, `None` for a console.
     pub file: Option<SavedFile>,
+    /// Its place among the window's tabs, across folders (ADR-075); `None` for a tab kept
+    /// before tabs belonged to their connection's folder.
+    pub window_position: Option<u32>,
 }
 
 /// A workspace's open tabs, in the tab bar's order.
@@ -133,22 +139,33 @@ impl Store {
     /// Replaces the open tabs kept for `workspace`, in one transaction: a crash leaves the
     /// previous set or this one, never a mix.
     pub fn save_open_tabs(&mut self, workspace: &str, saved: &SavedTabs) -> Result<(), StoreError> {
-        if saved.tabs.len() > MAX_SAVED_TABS {
-            return Err(StoreError::new(format!(
-                "too many open tabs to keep ({}; at most {MAX_SAVED_TABS})",
-                saved.tabs.len()
-            )));
+        self.save_window_tabs(&[(workspace.to_string(), saved.clone())])
+    }
+
+    /// Replaces the open tabs kept for each of these workspaces (ADR-075: a window's tabs, each
+    /// under its connection's folder), all in one transaction: a crash leaves every one as it
+    /// was or every one as given, never a mix. Workspaces not named are not touched.
+    pub fn save_window_tabs(&mut self, sets: &[(String, SavedTabs)]) -> Result<(), StoreError> {
+        for (_, saved) in sets {
+            if saved.tabs.len() > MAX_SAVED_TABS {
+                return Err(StoreError::new(format!(
+                    "too many open tabs to keep ({}; at most {MAX_SAVED_TABS})",
+                    saved.tabs.len()
+                )));
+            }
         }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute("delete from open_tabs where workspace = ?1", [workspace])?;
-        {
+        for (workspace, saved) in sets {
+            tx.execute("delete from open_tabs where workspace = ?1", [workspace])?;
             let mut insert = tx.prepare(
                 "insert into open_tabs (workspace, position, active, title, text, connection,
                      pinned, on_error, timeout_seconds, snippet_name, file_path, file_hash,
-                     file_encoding, file_line_ending, file_modified)
-                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                     file_encoding, file_line_ending, file_modified, database,
+                     window_position)
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                         ?17)",
             )?;
             for (position, tab) in saved.tabs.iter().enumerate() {
                 let file = tab.file.as_ref();
@@ -168,6 +185,11 @@ impl Store {
                     file.map(|f| f.encoding.as_str()),
                     file.map(|f| f.line_ending.as_str()),
                     file.map(|f| f.modified),
+                    // Only with a connection, and never empty.
+                    tab.database
+                        .as_deref()
+                        .filter(|d| !d.is_empty() && tab.connection.is_some()),
+                    tab.window_position.map(i64::from),
                 ])?;
             }
         }
@@ -180,7 +202,7 @@ impl Store {
         let mut statement = self.conn.prepare(
             "select active, title, text, connection, pinned, on_error, timeout_seconds,
                     snippet_name, file_path, file_hash, file_encoding, file_line_ending,
-                    file_modified
+                    file_modified, database, window_position
              from open_tabs where workspace = ?1 order by position",
         )?;
         let rows = statement.query_map([workspace], |r| {
@@ -204,6 +226,7 @@ impl Store {
                     title: r.get(1)?,
                     text: r.get(2)?,
                     connection: r.get(3)?,
+                    database: r.get(13)?,
                     pinned: r.get(4)?,
                     on_error: r
                         .get::<_, Option<String>>(5)?
@@ -214,6 +237,9 @@ impl Store {
                         .and_then(|s| u32::try_from(s).ok()),
                     snippet_name: r.get(7)?,
                     file: None,
+                    window_position: r
+                        .get::<_, Option<i64>>(14)?
+                        .and_then(|p| u32::try_from(p).ok()),
                 },
                 file,
             ))
@@ -333,11 +359,14 @@ mod tests {
                     title: Some("Pinned report".into()),
                     text: "select 1;\nselect 'two';".into(),
                     connection: Some("~/shop".into()),
+                    database: Some("billing".into()),
                     pinned: true,
                     on_error: Some(ScriptErrorMode::Continue),
                     timeout_seconds: Some(30),
                     snippet_name: Some("report".into()),
                     file: None,
+                    // Kept and read back like every other field.
+                    window_position: Some(4),
                 },
                 SavedTab {
                     text: "update t set x = 1 where id = 2;\n".into(),

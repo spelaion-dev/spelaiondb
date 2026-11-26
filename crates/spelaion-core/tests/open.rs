@@ -77,7 +77,7 @@ impl Workspace {
         let options = OpenOptions {
             tunnels: self.tunnels.clone(),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: self.base.join("user/known_hosts"),
             },
@@ -620,7 +620,7 @@ async fn unsaved_tunnels_can_be_tested_hop_by_hop() {
         ssm: None,
     };
     let known_hosts = KnownHosts {
-        team_file: None,
+        team_files: Vec::new(),
         user_file: None,
         app_file: ws.base.join("user/known_hosts"),
     };
@@ -1240,7 +1240,7 @@ async fn the_teams_known_hosts_verifies_a_newcomers_first_connection() {
         .unwrap();
     assert_eq!(
         conn.resolved.tunnel.as_ref().unwrap().known_hosts,
-        Some(newcomer.base.join("repo/.spelaion/known_hosts"))
+        vec![newcomer.base.join("repo/.spelaion/known_hosts")]
     );
     assert_eq!(first_value(&conn, "select 1").await, "1");
     conn.close().await;

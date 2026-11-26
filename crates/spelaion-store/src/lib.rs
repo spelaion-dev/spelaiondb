@@ -11,6 +11,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 mod aside;
 mod backup;
 mod editor_snippets;
+mod er_diagrams;
 mod export;
 mod library;
 mod map;
@@ -23,6 +24,10 @@ mod typed_values_tests;
 pub use aside::{aside_path, set_aside};
 pub use backup::{BACKUP_TEXT_MAX, BackupPreferences};
 pub use editor_snippets::{EditorSnippet, is_snippet_name};
+pub use er_diagrams::{
+    ER_DIAGRAM_DOCUMENT_MAX, ER_DIAGRAM_NAME_MAX, ErDiagramSave, MAX_ER_DIAGRAMS, StoredErDiagram,
+    StoredErDiagramDocument,
+};
 pub use export::{
     EXPORT_ENCODINGS, EXPORT_FORMATS, EXPORT_KEYWORD_CASES, EXPORT_MAX_ROWS_PER_INSERT,
     EXPORT_NAME_CASES, EXPORT_NULL_TEXT_MAX, EXPORT_PATTERN_MAX, ExportPreferences,
@@ -32,7 +37,7 @@ pub use library::{
 };
 pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,
-    check_tile_server,
+    check_attribution_link, check_tile_server,
 };
 pub use shortcuts::{SHORTCUT_COMMAND_MAX, ShortcutOverride, is_command_id};
 pub use side_panel::{
@@ -270,6 +275,40 @@ const MIGRATIONS: &[&str] = &["create table audit (
             'engine_without_barrier', 'plugin_missing', 'cancelled', 'timed_out',
             'statement_failed', 'invalid_arguments', 'internal')
         begin select raise(abort, 'unknown audit code'); end;",
+    // The folder of the connection an entry is about (ADR-075, SDB-495): two repositories may
+    // each have a `prod/orders`. Rows written before have none.
+    "alter table audit add column folder text;",
+    // Saved ER diagrams (ADR-084).
+    er_diagrams::MIGRATION,
+    // A PostgreSQL connection's other databases (ADR-074, SDB-505): bookmarks are kept per
+    // database, empty for the connection's own, and a kept tab says which database it was
+    // connected to (none: its connection's own). SQLite cannot change a primary key: the
+    // bookmarks' table is made again with the database in it and every row copied as it was,
+    // its database empty, so what a row meant it still means.
+    "create table explorer_bookmarks_by_database (
+        workspace   text not null,
+        connection  text not null,
+        database    text not null default '',
+        schema      text not null,
+        name        text not null,
+        kind        text not null,
+        detail      text not null,
+        created_ms  integer not null,
+        primary key (workspace, connection, database, schema, name, kind, detail)
+    );
+    insert into explorer_bookmarks_by_database
+        (workspace, connection, database, schema, name, kind, detail, created_ms)
+        select workspace, connection, '', schema, name, kind, detail, created_ms
+        from explorer_bookmarks;
+    drop table explorer_bookmarks;
+    alter table explorer_bookmarks_by_database rename to explorer_bookmarks;
+    alter table open_tabs add column database text check (length(database) > 0);",
+    // The same for a table's filters (`table_filters.rs`).
+    table_filters::BY_DATABASE,
+    // A tab's place among the window's tabs across folders (ADR-075, SDB-501): each folder's
+    // tabs are kept under it, and the window's order is put back from this. Rows written before
+    // have none and keep their order within their folder.
+    "alter table open_tabs add column window_position integer check (window_position >= 0);",
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -409,6 +448,9 @@ pub struct AuditEntry {
     /// Why a refused or failed call ended so (SDB-374); `None` when it was executed, and for
     /// entries written before 0.13.
     pub code: Option<FailureCode>,
+    /// The folder of `connection` (ADR-075): the repository's canonical root as the MCP server
+    /// serves it; `None` for a personal connection, and for entries written before 0.17.
+    pub folder: Option<String>,
 }
 
 /// Why an agent's call was refused or failed, as a stable code agents and the Activity tab can
@@ -510,6 +552,7 @@ impl AuditEntry {
             session: None,
             tool: None,
             code: None,
+            folder: None,
         }
     }
 }
@@ -522,6 +565,17 @@ pub struct AuditFilter {
     pub tool: Option<String>,
     pub decision: Option<Decision>,
     pub session: Option<String>,
+    /// Only the entries of one folder, or only those with none (ADR-075).
+    pub folder: Option<AuditFolder>,
+}
+
+/// The folder an audit filter keeps (ADR-075).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditFolder {
+    /// Entries whose connection is of this folder: its canonical root, as recorded.
+    Folder(String),
+    /// Entries with no folder: on a personal connection, or written before 0.17.
+    NoFolder,
 }
 
 /// An audit entry with its position in the log.
@@ -581,6 +635,14 @@ fn audit_where(filter: &AuditFilter) -> (String, Vec<String>) {
         params.push(session.clone());
         clauses.push(format!("session = ?{}", params.len()));
     }
+    match &filter.folder {
+        Some(AuditFolder::Folder(folder)) => {
+            params.push(folder.clone());
+            clauses.push(format!("folder = ?{}", params.len()));
+        }
+        Some(AuditFolder::NoFolder) => clauses.push("folder is null".into()),
+        None => {}
+    }
     let clause = if clauses.is_empty() {
         String::new()
     } else {
@@ -606,6 +668,7 @@ fn audit_row(r: &rusqlite::Row) -> rusqlite::Result<AuditRecord> {
             session: r.get(9)?,
             tool: r.get(10)?,
             code: code.as_deref().map(FailureCode::parse),
+            folder: r.get(12)?,
         },
     })
 }
@@ -729,6 +792,9 @@ fn patterns_of(lines: &str) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bookmark {
     pub connection: String,
+    /// The other database of the connection it is in (ADR-074, SDB-505); `None` for the
+    /// connection's own, as every bookmark made before databases had a level.
+    pub database: Option<String>,
     /// The schema the object is in, or the schema itself (with an empty `name`).
     pub schema: String,
     pub name: String,
@@ -1100,6 +1166,10 @@ pub struct ScriptPreferences {
     /// never pressed on reflex; 0 (the default) enables it at once. Only a pause: whether to
     /// confirm is the core's decision (`guard.rs`), never this setting's.
     pub confirm_delay_seconds: u32,
+    /// In a transaction, roll back only a failed statement, with a savepoint the core sets
+    /// before each one (ADR-086), on the engines whose errors abort the whole transaction; off
+    /// by default: one more round trip per statement.
+    pub statement_savepoints: bool,
 }
 
 impl ScriptPreferences {
@@ -1116,6 +1186,7 @@ impl Default for ScriptPreferences {
             notify: false,
             notify_after_seconds: 30,
             confirm_delay_seconds: 0,
+            statement_savepoints: false,
         }
     }
 }
@@ -1186,8 +1257,8 @@ impl Store {
             })?),
         };
         self.conn.execute(
-            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code, folder)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 entry.at_ms,
                 entry.client,
@@ -1199,7 +1270,8 @@ impl Store {
                 entry.detail,
                 entry.session,
                 entry.tool,
-                code
+                code,
+                entry.folder
             ],
         )?;
         Ok(())
@@ -1225,7 +1297,7 @@ impl Store {
         params.push(limit.min(i64::MAX as usize).to_string());
         params.push(offset.min(i64::MAX as usize).to_string());
         let sql = format!(
-            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code
+            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code, folder
              from audit {clause} order by id desc limit cast(?{} as integer) offset cast(?{} as integer)",
             params.len() - 1,
             params.len()
@@ -1250,6 +1322,16 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare("select distinct tool from audit where tool is not null order by tool")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// The folders seen in the log (ADR-075), for the page's filter; entries with none are not
+    /// in it.
+    pub fn audit_folders(&self) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "select distinct folder from audit where folder is not null order by folder",
+        )?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
@@ -1442,6 +1524,7 @@ impl Store {
             "mcp_read_only_connections",
             "table_filter_history",
             "table_filter_defaults",
+            "er_diagrams",
         ] {
             transaction.execute(
                 &format!(
@@ -1591,9 +1674,9 @@ impl Store {
     /// Bookmarks an object; bookmarking it again changes nothing.
     pub fn add_bookmark(&self, workspace: &str, bookmark: &Bookmark) -> Result<(), StoreError> {
         self.conn.execute(
-            "insert into explorer_bookmarks (workspace, connection, schema, name, kind, detail,
-                                             created_ms)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "insert into explorer_bookmarks (workspace, connection, database, schema, name, kind,
+                                             detail, created_ms)
+             values (?1, ?2, ?8, ?3, ?4, ?5, ?6, ?7)
              on conflict do nothing",
             params![
                 workspace,
@@ -1602,7 +1685,8 @@ impl Store {
                 bookmark.name,
                 bookmark.kind.as_str(),
                 bookmark.detail,
-                now_ms()
+                now_ms(),
+                bookmark.database.as_deref().unwrap_or("")
             ],
         )?;
         Ok(())
@@ -1616,15 +1700,16 @@ impl Store {
     ) -> Result<bool, StoreError> {
         Ok(self.conn.execute(
             "delete from explorer_bookmarks
-             where workspace = ?1 and connection = ?2 and schema = ?3 and name = ?4
-               and kind = ?5 and detail = ?6",
+             where workspace = ?1 and connection = ?2 and database = ?7 and schema = ?3
+               and name = ?4 and kind = ?5 and detail = ?6",
             params![
                 workspace,
                 bookmark.connection,
                 bookmark.schema,
                 bookmark.name,
                 bookmark.kind.as_str(),
-                bookmark.detail
+                bookmark.detail,
+                bookmark.database.as_deref().unwrap_or("")
             ],
         )? > 0)
     }
@@ -1632,8 +1717,8 @@ impl Store {
     /// A workspace's bookmarks, by connection, schema and name.
     pub fn bookmarks(&self, workspace: &str) -> Result<Vec<Bookmark>, StoreError> {
         let mut statement = self.conn.prepare(
-            "select connection, schema, name, kind, detail from explorer_bookmarks
-             where workspace = ?1 order by connection, schema, name, kind, detail",
+            "select connection, schema, name, kind, detail, database from explorer_bookmarks
+             where workspace = ?1 order by connection, database, schema, name, kind, detail",
         )?;
         let rows = statement.query_map([workspace], |r| {
             let kind: String = r.get(3)?;
@@ -1642,6 +1727,7 @@ impl Store {
             };
             Ok(Some(Bookmark {
                 connection: r.get(0)?,
+                database: Some(r.get::<_, String>(5)?).filter(|d| !d.is_empty()),
                 schema: r.get(1)?,
                 name: r.get(2)?,
                 kind,
@@ -2148,6 +2234,8 @@ impl Store {
             notify: self.get_flag("script.notify", defaults.notify)?,
             notify_after_seconds,
             confirm_delay_seconds,
+            statement_savepoints: self
+                .get_flag("script.statement_savepoints", defaults.statement_savepoints)?,
         })
     }
 
@@ -2160,6 +2248,7 @@ impl Store {
             notify,
             notify_after_seconds,
             confirm_delay_seconds,
+            statement_savepoints,
         } = *preferences;
         if !(1..=ScriptPreferences::MAX_NOTIFY_AFTER).contains(&notify_after_seconds) {
             return Err(StoreError::new(format!(
@@ -2176,6 +2265,7 @@ impl Store {
         self.set_personal_setting("script.on_error", on_error.as_str())?;
         self.set_personal_setting("script.confirm_delay", &confirm_delay_seconds.to_string())?;
         self.set_flag("script.notify", notify)?;
+        self.set_flag("script.statement_savepoints", statement_savepoints)?;
         self.set_personal_setting("script.notify_after", &notify_after_seconds.to_string())
     }
 
@@ -3384,6 +3474,7 @@ mod tests {
                 notify: true,
                 notify_after_seconds: 120,
                 confirm_delay_seconds: 3,
+                statement_savepoints: true,
             };
             store.set_script_preferences(&changed).unwrap();
             assert_eq!(store.get_script_preferences().unwrap(), changed);
@@ -3486,6 +3577,7 @@ mod tests {
         };
         let bookmark = |connection: &str| Bookmark {
             connection: connection.into(),
+            database: None,
             schema: "public".into(),
             name: "orders".into(),
             kind: BookmarkKind::Table,
@@ -3584,6 +3676,7 @@ mod tests {
         let store = Store::open(&path).unwrap();
         let orders = Bookmark {
             connection: "shop".into(),
+            database: None,
             schema: "public".into(),
             name: "orders".into(),
             kind: BookmarkKind::Table,
@@ -3615,6 +3708,95 @@ mod tests {
         drop(store);
         let reopened = Store::open(&path).unwrap();
         assert_eq!(reopened.bookmarks("/repo").unwrap(), [orders]);
+    }
+
+    /// ADR-074, SDB-505: a same-named table of two databases of one connection is two
+    /// bookmarks, and the connection's own database is the one bookmarks always had.
+    #[test]
+    fn bookmarks_of_two_databases_of_a_connection_are_kept_apart() {
+        let store = Store::open(&temp("bookmarks-by-database")).unwrap();
+        let own = Bookmark {
+            connection: "tenants".into(),
+            database: None,
+            schema: "public".into(),
+            name: "orders".into(),
+            kind: BookmarkKind::Table,
+            detail: String::new(),
+        };
+        let billing = Bookmark {
+            database: Some("billing".into()),
+            ..own.clone()
+        };
+        store.add_bookmark("/repo", &own).unwrap();
+        store.add_bookmark("/repo", &billing).unwrap();
+        assert_eq!(
+            store.bookmarks("/repo").unwrap(),
+            [own.clone(), billing.clone()]
+        );
+        assert!(store.remove_bookmark("/repo", &billing).unwrap());
+        assert_eq!(store.bookmarks("/repo").unwrap(), [own]);
+    }
+
+    /// ADR-074, SDB-505: a store written before databases had a level keeps every bookmark,
+    /// table filter and kept tab, each on its connection's own database.
+    #[test]
+    fn a_store_from_before_databases_keeps_its_rows_on_the_connections_own_database() {
+        let path = temp("by-database-upgrade");
+        // Every migration before the two that gave databases a level.
+        let before = MIGRATIONS
+            .iter()
+            .position(|migration| migration.contains("explorer_bookmarks_by_database"))
+            .unwrap();
+        {
+            let conn = Connection::open(&path).unwrap();
+            for migration in &MIGRATIONS[..before] {
+                conn.execute_batch(migration).unwrap();
+            }
+            conn.pragma_update(None, "user_version", before as i64)
+                .unwrap();
+            conn.execute_batch(
+                "insert into explorer_bookmarks values ('/repo', 'shop', 'public', 'orders', 'table', '', 1);
+                 insert into table_filter_history values ('/repo', 'shop', 'public', 'orders', 'id > 1', 2);
+                 insert into table_filter_defaults values ('/repo', 'shop', 'public', 'orders', 'id > 1');
+                 insert into open_tabs (workspace, position, active, text, connection, pinned)
+                     values ('/repo', 0, 1, 'select 1', 'shop', 0);",
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.bookmarks("/repo").unwrap(),
+            [Bookmark {
+                connection: "shop".into(),
+                database: None,
+                schema: "public".into(),
+                name: "orders".into(),
+                kind: BookmarkKind::Table,
+                detail: String::new(),
+            }]
+        );
+        let table = FilteredTable {
+            workspace: "/repo".into(),
+            connection: "shop".into(),
+            database: None,
+            schema: "public".into(),
+            name: "orders".into(),
+        };
+        assert_eq!(store.table_filter_history(&table).unwrap(), ["id > 1"]);
+        assert_eq!(
+            store.table_default_filter(&table).unwrap().as_deref(),
+            Some("id > 1")
+        );
+        let tabs = store.open_tabs("/repo").unwrap();
+        assert_eq!(tabs.tabs[0].connection.as_deref(), Some("shop"));
+        assert_eq!(tabs.tabs[0].database, None);
+        // Another database of the same connection has nothing of the own one's.
+        let billing = FilteredTable {
+            database: Some("billing".into()),
+            ..table
+        };
+        assert!(store.table_filter_history(&billing).unwrap().is_empty());
+        assert_eq!(store.table_default_filter(&billing).unwrap(), None);
     }
 
     #[test]
@@ -3747,6 +3929,110 @@ mod tests {
             )
             .unwrap();
         assert!(store.mcp_read_only().unwrap());
+    }
+
+    /// ADR-075 (SDB-495): an entry keeps its connection's folder, so two repositories'
+    /// `prod/orders` are told apart; a store from before the column opens with its entries
+    /// intact, without a folder.
+    #[test]
+    fn audit_entries_keep_their_folder_and_older_entries_survive_the_migration() {
+        let path = temp("audit-folder");
+        let before = MIGRATIONS.len() - 1;
+        {
+            let conn = Connection::open(&path).unwrap();
+            for migration in &MIGRATIONS[..before] {
+                conn.execute_batch(migration).unwrap();
+            }
+            conn.pragma_update(None, "user_version", before as i64)
+                .unwrap();
+            conn.execute(
+                "insert into audit (at_ms, client, connection, statement, decision, session, tool)
+                 values (1, 'claude-code', 'prod/orders', 'select 1', 'executed', 's0', 'run_query')",
+                [],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let mut a = AuditEntry::now("claude-code", "prod/orders", "select 2", Decision::Executed);
+        a.folder = Some("/work/service-a".into());
+        let mut b = AuditEntry::now("claude-code", "prod/orders", "select 3", Decision::Executed);
+        b.folder = Some("/work/service-b".into());
+        store.record(&a).unwrap();
+        store.record(&b).unwrap();
+        store
+            .record(&AuditEntry::now(
+                "claude-code",
+                "~/local",
+                "select 4",
+                Decision::Executed,
+            ))
+            .unwrap();
+        let entries = store.audit_events(&AuditFilter::default(), 10, 0).unwrap();
+        let folders: Vec<(&str, Option<&str>)> = entries
+            .iter()
+            .rev()
+            .map(|r| (r.entry.statement.as_str(), r.entry.folder.as_deref()))
+            .collect();
+        assert_eq!(
+            folders,
+            [
+                ("select 1", None),
+                ("select 2", Some("/work/service-a")),
+                ("select 3", Some("/work/service-b")),
+                ("select 4", None),
+            ]
+        );
+        // The old entry is whole: its session and tool are still there.
+        let old = &entries.last().unwrap().entry;
+        assert_eq!(
+            (old.session.as_deref(), old.tool.as_deref()),
+            (Some("s0"), Some("run_query"))
+        );
+    }
+
+    #[test]
+    fn audit_entries_are_filtered_by_folder() {
+        // ADR-075: two servers started in two folders, both on `prod/orders`.
+        let path = temp("audit-by-folder");
+        let store = Store::open(&path).unwrap();
+        for (statement, folder) in [
+            ("select a", Some("/work/service-a")),
+            ("select b", Some("/work/service-b")),
+            ("select a2", Some("/work/service-a")),
+            ("select personal", None),
+        ] {
+            let mut entry =
+                AuditEntry::now("claude-code", "prod/orders", statement, Decision::Executed);
+            entry.folder = folder.map(Into::into);
+            store.record(&entry).unwrap();
+        }
+        let by = |folder: AuditFolder| {
+            let filter = AuditFilter {
+                folder: Some(folder),
+                ..AuditFilter::default()
+            };
+            let statements: Vec<String> = store
+                .audit_events(&filter, 10, 0)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.entry.statement)
+                .collect();
+            assert_eq!(store.audit_count(&filter).unwrap(), statements.len() as i64);
+            statements
+        };
+        assert_eq!(
+            by(AuditFolder::Folder("/work/service-a".into())),
+            ["select a2", "select a"]
+        );
+        assert_eq!(
+            by(AuditFolder::Folder("/work/service-b".into())),
+            ["select b"]
+        );
+        assert_eq!(by(AuditFolder::NoFolder), ["select personal"]);
+        assert_eq!(
+            store.audit_folders().unwrap(),
+            ["/work/service-a", "/work/service-b"]
+        );
     }
 
     fn call(session: &str, tool: &str, statement: &str, decision: Decision) -> AuditEntry {

@@ -5,9 +5,11 @@ mod app_lifecycle;
 mod backup;
 mod clipboard_text;
 mod connection_import;
+mod dashboard;
 mod diagnostics;
 mod diagram;
 mod dto;
+mod explorer_databases;
 mod file_dialog;
 mod files;
 mod import;
@@ -16,15 +18,18 @@ mod jobs;
 mod launch;
 mod library;
 mod mcp;
+mod open_folders;
 mod panics;
 mod plans;
 mod plugins;
 mod schema_compare;
 mod startup;
 mod table_copy;
+mod tiles;
 mod update;
 mod update_state;
 mod webview_args;
+mod windows;
 
 use spelaion_desktop_macros::command;
 use std::collections::HashMap;
@@ -57,10 +62,12 @@ use spelaion_driver_api::NameFilter;
 /// for metadata per connection (ADR-004).
 struct AppState {
     user_dir: PathBuf,
-    workspace: RwLock<Option<PathBuf>>,
-    /// The open folder's generation, and whether it is changing (SDB-377).
+    /// The folders the window holds open, each with its own configuration (ADR-075, SDB-500).
+    /// The page shows one at a time (`config()`): the last one opened.
+    folders: RwLock<open_folders::OpenFolders>,
+    /// The shown folder's generation, and whether the page is switching it (SDB-377). Adding
+    /// or closing a folder counts as a switch: what a personal connection reads changes.
     folder: app_lifecycle::Folder,
-    config: RwLock<Config>,
     /// The engines the next connection uses. Swapped whole when the plugins change (ADR-055):
     /// a connection already open keeps the plugin process it has. Read with `engines()`.
     engines: std::sync::RwLock<Arc<Engines>>,
@@ -90,32 +97,95 @@ struct AppState {
     jobs: jobs::Jobs,
     /// ER diagrams open in tabs, by the id the UI gave them (ADR-046).
     diagrams: std::sync::Mutex<HashMap<u32, Arc<spelaion_core::ErModel>>>,
+    /// Map tiles, fetched and cached by the core under the tile servers' policy (ADR-085).
+    tiles: Arc<spelaion_core::tiles::TileCache>,
     /// Schema comparisons, by their job's id, until the page forgets them (ADR-070).
     comparisons: std::sync::Mutex<HashMap<u32, schema_compare::StoredComparison>>,
+    /// The process monitor's live dashboards, by monitor session (SDB-192).
+    dashboards: dashboard::Dashboards,
+    /// The open windows and what each shows (SDB-30, ADR-083): views over this one state.
+    windows: windows::Windows,
 }
 
 struct DesktopSession {
+    /// The label of the window whose page opened it (SDB-30): closing that window closes it,
+    /// and no other window's closing does.
+    window: String,
     open: Arc<OpenConnection>,
     /// A prompted password stays in memory only for the lifetime of this session.
     password: Option<Secret>,
     /// Captured when connecting: changing folders must not reattribute an existing tab.
     history_workspace: String,
+    /// The folder its connection belongs to (its canonical root; `None` for a personal one,
+    /// ADR-075): closing that folder closes it, and closing another folder never does.
+    folder: Option<PathBuf>,
     /// What the session was opened from (SDB-426), without secrets: a session made from this
     /// one reuses its connection only while the configuration still says the same.
     definition: Option<ConnectionDefinition>,
+    /// Opened on another database of its connection (ADR-074), or made from such a session: the
+    /// saved file alone would open the connection's own database instead.
+    other_database: bool,
+    /// The connection's explorer session it was opened from as one of its other databases
+    /// (ADR-074, SDB-504): it closes with that session.
+    explorer_parent: Option<String>,
 }
 
-/// The definition `id` has in `config` now (SDB-426), as a session records it.
+/// The definition `id` has in `config` now (SDB-426), as a session records it: with every
+/// open folder (`open`), which a personal connection reads (ADR-075, SDB-526).
 fn definition_now(
     config: &Config,
+    open: &[Arc<Config>],
     trust: &TrustStore,
     id: &ConnectionId,
 ) -> Option<ConnectionDefinition> {
-    let trusted = config
-        .workspace_root
-        .as_deref()
-        .is_some_and(|root| trust.is_trusted(root));
-    config.connection_definition(id, trusted)
+    let trusted = |config: &Config| {
+        config
+            .workspace_root
+            .as_deref()
+            .is_some_and(|root| trust.is_trusted(root))
+    };
+    let open: Vec<(&Config, bool)> = open.iter().map(|c| (&**c, trusted(c))).collect();
+    config.connection_definition_open(id, trusted(config), &open)
+}
+
+/// `configs` as the resolver and the definitions take them.
+fn config_refs(configs: &[Arc<Config>]) -> Vec<&Config> {
+    configs.iter().map(|config| &**config).collect()
+}
+
+/// The open folder (of `open`) whose repository is `root`, as a connection's identity names it.
+fn open_folder_config(open: &[Arc<Config>], root: &str) -> CmdResult<Arc<Config>> {
+    open.iter()
+        .find(|config| spelaion_config::repository_scope(config) == root)
+        .cloned()
+        .ok_or_else(|| format!("the folder {root} is not open"))
+}
+
+/// The connections the explorer lists (ADR-075): every open folder's own, each with its
+/// folder's configuration, then the personal ones once, from `shown` (every folder loads the
+/// same personal layer).
+fn listed_connections(
+    open: &[Arc<Config>],
+    shown: &Arc<Config>,
+) -> Vec<(Arc<Config>, spelaion_config::ConnectionEntry)> {
+    let mut connections = Vec::new();
+    for config in open {
+        for entry in config
+            .connections
+            .iter()
+            .filter(|c| c.id.source == Source::Workspace)
+        {
+            connections.push((config.clone(), entry.clone()));
+        }
+    }
+    for entry in shown
+        .connections
+        .iter()
+        .filter(|c| c.id.source == Source::User)
+    {
+        connections.push((shown.clone(), entry.clone()));
+    }
+    connections
 }
 
 /// A compatible kind recognized by the core when opening the session.
@@ -193,20 +263,108 @@ impl AppState {
             .map_err(|e| e.to_string())
     }
 
+    /// Loads every open folder again, each alone with the personal layer (ADR-075): a folder's
+    /// new configuration lands only in the same opening of that folder, and never in another.
     async fn reload(&self) {
         let moment = self.folder.moment();
-        let workspace = self.workspace.read().await.clone();
-        let loaded = load(workspace.as_deref(), &self.user_dir);
-        let _ = self.change_trust(|trust| trust.adopt(&loaded));
-        let mut config = self.config.write().await;
-        // A reload started in the previous folder must not overwrite the new one.
+        let pending = self.folders.read().await.to_reload();
+        let loaded: Vec<(u64, Config)> = pending
+            .iter()
+            .map(|(path, opened)| (*opened, load(Some(path), &self.user_dir)))
+            .collect();
+        for (_, config) in &loaded {
+            let _ = self.change_trust(|trust| trust.adopt(config));
+        }
+        let personal = load(None, &self.user_dir);
+        let mut folders = self.folders.write().await;
+        // A reload started before the page switched folder must not overwrite the new one.
         if self.folder.still(moment) {
-            *config = loaded;
+            folders.install(loaded, personal);
         }
     }
 
+    /// The configuration the page shows: the last folder opened, or the personal layer alone.
+    async fn config(&self) -> Arc<Config> {
+        self.folders.read().await.shown()
+    }
+
+    /// Every open folder's configuration, in the order they were opened: what a personal
+    /// connection reads (ADR-075, `Resolver::with_open_folders`).
+    async fn open_configs(&self) -> Vec<Arc<Config>> {
+        self.folders.read().await.configs()
+    }
+
+    /// The connection the page named by its identity (ADR-075), in the configuration of the
+    /// open folder it names: a folder's connection in that folder's, a personal one in the
+    /// shown one (every folder loads the same personal layer). Refused when its folder is not
+    /// open, or when that folder has no such connection (`connection_in`).
+    async fn connection_config(
+        &self,
+        key: &ConnectionKeyItem,
+    ) -> CmdResult<(Arc<Config>, ConnectionId)> {
+        let config = self.folder_config(key.folder.as_deref()).await?;
+        let id = connection_in(&config, key)?;
+        Ok((config, id))
+    }
+
+    /// The configuration of the open folder whose repository is `root` (as a connection's
+    /// identity and `OpenFolderItem::root` name it), where a new or imported repository
+    /// connection goes (ADR-075); `None`: the shown folder's. Refused when it is not open.
+    async fn folder_config(&self, root: Option<&str>) -> CmdResult<Arc<Config>> {
+        match root {
+            None => Ok(self.config().await),
+            Some(root) => open_folder_config(&self.open_configs().await, root),
+        }
+    }
+
+    /// Closes the sessions of the folder of `root` (canonical). Personal connections' sessions
+    /// and other folders' stay.
+    async fn close_folder_sessions(&self, root: &Path) {
+        let closing: Vec<DesktopSession> = {
+            let mut sessions = self.sessions.lock().await;
+            let keys = open_folders::sessions_of(
+                sessions.iter().map(|(key, s)| (key, s.folder.as_deref())),
+                root,
+            );
+            keys.iter().filter_map(|key| sessions.remove(key)).collect()
+        };
+        for session in closing {
+            if let Ok(open) = Arc::try_unwrap(session.open) {
+                open.close().await;
+            }
+        }
+    }
+
+    /// The open folders as the page lists them.
+    async fn open_folders_item(&self) -> CmdResult<OpenFoldersItem> {
+        let trust = TrustStore::load(&self.user_dir).map_err(|e| e.to_string())?;
+        let folders = self.folders.read().await;
+        Ok(OpenFoldersItem {
+            folders: folders
+                .folders()
+                .iter()
+                .map(|folder| OpenFolderItem {
+                    path: folder.path.display().to_string(),
+                    root: folder.root.display().to_string(),
+                    repository: folder.config.workspace_root.is_some(),
+                    trusted: folder
+                        .config
+                        .workspace_root
+                        .as_deref()
+                        .is_some_and(|root| trust.is_trusted(root)),
+                    problems: folder
+                        .config
+                        .problems
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                })
+                .collect(),
+        })
+    }
+
     async fn info(&self) -> CmdResult<WorkspaceInfo> {
-        let config = self.config.read().await;
+        let config = self.config().await;
         let trust = TrustStore::load(&self.user_dir).map_err(|e| e.to_string())?;
         Ok(WorkspaceInfo {
             workspace: config
@@ -236,39 +394,28 @@ impl AppState {
     }
 }
 
-/// Personal connections share history across folders; repository connections are namespaced
-/// by their canonical root so identical connection IDs in different projects never collide.
-fn history_workspace(config: &Config, source: Source) -> String {
-    match source {
-        Source::User => String::new(),
-        Source::Workspace => config
-            .workspace_root
-            .as_ref()
-            .map_or_else(String::new, |root| {
-                std::fs::canonicalize(root)
-                    .unwrap_or_else(|_| root.clone())
-                    .display()
-                    .to_string()
-            }),
+/// The connection the page named by its identity (ADR-075, SDB-495), as `config` defines it
+/// now: refused when it is not defined, or when it belongs to another folder than the one its
+/// identity names. The one place a connection's id is read from the page: no command takes a
+/// bare id. Where its things are kept comes from the same identity
+/// (`spelaion_config::ConnectionKey`): personal connections share them across folders, and
+/// repository ones are kept under their canonical root, so identical ids in different projects
+/// never collide.
+fn connection_in(config: &Config, key: &ConnectionKeyItem) -> CmdResult<ConnectionId> {
+    let id = ConnectionId::parse(&key.id);
+    if config.connection(&id).is_none() {
+        return Err(format!("unknown connection: {}", key.id));
     }
-}
-
-fn parse_id(id: &str) -> ConnectionId {
-    match id.strip_prefix("~/") {
-        Some(path) => ConnectionId {
-            source: Source::User,
-            path: path.into(),
-        },
-        None => ConnectionId {
-            source: Source::Workspace,
-            path: id.into(),
-        },
+    let folder = spelaion_config::ConnectionKey::of(config, &id)
+        .folder()
+        .map(|folder| folder.display().to_string());
+    if folder != key.folder {
+        return Err(format!(
+            "the connection {} belongs to another folder than the one open",
+            key.id
+        ));
     }
-}
-
-/// File where the last opened folder is remembered.
-fn last_workspace_file(user_dir: &std::path::Path) -> PathBuf {
-    user_dir.join("desktop-last-workspace.txt")
+    Ok(id)
 }
 
 #[command]
@@ -675,45 +822,108 @@ async fn set_update_check(enabled: bool, state: State<'_, AppState>) -> CmdResul
         .map_err(|e| e.to_string())
 }
 
+/// The page chose a folder (it shows one at a time, ADR-075): every other open folder closes,
+/// with its sessions, and `path` opens. Personal connections' sessions stay; the page asked
+/// first and disconnected its own tabs.
 #[command]
 async fn open_workspace(path: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
     // Settled again when it is dropped, whatever happens below, a panic included (SDB-377).
     let switch = state.folder.begin_switch().map_err(|e| e.to_string())?;
-    let old_sessions = std::mem::take(&mut *state.sessions.lock().await);
-    for session in old_sessions.into_values() {
-        if let Ok(open) = Arc::try_unwrap(session.open) {
-            open.close().await;
-        }
+    let path = PathBuf::from(&path);
+    let others: Vec<PathBuf> = state
+        .folders
+        .read()
+        .await
+        .folders()
+        .iter()
+        .map(|folder| folder.root.clone())
+        .collect();
+    for root in &others {
+        let _ = state.folders.write().await.close(root);
+        state.close_folder_sessions(root).await;
     }
     {
-        let mut workspace = state.workspace.write().await;
-        *workspace = Some(PathBuf::from(&path));
-        // Still changing, but reloads that saw the old path are stale.
+        let mut folders = state.folders.write().await;
+        folders.add(&path).map_err(|e| e.to_string())?;
+        // Still changing, but reloads that saw the old folders are stale.
         switch.path_changed();
+        let _ = open_folders::remember(&state.user_dir, &folders.paths());
     }
-    let _ = std::fs::create_dir_all(&state.user_dir);
-    // App state in the personal folder: replaced whole (a crash never leaves half a path) and
-    // owner-only when new, like the folder's other files.
-    let _ = spelaion_config::atomic_file::replace(
-        &last_workspace_file(&state.user_dir),
-        path.as_bytes(),
-        spelaion_config::atomic_file::NewFileMode::OwnerOnly,
-    );
     // The folder menu's and the palette's recent folders (SDB-397): a list, never a reason
     // for the folder not to open.
-    let _ = state.history.add_recent_folder(path.clone()).await;
+    let _ = state
+        .history
+        .add_recent_folder(path.display().to_string())
+        .await;
     state.reload().await;
     drop(switch);
     state.info().await
 }
 
-/// Trusts the open repository (ADR-009). The UI asks for it after showing what it implies.
+/// Opens `path` beside the folders already open (ADR-075): nothing closes. The same root again
+/// is the folder already open; an eleventh is refused. The page shows the last one opened.
+#[command]
+async fn add_folder(path: String, state: State<'_, AppState>) -> CmdResult<AddedFolderItem> {
+    let switch = state.folder.begin_switch().map_err(|e| e.to_string())?;
+    let (root, added) = {
+        let mut folders = state.folders.write().await;
+        let before = folders.folders().len();
+        let index = folders.add(Path::new(&path)).map_err(|e| e.to_string())?;
+        let added = folders.folders().len() > before;
+        if added {
+            // What a personal connection reads changed: work started before is stale.
+            switch.path_changed();
+            let _ = open_folders::remember(&state.user_dir, &folders.paths());
+        }
+        (folders.folders()[index].root.display().to_string(), added)
+    };
+    let _ = state.history.add_recent_folder(path).await;
+    drop(switch);
+    Ok(AddedFolderItem {
+        root,
+        added,
+        folders: state.open_folders_item().await?.folders,
+    })
+}
+
+/// Closes the open folder of `root` (as listed) and its sessions (ADR-075). Personal
+/// connections' sessions and other folders' stay.
+#[command]
+async fn close_folder(root: String, state: State<'_, AppState>) -> CmdResult<OpenFoldersItem> {
+    let switch = state.folder.begin_switch().map_err(|e| e.to_string())?;
+    let closed = {
+        let mut folders = state.folders.write().await;
+        let closed = folders.close(Path::new(&root)).map_err(|e| e.to_string())?;
+        switch.path_changed();
+        let _ = open_folders::remember(&state.user_dir, &folders.paths());
+        closed
+    };
+    state.close_folder_sessions(&closed.root).await;
+    drop(switch);
+    state.open_folders_item().await
+}
+
+/// The open folders, in the order they were opened, each with its trust.
+#[command]
+async fn list_folders(state: State<'_, AppState>) -> CmdResult<OpenFoldersItem> {
+    state.open_folders_item().await
+}
+
+/// Trusts the open repository `root` (ADR-009), one of the open folders (ADR-075). The UI asks
+/// for it after showing what it implies.
 #[command]
 async fn trust_workspace(root: String, state: State<'_, AppState>) -> CmdResult<WorkspaceInfo> {
-    let config = state.config.read().await;
-    if config.workspace_root.as_deref() != Some(Path::new(&root)) {
-        return Err("the folder changed; trust it again".into());
-    }
+    let config = state
+        .open_configs()
+        .await
+        .into_iter()
+        // Named by its root as opened, or canonical as the open folders list it (ADR-075).
+        .find(|config| {
+            config.workspace_root.as_deref() == Some(Path::new(&root))
+                || (config.workspace_root.is_some()
+                    && spelaion_config::repository_scope(config) == root)
+        })
+        .ok_or("the folder changed; trust it again")?;
     state.change_trust(|trust| trust.trust_if_untrusted(&config))?;
     drop(config);
     state.info().await
@@ -738,7 +948,7 @@ async fn set_user_vars(
 async fn list_connection_types(state: State<'_, AppState>) -> CmdResult<Vec<ConnectionTypeItem>> {
     state.reload().await;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let config = state.config.read().await;
+    let config = state.config().await;
     Ok(spelaion_config::ConnectionTypes::load(&config, &trust)
         .all()
         .iter()
@@ -773,7 +983,7 @@ async fn delete_connection_type(id: String, state: State<'_, AppState>) -> CmdRe
 /// The personal range of local ports for SSH tunnels (`[tunnels]` in `user.toml`), if set.
 #[command]
 async fn tunnel_ports(state: State<'_, AppState>) -> CmdResult<Option<TunnelPortsItem>> {
-    let config = state.config.read().await;
+    let config = state.config().await;
     Ok(config
         .user
         .tunnels
@@ -799,7 +1009,7 @@ async fn set_tunnel_ports(
 /// The user's own column masking patterns (`[masking] always` in `user.toml`, ADR-051).
 #[command]
 async fn user_masking(state: State<'_, AppState>) -> CmdResult<UserMaskingItem> {
-    let config = state.config.read().await;
+    let config = state.config().await;
     Ok(UserMaskingItem {
         patterns: config.user.masking.always.clone(),
         unreadable: config.user_unreadable,
@@ -825,7 +1035,14 @@ async fn accept_change(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state.reload().await;
-    let config = state.config.read().await;
+    // The open folder the change is for (ADR-075): a personal connection may wait for another
+    // folder's review than the one the page shows.
+    let config = state
+        .open_configs()
+        .await
+        .into_iter()
+        .find(|config| config.workspace_root.as_deref() == Some(Path::new(&root)))
+        .unwrap_or(state.config().await);
     let change = spelaion_config::ItemChange {
         item,
         new: is_new,
@@ -845,24 +1062,29 @@ async fn accept_change(
 async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<ConnectionItem>> {
     state.reload().await;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let config = state.config.read().await;
-    let connections = config.connections.clone();
+    let shown = state.config().await;
+    let open = state.open_configs().await;
+    let connections = listed_connections(&open, &shown);
     let marks: Vec<_> = {
         let sessions = state.sessions.lock().await;
         connections
             .iter()
-            .map(|entry| {
+            .map(|(config, entry)| {
                 let saved = entry.file.engine_mark();
                 if saved != entry.file.engine.as_str() {
                     return saved.to_owned();
                 }
+                let key = spelaion_config::ConnectionKey::of(config, &entry.id);
                 sessions
                     .values()
-                    .filter(|session| session.open.resolved.id == entry.id)
+                    .filter(|session| {
+                        session.open.resolved.id == entry.id
+                            && session.folder.as_deref() == key.folder()
+                    })
                     .find_map(|session| {
                         let mark = detected_engine_mark(&session.open)?;
                         let opened = session.definition.as_ref()?;
-                        (definition_now(&config, &trust, &entry.id).as_ref() == Some(opened))
+                        (definition_now(config, &open, &trust, &entry.id).as_ref() == Some(opened))
                             .then_some(mark)
                     })
                     .unwrap_or_else(|| saved.to_owned())
@@ -871,13 +1093,25 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
     };
     let tls_warnings: Vec<Option<TlsWarningItem>> = connections
         .iter()
-        .map(|c| spelaion_core::file_tls_warning(&config, c).map(TlsWarningItem::from))
+        .map(|(config, c)| spelaion_core::file_tls_warning(config, c).map(TlsWarningItem::from))
         .collect();
-    let types = spelaion_config::ConnectionTypes::load(&config, &trust);
-    let workspace = history_workspace(&config, Source::Workspace);
-    drop(config);
+    // A folder's connection takes its folder's types; a personal one every open folder's.
+    let personal_types =
+        spelaion_config::ConnectionTypes::load_open(&config_refs(&open), &shown, &trust);
+    drop(shown);
     let mut items = Vec::with_capacity(connections.len());
-    for ((c, tls_warning), engine_mark) in connections.into_iter().zip(tls_warnings).zip(marks) {
+    for (((config, c), tls_warning), engine_mark) in
+        connections.into_iter().zip(tls_warnings).zip(marks)
+    {
+        let workspace = spelaion_config::repository_scope(&config);
+        let folder_types;
+        let types = match c.id.source {
+            Source::User => &personal_types,
+            Source::Workspace => {
+                folder_types = spelaion_config::ConnectionTypes::load(&config, &trust);
+                &folder_types
+            }
+        };
         let scope = match c.id.source {
             Source::User => String::new(),
             Source::Workspace => workspace.clone(),
@@ -889,6 +1123,12 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             .map_err(|e| e.to_string())?;
         items.push(ConnectionItem {
             id: c.id.to_string(),
+            // Its identity's folder (ADR-075): the open repository's canonical root, as
+            // `ConnectionKey` writes it, or none for a personal connection.
+            folder: match c.id.source {
+                Source::User => None,
+                Source::Workspace => Some(workspace.clone()),
+            },
             name: c.name(),
             description: c.file.description.clone(),
             tags: c.file.tags.clone(),
@@ -923,7 +1163,7 @@ async fn list_history(
     limit: u32,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<HistoryItem>> {
-    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     state
         .history
         .list(workspace, search, limit as usize, offset as usize)
@@ -938,13 +1178,18 @@ async fn list_history(
 async fn save_snippet(
     name: String,
     sql: String,
-    connection: Option<String>,
+    connection: Option<ConnectionKeyItem>,
     state: State<'_, AppState>,
 ) -> CmdResult<u32> {
-    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     let id = state
         .history
-        .save_snippet(workspace, name, sql, connection.unwrap_or_default())
+        .save_snippet(
+            workspace,
+            name,
+            sql,
+            connection.map(|key| key.id).unwrap_or_default(),
+        )
         .await
         .map_err(|e| e.to_string())?;
     u32::try_from(id).map_err(|_| format!("saved query id out of range: {id}"))
@@ -953,7 +1198,7 @@ async fn save_snippet(
 /// Saved queries of the open workspace and the personal ones, by name.
 #[command]
 async fn list_snippets(search: String, state: State<'_, AppState>) -> CmdResult<Vec<SnippetItem>> {
-    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     state
         .history
         .snippets(workspace, search)
@@ -964,7 +1209,7 @@ async fn list_snippets(search: String, state: State<'_, AppState>) -> CmdResult<
 
 #[command]
 async fn delete_snippet(id: u32, state: State<'_, AppState>) -> CmdResult<bool> {
-    let workspace = history_workspace(&*state.config.read().await, Source::Workspace);
+    let workspace = spelaion_config::repository_scope(&*state.config().await);
     state
         .history
         .delete_visible_snippet(workspace, id.into())
@@ -974,20 +1219,19 @@ async fn delete_snippet(id: u32, state: State<'_, AppState>) -> CmdResult<bool> 
 
 #[command]
 async fn set_history_enabled(
-    connection: String,
+    connection: ConnectionKeyItem,
     enabled: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let id = parse_id(&connection);
-    let config = state.config.read().await;
+    let (config, id) = state.connection_config(&connection).await?;
     if config.connection(&id).is_none() {
-        return Err(format!("unknown connection: {connection}"));
+        return Err(format!("unknown connection: {}", connection.id));
     }
-    let workspace = history_workspace(&config, id.source);
+    let workspace = spelaion_config::ConnectionKey::of(&config, &id).store_scope();
     drop(config);
     state
         .history
-        .set_enabled(workspace, connection, enabled)
+        .set_enabled(workspace, id.to_string(), enabled)
         .await
         .map_err(|e| e.to_string())
 }
@@ -995,10 +1239,10 @@ async fn set_history_enabled(
 /// A connection's explorer filter (ADR-025), personal and per workspace.
 #[command]
 async fn get_explorer_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<ExplorerFilterItem> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     state
         .history
         .explorer_filter(workspace, connection)
@@ -1009,11 +1253,11 @@ async fn get_explorer_filter(
 
 #[command]
 async fn set_explorer_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
     filter: ExplorerFilterItem,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     state
         .history
         .set_explorer_filter(workspace, connection, filter.into())
@@ -1026,13 +1270,13 @@ async fn set_explorer_filter(
 /// new filter.
 #[command]
 async fn filter_explorer_name(
-    connection: String,
+    connection: ConnectionKeyItem,
     kind: FilterKindItem,
     names: Vec<String>,
     action: FilterActionItem,
     state: State<'_, AppState>,
 ) -> CmdResult<ExplorerFilterItem> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     let mut filter = state
         .history
         .explorer_filter(workspace.clone(), connection.clone())
@@ -1063,9 +1307,9 @@ async fn filter_explorer_name(
 #[command]
 async fn list_bookmarks(state: State<'_, AppState>) -> CmdResult<Vec<BookmarkItem>> {
     let workspaces = {
-        let config = state.config.read().await;
-        let mut scopes = vec![history_workspace(&config, Source::User)];
-        let repository = history_workspace(&config, Source::Workspace);
+        let config = state.config().await;
+        let mut scopes = vec![spelaion_config::folder_scope(None)];
+        let repository = spelaion_config::repository_scope(&config);
         if !repository.is_empty() {
             scopes.push(repository);
         }
@@ -1080,12 +1324,18 @@ async fn list_bookmarks(state: State<'_, AppState>) -> CmdResult<Vec<BookmarkIte
             .map_err(|e| e.to_string())?;
         for bookmark in bookmarks {
             // Kept under this scope only if the connection of that id is still this scope's.
-            if connection_workspace(&state, &bookmark.connection)
-                .await
-                .ok()
-                == Some(workspace.clone())
-            {
-                all.push(BookmarkItem::from(bookmark));
+            let id = ConnectionId::parse(&bookmark.connection);
+            let key = {
+                let config = state.config().await;
+                config
+                    .connection(&id)
+                    .map(|_| spelaion_config::ConnectionKey::of(&config, &id))
+            };
+            if let Some(key) = key.filter(|key| key.store_scope() == workspace) {
+                all.push(BookmarkItem::stored(
+                    bookmark,
+                    ConnectionKeyItem::from(&key),
+                ));
             }
         }
     }
@@ -1094,7 +1344,7 @@ async fn list_bookmarks(state: State<'_, AppState>) -> CmdResult<Vec<BookmarkIte
 
 #[command]
 async fn add_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> CmdResult<()> {
-    let workspace = connection_workspace(&state, &bookmark.connection).await?;
+    let (workspace, _) = connection_scope(&state, &bookmark.connection).await?;
     state
         .history
         .add_bookmark(workspace, bookmark.into())
@@ -1105,7 +1355,7 @@ async fn add_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> Cmd
 /// Whether the bookmark was there.
 #[command]
 async fn remove_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> CmdResult<bool> {
-    let workspace = connection_workspace(&state, &bookmark.connection).await?;
+    let (workspace, _) = connection_scope(&state, &bookmark.connection).await?;
     state
         .history
         .remove_bookmark(workspace, bookmark.into())
@@ -1113,14 +1363,17 @@ async fn remove_bookmark(bookmark: BookmarkItem, state: State<'_, AppState>) -> 
         .map_err(|e| e.to_string())
 }
 
-/// The scope a connection's personal preferences are kept under (see `history_workspace`).
-async fn connection_workspace(state: &AppState, connection: &str) -> CmdResult<String> {
-    let id = parse_id(connection);
-    let config = state.config.read().await;
-    if config.connection(&id).is_none() {
-        return Err(format!("unknown connection: {connection}"));
-    }
-    Ok(history_workspace(&config, id.source))
+/// Where a connection's personal preferences are kept (its identity's store scope), and its id
+/// as the store keys them, once `connection_in` accepted it.
+async fn connection_scope(
+    state: &AppState,
+    connection: &ConnectionKeyItem,
+) -> CmdResult<(String, String)> {
+    let (config, id) = state.connection_config(connection).await?;
+    Ok((
+        spelaion_config::ConnectionKey::of(&config, &id).store_scope(),
+        id.to_string(),
+    ))
 }
 
 /// Whether there is a system keychain. Without one (Linux with no Secret Service running) the
@@ -1147,14 +1400,14 @@ fn engine_catalog() -> Vec<EngineItem> {
 /// Tunnels a new connection can use (from the repository and the personal directory).
 #[command]
 async fn list_tunnels(state: State<'_, AppState>) -> CmdResult<Vec<TunnelItem>> {
-    let config = state.config.read().await;
+    let config = state.config().await;
     Ok(config.tunnels.iter().map(TunnelItem::of).collect())
 }
 
 /// Every tunnel file as a network profile (ADR-027), for Settings → Network.
 #[command]
 async fn network_profiles(state: State<'_, AppState>) -> CmdResult<Vec<NetworkProfileItem>> {
-    let config = state.config.read().await;
+    let config = state.config().await;
     Ok(config
         .tunnels
         .iter()
@@ -1172,10 +1425,11 @@ async fn network_profiles(state: State<'_, AppState>) -> CmdResult<Vec<NetworkPr
 async fn test_connection(
     draft: ConnectionDraftItem,
     password: Option<String>,
-    editing: Option<String>,
+    editing: Option<ConnectionKeyItem>,
     network_only: bool,
     job: Channel<jobs::JobTicket>,
     on_step: Channel<Vec<TestStepItem>>,
+    window: tauri::Window,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<ConnectionTestOutcome> {
@@ -1183,15 +1437,25 @@ async fn test_connection(
     let name = draft.name.clone();
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let resolved = {
-        let config = state.config.read().await;
+        // An edited connection in its own folder's configuration (ADR-075); a new one in the
+        // shown folder's.
+        let (config, edited) = match &editing {
+            Some(key) => {
+                let (config, id) = state.connection_config(key).await?;
+                (config, Some(id))
+            }
+            None => (state.config().await, None),
+        };
         let resolver = Resolver::new(&config, &trust, &SystemBackend);
-        let resolved = match &editing {
-            Some(id) => resolver.resolve_edit(&parse_id(id), &draft),
+        let resolved = match &edited {
+            Some(id) => resolver.resolve_edit(id, &draft),
             None => resolver.resolve_draft(&draft),
         };
         match resolved {
-            Err(spelaion_config::ResolveError::Untrusted { .. }) => {
-                return Ok(ConnectionTestOutcome::Untrusted);
+            Err(spelaion_config::ResolveError::Untrusted { root }) => {
+                return Ok(ConnectionTestOutcome::Untrusted {
+                    root: root.display().to_string(),
+                });
             }
             Err(spelaion_config::ResolveError::Changed { root, change }) => {
                 return Ok(ConnectionTestOutcome::changed(root, change));
@@ -1215,7 +1479,11 @@ async fn test_connection(
             spelaion_core::TestScope::Full
         },
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app, state.pending.clone())),
+        interaction: Arc::new(AppInteraction::for_window(
+            app,
+            state.pending.clone(),
+            window.label(),
+        )),
         password: password.filter(|p| !p.is_empty()).map(Secret::new),
         name,
     };
@@ -1244,22 +1512,24 @@ async fn draft_tls_warning(
     state: State<'_, AppState>,
 ) -> CmdResult<Option<TlsWarningItem>> {
     let draft = ConnectionDraft::try_from(draft)?;
-    let config = state.config.read().await;
+    let config = state.config().await;
     Ok(spelaion_core::connection_draft_tls_warning(&config, &draft).map(TlsWarningItem::from))
 }
 
 /// Saves a new connection file (and, for `keychain`, its password) and reloads the
-/// configuration. Returns the new connection's identifier.
+/// configuration. Returns the new connection's identity (its folder and id). A repository
+/// connection goes into the open folder `repository` (its root, ADR-075), or the shown one.
 #[command]
 async fn add_connection(
     draft: ConnectionDraftItem,
     password: Option<String>,
+    repository: Option<String>,
     state: State<'_, AppState>,
-) -> CmdResult<String> {
+) -> CmdResult<ConnectionKeyItem> {
     let draft = ConnectionDraft::try_from(draft)?;
     let password = password.map(Secret::new);
-    let id = {
-        let config = state.config.read().await;
+    let key = {
+        let config = state.folder_config(repository.as_deref()).await?;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
         check_setup_before_saving(&state, &config, &file)?;
         let id =
@@ -1268,10 +1538,10 @@ async fn add_connection(
         if id.source == Source::Workspace {
             state.change_trust(|trust| trust.accept_connection_write(&config, &id, &file))?;
         }
-        id
+        spelaion_config::ConnectionKey::of(&config, &id)
     };
     state.reload().await;
-    Ok(id.to_string())
+    Ok(ConnectionKeyItem::from(&key))
 }
 
 /// A session setup the connection's sessions would refuse (ADR-037: a write on a read-only or
@@ -1294,15 +1564,18 @@ fn check_setup_before_saving(
 /// Checks whether an existing connection can be opened in the editor.
 #[command]
 async fn connection_editor_access(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<EditorAccessOutcome> {
-    let id = parse_id(&connection);
+    let (config, id) = state.connection_config(&connection).await?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let config = state.config.read().await;
     match Resolver::new(&config, &trust, &SystemBackend).check_editor_access(id.source, Some(&id)) {
         Ok(()) => Ok(EditorAccessOutcome::Ready),
-        Err(spelaion_config::ResolveError::Untrusted { .. }) => Ok(EditorAccessOutcome::Untrusted),
+        Err(spelaion_config::ResolveError::Untrusted { root }) => {
+            Ok(EditorAccessOutcome::Untrusted {
+                root: root.display().to_string(),
+            })
+        }
         Err(spelaion_config::ResolveError::Changed { root, change }) => {
             Ok(EditorAccessOutcome::Changed {
                 root: root.to_string_lossy().into_owned(),
@@ -1326,18 +1599,17 @@ async fn connection_editor_access(
 /// The form of an existing connection, to edit it.
 #[command]
 async fn connection_draft(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<EditedConnectionItem> {
-    let config = state.config.read().await;
-    let id = parse_id(&connection);
+    let (config, id) = state.connection_config(&connection).await?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     Resolver::new(&config, &trust, &SystemBackend)
         .check_editor_access(id.source, Some(&id))
         .map_err(|e| e.to_string())?;
     let entry = config
         .connection(&id)
-        .ok_or_else(|| format!("connection {connection} does not exist"))?;
+        .ok_or_else(|| format!("connection {} does not exist", connection.id))?;
     let revision = spelaion_config::connection_revision(entry).map_err(|e| e.to_string())?;
     Ok(EditedConnectionItem {
         draft: ConnectionDraft::from_entry(entry).into(),
@@ -1354,7 +1626,7 @@ async fn connection_draft(
 /// stored one) and reloads the configuration.
 #[command]
 async fn update_connection(
-    connection: String,
+    connection: ConnectionKeyItem,
     draft: ConnectionDraftItem,
     password: Option<String>,
     revision: String,
@@ -1363,13 +1635,12 @@ async fn update_connection(
     let draft = ConnectionDraft::try_from(draft)?;
     let password = password.map(Secret::new);
     {
-        let config = state.config.read().await;
-        let id = parse_id(&connection);
+        let (config, id) = state.connection_config(&connection).await?;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
         check_setup_before_saving(&state, &config, &file)?;
         let written = spelaion_config::update_connection_at_revision(
             &config,
-            &parse_id(&connection),
+            &id,
             &draft,
             password.as_ref(),
             &SystemBackend,
@@ -1403,18 +1674,13 @@ fn change_connection_engine(
 /// copy's own keychain entry by the core; a repository connection must be as trusted.
 #[command]
 async fn duplicate_connection(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<DuplicatedItem> {
     let duplicated = {
-        let config = state.config.read().await;
+        let (config, id) = state.connection_config(&connection).await?;
         state.change_trust(|trust| {
-            spelaion_config::duplicate_connection(
-                &config,
-                trust,
-                &parse_id(&connection),
-                &SystemBackend,
-            )
+            spelaion_config::duplicate_connection(&config, trust, &id, &SystemBackend)
         })?
     };
     state.reload().await;
@@ -1431,11 +1697,11 @@ async fn duplicate_connection(
 /// tabs follow. A connection in use is not moved: the UI disconnects it first.
 #[command]
 async fn move_connection(
-    connection: String,
+    connection: ConnectionKeyItem,
     folder: String,
     state: State<'_, AppState>,
 ) -> CmdResult<MovedItem> {
-    let id = parse_id(&connection);
+    let (config, id) = state.connection_config(&connection).await?;
     let in_use = state
         .sessions
         .lock()
@@ -1449,7 +1715,7 @@ async fn move_connection(
     state.tabs.flush().await.map_err(|e| e.to_string())?;
     let (moved, workspace) = {
         // Serialize the restriction switch with staging and moving the connection.
-        let config = state.config.write().await;
+        let _serialized = state.folders.write().await;
         let destination = spelaion_config::connection_move_target(&config, &id, &folder)
             .map_err(|e| e.to_string())?;
         if destination != id {
@@ -1468,7 +1734,7 @@ async fn move_connection(
         })?;
         let workspace = match id.source {
             Source::User => None,
-            Source::Workspace => Some(history_workspace(&config, Source::Workspace)),
+            Source::Workspace => Some(spelaion_config::repository_scope(&config)),
         };
         (moved, workspace)
     };
@@ -1478,7 +1744,7 @@ async fn move_connection(
     } else {
         state
             .history
-            .move_connection(workspace, connection, to.clone())
+            .move_connection(workspace, id.to_string(), to.clone())
             .await
     };
     state.reload().await;
@@ -1494,18 +1760,13 @@ async fn move_connection(
 /// The text Ctrl+C puts on the clipboard for a connection: without secrets or programs.
 #[command]
 async fn copy_connection(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<ClipboardConnectionItem> {
-    let config = state.config.read().await;
+    let (config, id) = state.connection_config(&connection).await?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let copied = spelaion_config::connection_clipboard_text(
-        &config,
-        &trust,
-        &parse_id(&connection),
-        &SystemBackend,
-    )
-    .map_err(|e| e.to_string())?;
+    let copied = spelaion_config::connection_clipboard_text(&config, &trust, &id, &SystemBackend)
+        .map_err(|e| e.to_string())?;
     Ok(ClipboardConnectionItem {
         text: copied.text,
         left_out: copied.left_out,
@@ -1516,7 +1777,7 @@ async fn copy_connection(
 #[command]
 async fn paste_connection(text: String, state: State<'_, AppState>) -> CmdResult<PastedItem> {
     let pasted = {
-        let config = state.config.read().await;
+        let config = state.config().await;
         spelaion_config::paste_connection(&config, &text, &SystemBackend)
             .map_err(|e| e.to_string())?
     };
@@ -1633,10 +1894,13 @@ async fn suggest_connection_name(
 
 /// Deletes a connection file and its stored password. The UI closes its sessions first.
 #[command]
-async fn delete_connection(connection: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn delete_connection(
+    connection: ConnectionKeyItem,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     {
-        let config = state.config.read().await;
-        spelaion_config::delete_connection(&config, &parse_id(&connection), &SystemBackend)
+        let (config, id) = state.connection_config(&connection).await?;
+        spelaion_config::delete_connection(&config, &id, &SystemBackend)
             .map_err(|e| e.to_string())?;
     }
     state.reload().await;
@@ -1676,7 +1940,7 @@ async fn tunnel_draft(
     personal: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<EditedTunnelItem> {
-    let config = state.config.read().await;
+    let config = state.config().await;
     let entry = config
         .tunnels
         .iter()
@@ -1704,13 +1968,14 @@ async fn test_tunnel(
     proxy_password: Option<String>,
     job: Channel<jobs::JobTicket>,
     on_step: Channel<Vec<TestStepItem>>,
+    window: tauri::Window,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<TunnelTestOutcome> {
     let draft = spelaion_config::TunnelDraft::from(draft);
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let resolved = {
-        let config = state.config.read().await;
+        let config = state.config().await;
         match Resolver::new(&config, &trust, &SystemBackend).resolve_tunnel_draft(&draft) {
             Err(spelaion_config::ResolveError::Untrusted { .. }) => {
                 return Ok(TunnelTestOutcome::Untrusted);
@@ -1730,7 +1995,11 @@ async fn test_tunnel(
         resolved,
         tunnel_passwords(passwords, proxy_password),
         &KnownHosts::for_user(&state.user_dir),
-        Arc::new(AppInteraction::new(app, state.pending.clone())),
+        Arc::new(AppInteraction::for_window(
+            app,
+            state.pending.clone(),
+            window.label(),
+        )),
         &observer,
         stop,
     )
@@ -1758,7 +2027,7 @@ async fn check_kube_editor(
     editor: KubeEditor,
     state: &AppState,
 ) -> CmdResult<spelaion_config::ResolvedKubernetes> {
-    let config = state.config.read().await;
+    let config = state.config().await;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     match editor {
         KubeEditor::Connection {
@@ -1766,7 +2035,14 @@ async fn check_kube_editor(
             editing,
             profile: Some(profile),
         } => {
-            let id = editing.as_deref().map(parse_id);
+            // An edited connection in its own folder (ADR-075); a new one in the shown folder.
+            let (config, id) = match &editing {
+                Some(key) => {
+                    let (config, id) = state.connection_config(key).await?;
+                    (config, Some(id))
+                }
+                None => (config.clone(), None),
+            };
             let resolver = spelaion_config::Resolver::new(&config, &trust, &SystemBackend);
             resolver
                 .check_editor_access(source_of(personal), id.as_ref())
@@ -1793,7 +2069,14 @@ async fn check_kube_editor(
             editing,
             profile: None,
         } => {
-            let id = editing.as_deref().map(parse_id);
+            // An edited connection in its own folder (ADR-075); a new one in the shown folder.
+            let (config, id) = match &editing {
+                Some(key) => {
+                    let (config, id) = state.connection_config(key).await?;
+                    (config, Some(id))
+                }
+                None => (config.clone(), None),
+            };
             spelaion_core::kube::editor_spec(
                 &config,
                 &trust,
@@ -1877,7 +2160,7 @@ async fn add_tunnel(
     let personal = draft.personal;
     let draft = spelaion_config::TunnelDraft::from(draft);
     let name = {
-        let config = state.config.read().await;
+        let config = state.config().await;
         let file = draft.to_file(&config).map_err(|e| e.to_string())?;
         let name = spelaion_config::add_tunnel(
             &config,
@@ -1892,7 +2175,7 @@ async fn add_tunnel(
         name
     };
     state.reload().await;
-    let config = state.config.read().await;
+    let config = state.config().await;
     let source = source_of(personal);
     config
         .tunnels
@@ -1915,7 +2198,7 @@ async fn update_tunnel(
 ) -> CmdResult<()> {
     let draft = spelaion_config::TunnelDraft::from(draft);
     {
-        let config = state.config.read().await;
+        let config = state.config().await;
         let written = spelaion_config::update_tunnel_at_revision(
             &config,
             source_of(personal),
@@ -1938,7 +2221,7 @@ async fn update_tunnel(
 #[command]
 async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>) -> CmdResult<()> {
     {
-        let config = state.config.read().await;
+        let config = state.config().await;
         spelaion_config::delete_tunnel(&config, source_of(personal), &name, &SystemBackend)
             .map_err(|e| e.to_string())?;
     }
@@ -1951,24 +2234,31 @@ async fn delete_tunnel(name: String, personal: bool, state: State<'_, AppState>)
 #[command]
 async fn connect(
     session: String,
-    connection: String,
+    connection: ConnectionKeyItem,
     password: Option<String>,
     remember: bool,
     editor: bool,
-    app: AppHandle,
+    window: tauri::Window,
     state: State<'_, AppState>,
 ) -> CmdResult<ConnectOutcome> {
+    let app = window.app_handle().clone();
     let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
     };
-    let id = parse_id(&connection);
+    let (config, id) = state.connection_config(&connection).await?;
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
-    let (resolved, history_workspace, definition) = {
-        let config = state.config.read().await;
-        let resolved = match Resolver::new(&config, &trust, &SystemBackend).resolve(&id) {
+    let (resolved, history_workspace, connection_folder, definition) = {
+        // A personal connection takes from every open folder only what tightens (ADR-075).
+        let open = state.open_configs().await;
+        let resolved = match Resolver::new(&config, &trust, &SystemBackend)
+            .with_open_folders(&config_refs(&open))
+            .resolve(&id)
+        {
             Ok(resolved) => resolved,
-            Err(spelaion_config::ResolveError::Untrusted { .. }) => {
-                return Ok(ConnectOutcome::Untrusted);
+            Err(spelaion_config::ResolveError::Untrusted { root }) => {
+                return Ok(ConnectOutcome::Untrusted {
+                    root: root.display().to_string(),
+                });
             }
             Err(spelaion_config::ResolveError::Changed { root, change }) => {
                 return Ok(ConnectOutcome::changed(root, change));
@@ -1978,10 +2268,12 @@ async fn connect(
             }
             Err(e) => return Err(e.to_string()),
         };
+        let key = spelaion_config::ConnectionKey::of(&config, &id);
         (
             resolved,
-            history_workspace(&config, id.source),
-            definition_now(&config, &trust, &id),
+            key.store_scope(),
+            key.folder().map(Path::to_path_buf),
+            definition_now(&config, &open, &trust, &id),
         )
     };
     let save_to = match &resolved.password {
@@ -1992,7 +2284,11 @@ async fn connect(
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        interaction: Arc::new(AppInteraction::for_window(
+            app.clone(),
+            state.pending.clone(),
+            window.label(),
+        )),
         password: password.clone(),
         read_only_session: false,
     };
@@ -2025,7 +2321,7 @@ async fn connect(
         };
     // Remember in the keychain only if it was asked for and the connection worked.
     if remember && let (Some(account), Some(secret)) = (save_to, &password) {
-        let config = state.config.read().await;
+        let config = state.config().await;
         let resolver = Resolver::new(&config, &trust, &SystemBackend);
         resolver
             .remember_password(&account, secret)
@@ -2063,10 +2359,14 @@ async fn connect(
     let old = sessions.insert(
         session,
         DesktopSession {
+            window: window.label().to_owned(),
             open,
             password,
             history_workspace,
+            folder: connection_folder,
             definition,
+            other_database: false,
+            explorer_parent: None,
         },
     );
     drop(sessions);
@@ -2091,16 +2391,17 @@ async fn connect_from_session(
     session: String,
     database: Option<String>,
     editor: bool,
-    app: AppHandle,
+    window: tauri::Window,
     state: State<'_, AppState>,
 ) -> CmdResult<FromSessionOutcome> {
+    let app = window.app_handle().clone();
     if source == session {
         return Err("the source and target sessions must differ".into());
     }
     let Some(folder) = state.folder.settled() else {
         return Err("the folder is changing; select a connection again".into());
     };
-    let (source_open, typed, history_workspace, opened) = {
+    let (source_open, typed, history_workspace, connection_folder, opened, other_database) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
             .get(&source)
@@ -2109,14 +2410,17 @@ async fn connect_from_session(
             source.open.clone(),
             source.password.clone(),
             source.history_workspace.clone(),
+            source.folder.clone(),
             source.definition.clone(),
+            source.other_database,
         )
     };
     let trust = TrustStore::load(&state.user_dir).map_err(|e| e.to_string())?;
     let (resolved, password, definition) = {
-        let config = state.config.read().await;
+        let config = state.config().await;
+        let open = state.open_configs().await;
         let id = &source_open.resolved.id;
-        let now = definition_now(&config, &trust, id);
+        let now = definition_now(&config, &open, &trust, id);
         let current = opened
             .as_ref()
             .map(|opened| spelaion_core::session_source::source_session(opened, now.as_ref()));
@@ -2128,9 +2432,17 @@ async fn connect_from_session(
                 // Edited since the source opened: the saved file, resolved as `connect` does.
                 // Whatever needs the user (trust, a change, variables, a password for another
                 // login) is left to that path.
-                let Ok(fresh) = Resolver::new(&config, &trust, &SystemBackend).resolve(id) else {
+                let Ok(fresh) = Resolver::new(&config, &trust, &SystemBackend)
+                    .with_open_folders(&config_refs(&open))
+                    .resolve(id)
+                else {
                     return Ok(FromSessionOutcome::ConnectAgain);
                 };
+                // A session on another database of the connection (ADR-074): the saved file
+                // would open its own database instead, so nothing is opened in its place.
+                if other_database {
+                    return Err("the connection was edited since this database was opened: collapse its row in the explorer and expand it again".into());
+                }
                 let carried = spelaion_core::session_source::carried_password(
                     &source_open.resolved,
                     &fresh,
@@ -2148,7 +2460,11 @@ async fn connect_from_session(
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        interaction: Arc::new(AppInteraction::for_window(
+            app.clone(),
+            state.pending.clone(),
+            window.label(),
+        )),
         password: password.clone(),
         read_only_session: false,
     };
@@ -2189,10 +2505,14 @@ async fn connect_from_session(
     sessions.insert(
         session,
         DesktopSession {
+            window: window.label().to_owned(),
             open,
             password,
             history_workspace,
+            folder: connection_folder,
             definition,
+            other_database,
+            explorer_parent: None,
         },
     );
     Ok(FromSessionOutcome::Connected { server_version })
@@ -2484,6 +2804,18 @@ fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     if state.quit.phase() == app_lifecycle::QuitPhase::Quitting {
         return;
     }
+    // Another window (SDB-30): its own page asks, about its own tabs only; quitting is the main
+    // window's alone.
+    if window.label() != windows::MAIN {
+        let label = window.label();
+        match state.windows.close_requested(label) {
+            windows::CloseDecision::Close => return,
+            windows::CloseDecision::AskThePage => {}
+        }
+        api.prevent_close();
+        let _ = windows::WindowCloseRequested {}.emit_to(window.app_handle(), label);
+        return;
+    }
     // A command holding the sessions means there are some: the UI decides. A lost session
     // counts here too: its tab may hold row edits not applied, which only the UI knows, and the
     // UI asks about those (its transaction is gone with its connection: `open_transactions`).
@@ -2492,24 +2824,93 @@ fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) {
         .try_lock()
         .map(|sessions| sessions.is_empty())
         .unwrap_or(false);
-    match state.quit.close_requested(no_sessions) {
+    // A connection window may hold work its page knows about (SDB-30): quitting asks it first.
+    let nothing_to_ask = no_sessions && state.windows.connection_windows().is_empty();
+    match state.quit.close_requested(nothing_to_ask) {
         app_lifecycle::CloseDecision::Close => return,
         app_lifecycle::CloseDecision::AskTheUi => {}
     }
     api.prevent_close();
-    let _ = QuitRequested {}.emit(window.app_handle());
+    // To the main window only: another window's page never answers for quitting.
+    let _ = QuitRequested {}.emit_to(window.app_handle(), windows::MAIN);
+}
+
+/// A window is gone (SDB-30): a quit that waited for it hears so, the results windows it owned
+/// go with it, the sessions it opened close (none if its page already closed them), and the tab
+/// whose results it showed shows them again. The main window going is the app quitting.
+fn on_window_destroyed(window: &tauri::Window) {
+    let label = window.label().to_owned();
+    let app = window.app_handle().clone();
+    if label == windows::MAIN {
+        // The app quits with its main window: a results window left alone never keeps it.
+        app.exit(0);
+        return;
+    }
+    let state = app.state::<AppState>();
+    let kind = state.windows.kind(&label);
+    for owned in state.windows.closed(&label) {
+        if let Some(results) = app.get_webview_window(&owned) {
+            let _ = results.destroy();
+        }
+    }
+    if let Some(windows::WindowKind::Results { owner, tab }) = kind {
+        let _ = windows::ResultsWindowClosed { tab }.emit_to(&app, owner.as_str());
+    }
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        close_window_sessions(&state, &label).await;
+    });
+}
+
+/// Closes every session the window `label` opened, and only those, as `disconnect` closes one,
+/// and frees the results of its tabs (SDB-30).
+async fn close_window_sessions(state: &AppState, label: &str) {
+    let removed: Vec<(String, DesktopSession)> = {
+        let mut sessions = state.sessions.lock().await;
+        let keys: Vec<String> = sessions
+            .iter()
+            .filter(|(_, session)| session.window == label)
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.into_iter()
+            .filter_map(|key| sessions.remove(&key).map(|session| (key, session)))
+            .collect()
+    };
+    for (key, session) in removed {
+        session.open.session.stop_paused_run();
+        state.result_tabs.close_editor(&key);
+        if let Ok(open) = Arc::try_unwrap(session.open) {
+            open.close().await;
+        }
+    }
 }
 
 #[command]
 async fn disconnect(session: String, state: State<'_, AppState>) -> CmdResult<()> {
-    let removed = state.sessions.lock().await.remove(&session);
-    // A run waiting for an answer after an error stops: its tab is gone (ADR-035). A run
-    // that is executing goes on to its end, as before.
-    if let Some(open) = &removed {
+    // Its dashboard stops with it (SDB-192).
+    state.dashboards.stop(&session);
+    let (removed, children) = {
+        let mut sessions = state.sessions.lock().await;
+        let removed = sessions.remove(&session);
+        // The other databases its explorer opened close with it (ADR-074, SDB-504).
+        let children: Vec<String> = sessions
+            .iter()
+            .filter(|(_, s)| s.explorer_parent.as_deref() == Some(session.as_str()))
+            .map(|(key, _)| key.clone())
+            .collect();
+        let children: Vec<DesktopSession> = children
+            .iter()
+            .filter_map(|key| sessions.remove(key))
+            .collect();
+        (removed, children)
+    };
+    for open in removed.into_iter().chain(children) {
+        // A run waiting for an answer after an error stops: its tab is gone (ADR-035). A run
+        // that is executing goes on to its end, as before.
         open.open.session.stop_paused_run();
-    }
-    if let Some(open) = removed.and_then(|o| Arc::try_unwrap(o.open).ok()) {
-        open.close().await;
+        if let Ok(open) = Arc::try_unwrap(open.open) {
+            open.close().await;
+        }
     }
     Ok(())
 }
@@ -2725,6 +3126,13 @@ async fn start_script(
             .await?,
     );
     let _ = on_event.send(placed.started(page_sort));
+    // Whether to roll back only failed statements in a transaction (ADR-086): the user's
+    // setting, read by the core for every run; one that cannot be read is off.
+    let statement_savepoints = state
+        .history
+        .script_preferences()
+        .await
+        .is_ok_and(|p| p.statement_savepoints);
     let events = state.history.run_script_in_context(
         &open.session,
         &sql,
@@ -2750,6 +3158,7 @@ async fn start_script(
                 Some(seconds) => Some(std::time::Duration::from_secs(seconds.into())),
                 None => open.resolved.statement_timeout,
             },
+            statement_savepoints,
         },
     );
     // A big result streams hundreds of batches a second: the window gets its row count a few
@@ -3082,10 +3491,10 @@ async fn substitute_variables(
 /// A connection's variables, by name (SDB-383): local values, kept in the local store.
 #[command]
 async fn connection_variables(
-    connection: String,
+    connection: ConnectionKeyItem,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<VariableItem>> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     Ok(state
         .history
         .connection_variables(workspace, connection)
@@ -3100,12 +3509,12 @@ async fn connection_variables(
 /// a value that cannot be one.
 #[command]
 async fn set_connection_variable(
-    connection: String,
+    connection: ConnectionKeyItem,
     name: String,
     value: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    let workspace = connection_workspace(&state, &connection).await?;
+    let (workspace, connection) = connection_scope(&state, &connection).await?;
     state
         .history
         .set_connection_variable(workspace, connection, name, value)
@@ -3557,17 +3966,26 @@ async fn open_read_session(
     app: &AppHandle,
     source: &str,
 ) -> CmdResult<(Arc<OpenConnection>, Arc<OpenConnection>)> {
-    let (source_open, password) = {
+    let (source_open, password, window) = {
         let sessions = state.sessions.lock().await;
         let source = sessions
             .get(source)
             .ok_or("the connection of this export is closed")?;
-        (source.open.clone(), source.password.clone())
+        (
+            source.open.clone(),
+            source.password.clone(),
+            source.window.clone(),
+        )
     };
     let options = OpenOptions {
         tunnels: state.tunnels.clone(),
         known_hosts: KnownHosts::for_user(&state.user_dir),
-        interaction: Arc::new(AppInteraction::new(app.clone(), state.pending.clone())),
+        // Its SSH questions go to the source session's window (SDB-522, ADR-083).
+        interaction: Arc::new(AppInteraction::for_window(
+            app.clone(),
+            state.pending.clone(),
+            &window,
+        )),
         password,
         // Only reads are ever run there (ADR-034).
         read_only_session: true,
@@ -4406,22 +4824,24 @@ async fn column_top_values(
 /// with (the connection's engine: the tab may not be connected yet).
 async fn filtered_table(
     state: &AppState,
-    connection: String,
+    connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
 ) -> CmdResult<(spelaion_core::FilteredTable, Arc<dyn Dialect>)> {
-    let id = parse_id(&connection);
-    let config = state.config.read().await;
+    let (config, id) = state.connection_config(&connection).await?;
     let entry = config
         .connection(&id)
-        .ok_or_else(|| format!("unknown connection: {connection}"))?;
+        .ok_or_else(|| format!("unknown connection: {}", connection.id))?;
     let dialect =
         spelaion_core::dialect_of(entry.file.engine).ok_or("no driver for this engine")?;
-    let workspace = history_workspace(&config, id.source);
+    let workspace = spelaion_config::ConnectionKey::of(&config, &id).store_scope();
     Ok((
         spelaion_core::FilteredTable {
             workspace,
-            connection,
+            connection: id.to_string(),
+            // The other database of the connection the table is in (ADR-074, SDB-505).
+            database: database.filter(|d| !d.is_empty()),
             schema,
             name,
         },
@@ -4435,12 +4855,13 @@ async fn filtered_table(
 /// filter.
 #[command]
 async fn table_filters(
-    connection: String,
+    connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
     state: State<'_, AppState>,
 ) -> CmdResult<TableFiltersItem> {
-    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    let (table, dialect) = filtered_table(&state, connection, database, schema, name).await?;
     state
         .history
         .table_filters(dialect.as_ref(), table)
@@ -4452,13 +4873,14 @@ async fn table_filters(
 /// Remembers a filter the tab just used, checked by the core first.
 #[command]
 async fn record_table_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
     filter: String,
     state: State<'_, AppState>,
 ) -> CmdResult<TableFiltersItem> {
-    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    let (table, dialect) = filtered_table(&state, connection, database, schema, name).await?;
     state
         .history
         .record_table_filter(dialect.as_ref(), table, &filter)
@@ -4470,13 +4892,14 @@ async fn record_table_filter(
 /// Takes one filter out of a table's history.
 #[command]
 async fn forget_table_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
     filter: String,
     state: State<'_, AppState>,
 ) -> CmdResult<TableFiltersItem> {
-    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    let (table, dialect) = filtered_table(&state, connection, database, schema, name).await?;
     state
         .history
         .forget_table_filter(dialect.as_ref(), table, &filter)
@@ -4488,13 +4911,14 @@ async fn forget_table_filter(
 /// Saves the filter a table's tab opens with (checked by the core), or drops it (`None`).
 #[command]
 async fn set_table_default_filter(
-    connection: String,
+    connection: ConnectionKeyItem,
+    database: Option<String>,
     schema: String,
     name: String,
     filter: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<TableFiltersItem> {
-    let (table, dialect) = filtered_table(&state, connection, schema, name).await?;
+    let (table, dialect) = filtered_table(&state, connection, database, schema, name).await?;
     state
         .history
         .set_table_default_filter(dialect.as_ref(), table, filter.as_deref())
@@ -6320,6 +6744,11 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             diagram::diagram_layout,
             diagram::save_diagram_text,
             diagram::close_diagram,
+            diagram::saved_diagrams,
+            diagram::open_saved_diagram,
+            diagram::save_diagram,
+            diagram::rename_saved_diagram,
+            diagram::delete_saved_diagram,
             schema_compare::schema_compare_support,
             schema_compare::compare_schemas,
             schema_compare::schema_compare_script,
@@ -6348,6 +6777,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             mcp::mcp_access,
             mcp::audit_events,
             mcp::audit_tools,
+            mcp::audit_folders,
             mcp::audit_sessions,
             mcp::export_audit,
             mcp::clear_audit,
@@ -6399,6 +6829,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             time_zones,
             get_map_preferences,
             set_map_preferences,
+            tiles::map_tile,
+            tiles::openstreetmap_tiles,
+            tiles::open_tile_attribution,
             get_side_panel,
             set_side_panel,
             column_map,
@@ -6575,6 +7008,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             kube_ports,
             connection_import::import_connections,
             open_workspace,
+            add_folder,
+            close_folder,
+            list_folders,
             trust_workspace,
             accept_change,
             set_user_vars,
@@ -6599,11 +7035,17 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_history_enabled,
             connect,
             connect_from_session,
+            explorer_databases::connection_databases,
+            explorer_databases::connect_database,
+            explorer_databases::change_tab_database,
             disconnect,
             list_processes,
             control_process,
             list_locks,
             server_settings,
+            dashboard::start_dashboard,
+            dashboard::set_dashboard_visible,
+            dashboard::stop_dashboard,
             table_stats,
             run_script,
             answer_script_error,
@@ -6654,6 +7096,13 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             quit_asking,
             quit_cancelled,
             quit_app,
+            windows::window_context,
+            windows::open_connection_window,
+            windows::open_results_window,
+            windows::close_results_window,
+            windows::close_window,
+            windows::window_stays_open,
+            windows::close_other_windows,
         ])
         .typ::<WindowErrorItem>()
         .events(tauri_specta::collect_events![
@@ -6667,7 +7116,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             plugins::PluginInstallChanged,
             plugins::PluginsChanged,
             launch::LaunchRequested,
-            update_state::UpdateChanged
+            update_state::UpdateChanged,
+            windows::WindowCloseRequested,
+            windows::ResultsWindowClosed
         ])
 }
 
@@ -6701,9 +7152,44 @@ fn open_main_window(
         .app
         .windows
         .iter()
-        .find(|window| window.label == "main")
+        .find(|window| window.label == windows::MAIN)
         .ok_or("tauri.conf.json has no \"main\" window")?;
-    let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
+    build_window(app.handle(), config, interface_size)
+}
+
+/// Opens another window (SDB-30, ADR-083), registered as `label`: the main window's
+/// configuration with its own label and title. It loads the same page, which asks the core
+/// what it shows (`window_context`).
+pub(crate) fn open_window(
+    app: &AppHandle,
+    label: &str,
+    title: &str,
+    interface_size: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == windows::MAIN)
+        .ok_or("tauri.conf.json has no \"main\" window")?
+        .clone();
+    config.label = label.to_owned();
+    config.title = title.to_owned();
+    config.x = None;
+    config.y = None;
+    build_window(app, &config, interface_size)
+}
+
+/// Builds a window from `config`: every window of the app is built here, so each one gets the
+/// same webview switches (WebView2 refuses a second webview with other options over the same
+/// data folder), the clipboard access on Linux, the smoke test's place, and the interface size.
+fn build_window(
+    app: &AppHandle,
+    config: &tauri::utils::config::WindowConfig,
+    interface_size: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let window = tauri::WebviewWindowBuilder::from_config(app, config)?;
     #[cfg(target_os = "linux")]
     let window = window.enable_clipboard_access();
     // The smoke test's WebView2 switches (its debugging port), only in a build with the `e2e`
@@ -6862,16 +7348,15 @@ pub fn run() {
         .plan
         .as_ref()
         .map(|plan| plan.display().to_string());
-    // Initial folder: the command line's, or the last one opened.
-    let workspace = launch_request
-        .folder
-        .clone()
-        .or_else(|| {
-            std::fs::read_to_string(last_workspace_file(&user_dir))
-                .ok()
-                .map(|s| PathBuf::from(s.trim()))
-        })
-        .filter(|p| p.is_dir());
+    // Initial folders: the ones open when the app last ran (ADR-075), each trusted or not as it
+    // was, and the command line's added to them (it closes nothing, so nothing is asked); it is
+    // the one shown.
+    let mut initial = open_folders::remembered(&user_dir);
+    if let Some(folder) = &launch_request.folder {
+        initial.push(folder.clone());
+    }
+    let folders = open_folders::OpenFolders::open(&user_dir, &initial);
+    let workspace = folders.folders().last().map(|folder| folder.path.clone());
     // The folder is open already and the plan has its own way: the rest goes to the page.
     let launch_slot = {
         let mut item = launch::LaunchRequestItem::from(&launch_request);
@@ -6885,7 +7370,6 @@ pub fn run() {
             taken: false,
         }
     };
-    let config = load(workspace.as_deref(), &user_dir);
     let history = open_history(&user_dir, &log);
     // The folder opened at start is the most recent one (SDB-397).
     if let Some(folder) = &workspace {
@@ -6906,11 +7390,11 @@ pub fn run() {
     // normal size.
     let interface_size = tauri::async_runtime::block_on(history.interface_size())
         .unwrap_or(spelaion_core::DEFAULT_INTERFACE_SIZE);
+    let tile_cache = Arc::new(tiles::cache(&user_dir));
     let state = AppState {
         user_dir,
-        workspace: RwLock::new(workspace),
+        folders: RwLock::new(folders),
         folder: app_lifecycle::Folder::default(),
-        config: RwLock::new(config),
         engines: std::sync::RwLock::new(engines),
         plugins: plugins::PluginOps::default(),
         tunnels: Arc::new(TunnelPool::new()),
@@ -6927,7 +7411,10 @@ pub fn run() {
         quit: app_lifecycle::Quit::default(),
         jobs: jobs::Jobs::new(),
         diagrams: std::sync::Mutex::new(HashMap::new()),
+        tiles: tile_cache,
         comparisons: std::sync::Mutex::new(HashMap::new()),
+        dashboards: dashboard::Dashboards::default(),
+        windows: windows::Windows::new(),
     };
 
     let typed = builder.invoke_handler();
@@ -6944,10 +7431,10 @@ pub fn run() {
                 _ => typed(invoke),
             })
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                on_close_requested(window, api);
-            }
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => on_close_requested(window, api),
+            tauri::WindowEvent::Destroyed => on_window_destroyed(window),
+            _ => {}
         })
         .setup(move |app| {
             builder.mount_events(app);
@@ -6990,4 +7477,134 @@ pub fn run() {
             tauri::async_runtime::block_on(tunnels.close_all());
         }
     });
+}
+
+#[cfg(test)]
+mod connection_identity_tests {
+    use super::*;
+
+    /// Two repositories that both have a connection `orders`, and the personal layer.
+    fn two_folders(name: &str) -> (Arc<Config>, Arc<Config>, PathBuf) {
+        let base = std::env::temp_dir().join(format!("spelaion-two-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let user = base.join("user");
+        for (dir, file, database) in [
+            (base.join("a/.spelaion/connections"), "orders.toml", "a.db"),
+            (base.join("b/.spelaion/connections"), "orders.toml", "b.db"),
+            (user.join("connections"), "local.toml", "local.db"),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(file),
+                format!("schema_version = 1\nengine = \"sqlite\"\ndatabase = '{database}'\n"),
+            )
+            .unwrap();
+        }
+        let a = Arc::new(load(Some(&base.join("a")), &user));
+        let b = Arc::new(load(Some(&base.join("b")), &user));
+        (a, b, base)
+    }
+
+    /// ADR-075 (SDB-502): with two folders open that both have `orders`, each identity reaches
+    /// its own folder's connection, a folder that is not open is refused, and the explorer lists
+    /// both `orders` (each with its folder) and the personal connection once.
+    #[test]
+    fn two_folders_with_the_same_id_each_reach_their_own_connection() {
+        let (a, b, base) = two_folders("same-id");
+        let open = vec![a.clone(), b.clone()];
+        let root = |config: &Config| spelaion_config::repository_scope(config);
+        for config in [&a, &b] {
+            let found = open_folder_config(&open, &root(config)).unwrap();
+            assert!(Arc::ptr_eq(&found, config));
+            let id = connection_in(&found, &key(Some(&root(config)), "orders")).unwrap();
+            // Its own file: its own database.
+            let file = &found.connection(&id).unwrap().file_path;
+            assert!(
+                file.starts_with(config.workspace_root.as_ref().unwrap()),
+                "{}",
+                file.display()
+            );
+        }
+        let refused = open_folder_config(&open[..1], &root(&b)).unwrap_err();
+        assert!(refused.contains("is not open"), "{refused}");
+
+        let listed = listed_connections(&open, &a);
+        let ids: Vec<(String, String)> = listed
+            .iter()
+            .map(|(config, entry)| (root(config), entry.id.to_string()))
+            .filter(|(_, id)| id == "orders")
+            .collect();
+        assert_eq!(
+            ids,
+            [(root(&a), "orders".into()), (root(&b), "orders".into())]
+        );
+        let personal = listed
+            .iter()
+            .filter(|(_, e)| e.id.source == Source::User)
+            .count();
+        assert_eq!(personal, 1, "the personal connection once");
+        // One folder open: what it lists is today's list.
+        assert_eq!(
+            listed_connections(&open[..1], &a).len(),
+            a.connections.len()
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A repository with a connection `orders`, and a personal `local` beside it.
+    fn folders(name: &str) -> (PathBuf, PathBuf) {
+        let base =
+            std::env::temp_dir().join(format!("spelaion-identity-{name}-{}", std::process::id()));
+        let repo = base.join("repo");
+        let user = base.join("user");
+        for (dir, file) in [
+            (repo.join(".spelaion/connections"), "orders.toml"),
+            (user.join("connections"), "local.toml"),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(file),
+                "schema_version = 1\nname = \"N\"\nengine = \"sqlite\"\ndatabase = 'n.db'\n",
+            )
+            .unwrap();
+        }
+        (repo, user)
+    }
+
+    fn key(folder: Option<&str>, id: &str) -> ConnectionKeyItem {
+        ConnectionKeyItem {
+            folder: folder.map(str::to_owned),
+            id: id.to_owned(),
+        }
+    }
+
+    /// ADR-075 (SDB-495): a command takes a connection by its folder and its id, and a pair
+    /// that names another folder, or no connection, is refused.
+    #[test]
+    fn a_command_takes_a_connection_by_its_folder_and_its_id() {
+        let (repo, user) = folders("commands");
+        let config = load(Some(&repo), &user);
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        let root = std::fs::canonicalize(&repo).unwrap().display().to_string();
+        let orders = connection_in(&config, &key(Some(&root), "orders")).unwrap();
+        assert_eq!(orders.to_string(), "orders");
+        let local = connection_in(&config, &key(None, "~/local")).unwrap();
+        assert_eq!(local.to_string(), "~/local");
+        // The same id in another folder, a repository connection without its folder, and a
+        // personal one given a folder are not this connection.
+        for wrong in [
+            key(Some("/elsewhere/service-b"), "orders"),
+            key(None, "orders"),
+            key(Some(&root), "~/local"),
+        ] {
+            let error = connection_in(&config, &wrong).unwrap_err();
+            assert!(error.contains("another folder"), "{error}");
+        }
+        assert!(
+            connection_in(&config, &key(Some(&root), "missing"))
+                .unwrap_err()
+                .contains("unknown connection")
+        );
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
 }

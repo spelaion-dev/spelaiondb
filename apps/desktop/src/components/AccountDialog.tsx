@@ -3,6 +3,7 @@
 // and Apply runs exactly that script. The password is sent once, on Apply, and never shown.
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { listedConnection, type ConnectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type {
@@ -43,9 +44,9 @@ export function usePrincipalActions(session: string, enabled: boolean): Principa
   return actions;
 }
 
-export function AccountDialog({ session, connectionId, request, logins, onClose, onDone }: {
+export function AccountDialog({ session, identity, request, logins, onClose, onDone }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   request: AccountAction;
   /** SQL Server logins the explorer lists, offered for a new user. */
   logins: string[];
@@ -54,7 +55,7 @@ export function AccountDialog({ session, connectionId, request, logins, onClose,
   onDone(): void;
 }) {
   const { t } = useTranslation("shell");
-  const connection = useApp((s) => s.connections.find((c) => c.id === connectionId));
+  const connection = useApp((s) => listedConnection(s.connections, identity));
   const engine = connection?.engine === "mariadb" ? "mysql" : connection?.engine ?? "";
   const kind = request.action === "create" ? request.kind : request.target.kind;
   const [name, setName] = useState("");
@@ -146,7 +147,7 @@ export function AccountDialog({ session, connectionId, request, logins, onClose,
 
   function openInEditor() {
     if (!ready || preview.kind !== "ready" || withPassword) return;
-    const tab = useApp.getState().addTab(connectionId, preview.value.sql);
+    const tab = useApp.getState().addTab(identity, preview.value.sql);
     connectTabFromExplorer(tab, session);
     onClose();
   }

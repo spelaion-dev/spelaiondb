@@ -5,6 +5,12 @@
 //! come from the personal layer, then the team's, then the built-in one. Its safeguards only
 //! add up across layers: no file can switch one off, so Production always confirms data
 //! changes. Every decision is made here and in the core; the app only shows the result.
+//!
+//! With several folders open (ADR-075), a folder's connection sees its own folder's types and
+//! the user's, as with one folder. A personal connection sees every open, trusted folder's
+//! ([`ConnectionTypes::load_open`]): their safeguards add up, looks come from the user, then
+//! the first open folder that defines the type, and any folder whose file does not load, or
+//! changed since it was trusted, refuses the typed personal connections it touches.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -170,20 +176,36 @@ pub struct ConnectionTypes {
     types: Vec<ConnectionType>,
     /// Layers whose file does not load.
     broken: Vec<ConfigError>,
-    /// The team's file is not as the user trusted it: the types this change touches wait for
-    /// a review.
-    review: Option<(PathBuf, ItemChange, BTreeSet<String>)>,
+    /// A team's file is not as the user trusted it (one per folder): the types its change
+    /// touches wait for a review.
+    review: Vec<(PathBuf, ItemChange, BTreeSet<String>)>,
 }
 
 impl ConnectionTypes {
     /// The types the app and the resolver use: built-in, the team's (only from a trusted
     /// repository) and the user's.
     pub fn load(config: &Config, trust: &TrustStore) -> Self {
+        Self::load_open(&[config], config, trust)
+    }
+
+    /// The types a personal connection sees with `folders` open (ADR-075), in the order they
+    /// were opened, each loaded alone with the personal layer: every trusted folder's team
+    /// types and `user`'s personal ones (every folder loads the same personal layer). With one
+    /// folder this is [`ConnectionTypes::load`]. Never for a folder's connection, which sees
+    /// only its own folder.
+    pub fn load_open(folders: &[&Config], user: &Config, trust: &TrustStore) -> Self {
         let mut out = Self::default();
         let mut layers: Vec<(Layer, &ConnectionTypesFile)> = Vec::new();
-        if let Some(root) = config.workspace_root.as_deref()
-            && trust.is_trusted(root)
-        {
+        let mut seen: Vec<&std::path::Path> = Vec::new();
+        for config in folders {
+            let Some(root) = config.workspace_root.as_deref() else {
+                continue;
+            };
+            // The same folder twice is one folder.
+            if seen.contains(&root) || !trust.is_trusted(root) {
+                continue;
+            }
+            seen.push(root);
             match &config.team_types {
                 TypesLayer::Broken(e) => out.broken.push(e.clone()),
                 TypesLayer::Loaded { file, .. } => layers.push((Layer::Team, file)),
@@ -191,10 +213,10 @@ impl ConnectionTypes {
             }
             if let Err(change) = trust.check_connection_types(root, config) {
                 let touched = touched_types(&change);
-                out.review = Some((root.to_path_buf(), change, touched));
+                out.review.push((root.to_path_buf(), change, touched));
             }
         }
-        match &config.user_types {
+        match &user.user_types {
             TypesLayer::Broken(e) => out.broken.push(e.clone()),
             TypesLayer::Loaded { file, .. } => layers.push((Layer::Personal, file)),
             TypesLayer::Absent => {}
@@ -246,8 +268,10 @@ impl ConnectionTypes {
             .into());
         }
         let id = type_id(label);
-        if let Some((root, change, touched)) = &self.review
-            && touched.contains(&id)
+        if let Some((root, change, _)) = self
+            .review
+            .iter()
+            .find(|(_, _, touched)| touched.contains(&id))
         {
             return Err(ResolveError::Changed {
                 root: root.clone(),
@@ -279,15 +303,19 @@ fn merge(layers: &[(Layer, &ConnectionTypesFile)]) -> Vec<ConnectionType> {
     ids.into_iter()
         .map(|id| {
             let built_in = BUILT_IN.iter().find(|b| b.id == id);
-            let defined = |layer: Layer| {
+            let defined = |layer: Layer| -> Vec<&ConnectionTypeConfig> {
                 layers
                     .iter()
-                    .find(|(l, _)| *l == layer)
-                    .and_then(|(_, file)| file.types.get(&id))
+                    .filter(|(l, _)| *l == layer)
+                    .filter_map(|(_, file)| file.types.get(&id))
+                    .collect()
             };
-            let team = defined(Layer::Team);
-            let personal = defined(Layer::Personal);
-            // Looks: personal, then team, then built-in.
+            // Every open folder's definition, in the order the folders were opened (one with
+            // one folder open).
+            let teams = defined(Layer::Team);
+            let team = teams.first().copied();
+            let personal = defined(Layer::Personal).first().copied();
+            // Looks: personal, then the first folder that defines it, then built-in.
             let pick = |field: fn(&ConnectionTypeConfig) -> &Option<String>| {
                 personal
                     .and_then(|p| field(p).clone())
@@ -305,17 +333,23 @@ fn merge(layers: &[(Layer, &ConnectionTypesFile)]) -> Vec<ConnectionType> {
                     })
                     .unwrap_or_default()
             };
-            let inherited_mask_columns = patterns(team);
+            let mut inherited_mask_columns: Vec<String> = Vec::new();
+            for pattern in teams.iter().flat_map(|t| patterns(Some(t))) {
+                if !inherited_mask_columns.contains(&pattern) {
+                    inherited_mask_columns.push(pattern);
+                }
+            }
             let mut mask_columns = inherited_mask_columns.clone();
             for pattern in patterns(personal) {
                 if !mask_columns.contains(&pattern) {
                     mask_columns.push(pattern);
                 }
             }
-            let inherited = built_in
-                .map(|b| b.safeguards)
-                .unwrap_or_default()
-                .tighten(team.map(Safeguards::of).unwrap_or_default());
+            // What every folder asks for, together: no folder can take one away (ADR-029).
+            let inherited = teams.iter().fold(
+                built_in.map(|b| b.safeguards).unwrap_or_default(),
+                |all, team| all.tighten(Safeguards::of(team)),
+            );
             ConnectionType {
                 name: pick(|c| &c.name)
                     .map(|n| n.trim().to_string())
@@ -450,7 +484,7 @@ mod tests {
                 std::path::Path::new("connection-types.toml"),
                 "bad",
             )],
-            review: None,
+            review: Vec::new(),
         };
         assert!(types.resolve(Some("staging")).is_err());
         assert!(types.resolve(Some("prod")).is_err());

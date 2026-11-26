@@ -223,6 +223,7 @@ mod tests {
         FilteredTable {
             workspace: "/repo".into(),
             connection: "shop".into(),
+            database: None,
             schema: "public".into(),
             name: "orders".into(),
         }

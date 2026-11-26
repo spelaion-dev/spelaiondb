@@ -5,8 +5,11 @@ import type { EditorActionId } from "./editorActions";
 import { create } from "zustand";
 import { sameTag } from "./connectionInfo";
 import type { BookmarkItem, ColumnFilterItem, ColumnItem, ConnectionItem, FileFormatItem, OnErrorItem, RestoreNoteItem, ScriptSummaryItem, SkippedSetupItem, TransactionStatusItem, WorkspaceInfo } from "./api";
-import type { DiagramScopeItem_Deserialize, IdleTransactionRolledBack, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
+import type { DiagramScopeItem_Deserialize, IdleTransactionRolledBack, OpenFolderItem, RestoredTabItem, ResultEndItem, RunStateItem } from "./bindings";
 import { DISCONNECTED, withReadOnly, withTransaction, type TabConnection } from "./tabState";
+import { SINGLE, show, survivingPane, withoutTabs, type SplitLayout } from "./splitView";
+import { sessionPrefix } from "./windowContext";
+import { listedConnection, tabConnection, tabOnConnection, withConnection, type ConnectionKey } from "./connectionIdentity.ts";
 
 export interface ResultMeta {
   id: number;
@@ -120,6 +123,13 @@ export interface Tab {
   /** The results panel fills the tab, hiding the SQL editor (UI only, never kept). */
   resultsMaximized?: boolean;
   connectionId: string | null;
+  /** The other database of its connection it is on (ADR-074, SDB-505): a PostgreSQL connection
+   *  that opens several. Absent or null for the connection's own. Kept with the tab, so a
+   *  restored tab connects to it when run. Changed only once the core opened it. */
+  database?: string | null;
+  /** The folder of its connection (ADR-075): null for a personal connection, or none. A tab's
+   *  connection is the pair (`tabConnection`), never its id alone. */
+  connectionFolder: string | null;
   /** Its connection, one state (SDB-371): disconnected (and why it failed), connecting,
    *  connected (version, transaction, read-only for this session), lost, idle-closed. Read only
    *  through the selectors of `tabState.ts`; changed with `setConnection` and its transitions. */
@@ -141,8 +151,15 @@ export interface Tab {
   /** An ER diagram (ADR-046) of a schema, chosen tables or one table and its neighbours, read
    *  from the catalog on this tab's own session. */
   diagram?: DiagramScopeItem_Deserialize;
+  /** The saved diagram (ADR-084) this diagram tab shows, once it has been saved or opened. */
+  savedDiagram?: { id: number; name: string };
+  /** The diagram tab's arrangement changed since it was saved or opened: closing asks first. */
+  diagramModified?: boolean;
   /** A local saved plan, opened without executing SQL. */
   plan?: { path: string };
+  /** The label of the window its results are shown in (SDB-30), until the core says that
+   *  window closed (`ResultsWindowClosed`, also after Re-attach results). UI only, never kept. */
+  resultsWindow?: string;
   /** Pending row changes are kept in the mounted editor until saved or discarded. */
   pendingEdits?: boolean;
   savingEdits?: boolean;
@@ -209,6 +226,7 @@ export const DEFAULT_PAGE_SIZE = 500;
  */
 export interface TabSnapshot {
   connectionId: string | null;
+  connectionFolder: string | null;
   sql: string;
   title?: string;
   pinned?: boolean;
@@ -230,6 +248,7 @@ export function snapshotOf(tab: Tab): TabSnapshot | null {
   if (tab.table || tab.tableDetails || tab.plan || tab.diagram) return null;
   return {
     connectionId: tab.connectionId,
+    connectionFolder: tab.connectionFolder,
     sql: tab.sql,
     ...(tab.title ? { title: tab.title } : {}),
     ...(tab.pinned ? { pinned: true } : {}),
@@ -262,6 +281,36 @@ function nextActive(tabs: Tab[], recent: string[], current: string | null): stri
 
 let tabCounter = 0;
 
+/** A tab the core restored (ADR-036): disconnected, with its text and nothing to run. */
+function restoredTab({ tab: kept, notes }: RestoredTabItem): Tab {
+  tabCounter += 1;
+  const file = kept.file ?? null;
+  return {
+    id: `${sessionPrefix()}tab-${tabCounter}`,
+    number: tabCounter,
+    title: kept.title ?? undefined,
+    pinned: kept.pinned || undefined,
+    connectionId: kept.connection ?? null,
+    database: kept.connection ? (kept.database ?? null) : null,
+    connectionFolder: kept.connection ? kept.folder ?? null : null,
+    connectionState: DISCONNECTED,
+    sql: kept.text,
+    run: null,
+    snippetName: kept.snippetName ?? undefined,
+    runOptions: kept.onError || kept.timeoutSeconds ? { onError: kept.onError ?? null, timeoutSeconds: kept.timeoutSeconds ?? null } : undefined,
+    file: file
+      ? {
+          path: file.path,
+          name: file.path.split(/[\\/]/).pop() ?? file.path,
+          format: file.format,
+          hash: file.hash ?? null,
+          savedText: file.modified ? null : kept.text,
+        }
+      : undefined,
+    restoreNotes: notes.length > 0 ? notes : undefined,
+  };
+}
+
 /** The text a new script starts with (SDB-384); empty for none. The core keeps and checks it;
  *  `snippetStore.ts` puts here what the core answered. */
 let newScriptTemplate = "";
@@ -273,12 +322,12 @@ export type ConnectionDialog =
   /** `imports`: open on the list of clients to import connections from (SDB-446). */
   | { kind: "add"; imports?: boolean }
   /** `notice`: shown above the form, such as "this is the copy just made". */
-  | { kind: "edit"; id: string; notice?: string };
+  | { kind: "edit"; connection: ConnectionKey; notice?: string };
 
 /** An object to show in the explorer: its connection expands (if it is connected there), then
  *  its schema and the folder holding the object, which is scrolled into view. */
 export interface ExplorerReveal {
-  connectionId: string;
+  connection: ConnectionKey;
   schema?: string;
   name?: string;
   /** Asked by the user (a bookmark): the connection connects if it is not yet. */
@@ -330,9 +379,15 @@ const MAX_CLOSED_TABS = 20;
 
 interface AppStore {
   workspace: WorkspaceInfo | null;
+  /** The folders the window holds open (ADR-075), in the order they were opened, each with
+   *  its own trust and configuration problems (`list_folders`). */
+  openFolders: OpenFolderItem[];
   connections: ConnectionItem[];
   tabs: Tab[];
   activeTab: string | null;
+  /** One tab, or two side by side or one above the other (SDB-30); the focused pane is
+   *  `activeTab`. Changed only with `splitView.ts`'s transitions. */
+  layout: SplitLayout;
   historyOpen: boolean;
   snippetsOpen: boolean;
   snippetsRevision: number;
@@ -346,6 +401,7 @@ interface AppStore {
   /** The connection whose "Move to folder…" dialog is open. */
   movingConnection: ConnectionItem | null;
   historyRevision: number;
+  /** Connections whose history setting is being saved, by `connectionTag`. */
   historySaving: string[];
   workspaceChanging: boolean;
   /** Why the last change of folder failed, shown above the explorer (SDB-397: wherever it
@@ -358,9 +414,9 @@ interface AppStore {
   /** Tags the quick filter asks of connections (all of them); empty while its box is closed. */
   explorerTags: string[];
   /** Connections expanded in the explorer: the quick filter keeps them shown. */
-  openConnections: string[];
+  openConnections: ConnectionKey[];
   /** Connections the explorer has a session on (they were opened at least once). */
-  explorerConnected: string[];
+  explorerConnected: ConnectionKey[];
   /** Tables and views chosen with Ctrl+click, in the order they were chosen (one session). */
   explorerSelection: { session: string; schema: string; name: string }[];
   /** What the explorer is asked to show; the node that shows it clears it. */
@@ -368,7 +424,7 @@ interface AppStore {
   /** The explorer's bookmarks (ADR-026), as the core lists them. */
   bookmarks: BookmarkItem[];
   /** "Open object by name" is open, on this connection first (or the active tab's). */
-  openObject: { connectionId: string | null } | null;
+  openObject: { connection: ConnectionKey | null } | null;
   /** The command palette (Ctrl+Shift+P) is open. */
   paletteOpen: boolean;
   /** `null` hides the side column (SDB-451): the one value that says what it shows (ADR-060). */
@@ -377,20 +433,26 @@ interface AppStore {
    *  the column, which `sidebarSection` alone says. */
   sidePanelToRestore: SidePanel;
   setWorkspace(info: WorkspaceInfo): void;
+  setOpenFolders(folders: OpenFolderItem[]): void;
   setConnections(list: ConnectionItem[]): void;
   /** Opens an editor tab. Without `sql` it is a new script: it starts with the user's
    *  template, if there is one. A tab opened for some text (a file, a history entry, generated
    *  SQL) or for a table passes that text, or an empty one, and never gets the template. */
-  addTab(connectionId: string | null, sql?: string): string;
+  addTab(connection: ConnectionKey | null, sql?: string): string;
   /** Opens a table data tab on a table (its first page loads when it appears), filtered by
    *  `filter` when given (a followed foreign key's, written by the core). */
-  addTableTab(connectionId: string, schema: string, name: string, filter?: string): string;
-  addTableDetailsTab(connectionId: string, schema: string, name: string, kind: TableDetailKind): string;
-  /** Opens an ER diagram tab, or shows the one already open on the same scope. The second value
-   *  says whether the tab is new (and needs connecting). */
-  addDiagramTab(connectionId: string, scope: DiagramScopeItem_Deserialize): [string, boolean];
-  /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). */
-  closeTabs(ids: string[]): void;
+  addTableTab(connection: ConnectionKey, schema: string, name: string, filter?: string): string;
+  addTableDetailsTab(connection: ConnectionKey, schema: string, name: string, kind: TableDetailKind): string;
+  /** Opens an ER diagram tab, or shows the one already open on the same scope and database (or
+   *  on the same saved diagram, ADR-084). An unsaved diagram is read from `database` of a
+   *  PostgreSQL connection that opens several (ADR-074, SDB-506; null: its own); a saved one
+   *  from the connection's own. The second value says whether the tab is new (and needs
+   *  connecting). */
+  addDiagramTab(connection: ConnectionKey, scope: DiagramScopeItem_Deserialize, saved?: { id: number; name: string }, database?: string | null): [string, boolean];
+  /** Takes the tabs out of the bar (their sessions are closed by `connect.ts`). `remember`
+   *  (the default) lets Ctrl+Shift+T reopen them; a closed folder's tabs are kept by the core
+   *  instead, and come back with the folder (ADR-075). */
+  closeTabs(ids: string[], remember?: boolean): void;
   /** Opens again the last closed query tab (its connection, SQL and name, not its results). */
   reopenTab(): void;
   /** Closed query tabs, the last one at the end. */
@@ -408,9 +470,14 @@ interface AppStore {
   /** Moves a tab to `index`, kept inside its group (pinned or not). */
   moveTab(id: string, index: number): void;
   setActiveTab(id: string): void;
+  /** Replaces the layout (built with `splitView.ts`'s transitions), focusing `focus` if given. */
+  setLayout(layout: SplitLayout, focus?: string): void;
   /** Replaces every tab with the ones the core restored for the open folder (ADR-036): all
    *  disconnected, with their text and nothing to run. Closed tabs are forgotten. */
   restoreTabs(restored: RestoredTabItem[], active: number | null): void;
+  /** Puts a folder's restored tabs (it was just opened beside the others) among the tabs on
+   *  screen, each at the place it was kept at, or at the end. The active tab stays. */
+  addRestoredTabs(restored: RestoredTabItem[]): void;
   updateTab(id: string, patch: Partial<Tab>): void;
   /** Moves the tab's connection to `next` (built with `tabState.ts`'s transitions). */
   setConnection(id: string, next: TabConnection): void;
@@ -439,15 +506,15 @@ interface AppStore {
   setExplorerFilter(filter: string | null): void;
   /** Adds the tag to the quick filter (opening it) or takes it out. */
   toggleExplorerTag(tag: string): void;
-  setConnectionOpen(connection: string, open: boolean): void;
-  setExplorerConnected(connection: string, connected: boolean): void;
+  setConnectionOpen(connection: ConnectionKey, open: boolean): void;
+  setExplorerConnected(connection: ConnectionKey, connected: boolean): void;
   /** Ctrl+click: adds or removes one; choosing in another session starts again. */
   toggleExplorerSelection(item: { session: string; schema: string; name: string }): void;
   clearExplorerSelection(): void;
   revealInExplorer(target: Omit<ExplorerReveal, "nonce">): void;
   /** The explorer showed it (or cannot): later renders do not scroll to it again. */
   revealDone(nonce: number): void;
-  setOpenObject(open: { connectionId: string | null } | null): void;
+  setOpenObject(open: { connection: ConnectionKey | null } | null): void;
   setPaletteOpen(open: boolean): void;
   setSidebarSection(section: SidebarSection | ((current: SidebarSection) => SidebarSection)): void;
   /** Hides the side column, or brings back the panel it showed ("Toggle side panel", Ctrl+B). */
@@ -460,6 +527,7 @@ export const useApp = create<AppStore>((set) => ({
   connections: [],
   tabs: [],
   activeTab: null,
+  layout: SINGLE,
   historyOpen: false,
   snippetsOpen: false,
   snippetsRevision: 0,
@@ -485,65 +553,78 @@ export const useApp = create<AppStore>((set) => ({
   sidePanelToRestore: "connections",
   bookmarks: [],
   setWorkspace: (workspace) => set({ workspace }),
+  openFolders: [],
+  setOpenFolders: (openFolders) => set({ openFolders }),
   setConnections: (connections) => set({ connections }),
-  addTab: (connectionId, sql) => {
+  addTab: (connection, sql) => {
     tabCounter += 1;
-    const id = `tab-${tabCounter}`;
+    const id = `${sessionPrefix()}tab-${tabCounter}`;
     const fromTemplate = sql === undefined && newScriptTemplate !== "";
     const tab: Tab = {
       id,
       number: tabCounter,
-      connectionId,
+      connectionId: connection?.id ?? null,
+      connectionFolder: connection?.folder ?? null,
       connectionState: DISCONNECTED,
       sql: sql ?? newScriptTemplate,
       run: null,
       ...(fromTemplate ? { fromTemplate: true } : {}),
     };
-    set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, recentTabs: [id, ...s.recentTabs] }));
+    // A new tab opens in the focused pane.
+    set((s) => ({ tabs: [...s.tabs, tab], activeTab: id, layout: show(s.layout, s.activeTab, id), recentTabs: [id, ...s.recentTabs] }));
     return id;
   },
-  addTableTab: (connectionId, schema, name, filter = ""): string => {
+  addTableTab: (connection, schema, name, filter = ""): string => {
     const app: AppStore = useApp.getState();
-    const id: string = app.addTab(connectionId, "");
+    const id: string = app.addTab(connection, "");
     app.updateTab(id, { table: { schema, name, filter, orderBy: "", pageSize: DEFAULT_PAGE_SIZE, page: 0 } });
     return id;
   },
-  addTableDetailsTab: (connectionId, schema, name, kind): string => {
+  addTableDetailsTab: (connection, schema, name, kind): string => {
     const app = useApp.getState();
-    const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.tableDetails?.schema === schema && tab.tableDetails.name === name && tab.tableDetails.kind === kind);
+    const existing = app.tabs.find((tab) => tabOnConnection(tab, connection) && tab.tableDetails?.schema === schema && tab.tableDetails.name === name && tab.tableDetails.kind === kind);
     if (existing) { app.setActiveTab(existing.id); return existing.id; }
-    const id = app.addTab(connectionId, "");
+    const id = app.addTab(connection, "");
     app.updateTab(id, { tableDetails: { schema, name, kind } });
     return id;
   },
-  addDiagramTab: (connectionId, scope): [string, boolean] => {
+  addDiagramTab: (connection, scope, saved, database = null): [string, boolean] => {
     const app = useApp.getState();
     const key = JSON.stringify(scope);
-    const existing = app.tabs.find((tab) => tab.connectionId === connectionId && tab.diagram && JSON.stringify(tab.diagram) === key);
+    // A saved diagram has a tab of its own; an unsaved one is found by its scope and database.
+    const existing = app.tabs.find((tab) =>
+      tabOnConnection(tab, connection) && tab.diagram &&
+      (saved
+        ? tab.savedDiagram?.id === saved.id
+        : !tab.savedDiagram && (tab.database ?? null) === database && JSON.stringify(tab.diagram) === key));
     if (existing) { app.setActiveTab(existing.id); return [existing.id, false]; }
-    const id = app.addTab(connectionId, "");
-    app.updateTab(id, { diagram: scope });
+    const id = app.addTab(connection, "");
+    app.updateTab(id, saved ? { diagram: scope, savedDiagram: saved } : { diagram: scope, database });
     return [id, true];
   },
   closedTabs: [],
   recentTabs: [],
   renamingTab: null,
-  closeTabs: (ids) =>
+  closeTabs: (ids, remember = true) =>
     set((s) => {
       const closing = new Set(ids);
       const closed: ClosedTab[] = [];
       s.tabs.forEach((tab, index) => {
-        const snapshot = closing.has(tab.id) ? snapshotOf(tab) : null;
+        const snapshot = remember && closing.has(tab.id) ? snapshotOf(tab) : null;
         if (snapshot) closed.push({ snapshot, index });
       });
       const tabs = s.tabs.filter((t) => !closing.has(t.id));
       const recentTabs = s.recentTabs.filter((id) => !closing.has(id));
+      // A pane whose tab closes ends the split; the other pane's tab keeps (or takes) the focus.
+      const surviving = survivingPane(s.layout, closing);
+      const current = s.activeTab && closing.has(s.activeTab) ? surviving : s.activeTab;
       return {
         tabs,
         recentTabs,
+        layout: withoutTabs(s.layout, closing),
         // The leftmost of a batch comes back first, so each one lands at its old index.
         closedTabs: [...s.closedTabs, ...closed.reverse()].slice(-MAX_CLOSED_TABS),
-        activeTab: nextActive(tabs, recentTabs, s.activeTab && closing.has(s.activeTab) ? null : s.activeTab),
+        activeTab: nextActive(tabs, recentTabs, current),
         renamingTab: s.renamingTab && closing.has(s.renamingTab) ? null : s.renamingTab,
       };
     }),
@@ -553,9 +634,9 @@ export const useApp = create<AppStore>((set) => ({
     if (!last) return;
     set({ closedTabs: s.closedTabs.slice(0, -1) });
     const { snapshot } = last;
-    // The connection may have been deleted since.
-    const connectionId = snapshot.connectionId && s.connections.some((c) => c.id === snapshot.connectionId) ? snapshot.connectionId : null;
-    const id: string = s.addTab(connectionId, snapshot.sql);
+    // The connection may have been deleted since, or its folder closed.
+    const kept = tabConnection(snapshot);
+    const id: string = s.addTab(kept && listedConnection(s.connections, kept) ? kept : null, snapshot.sql);
     set((now) => {
       const tab = now.tabs.find((t) => t.id === id);
       if (!tab) return now;
@@ -575,7 +656,7 @@ export const useApp = create<AppStore>((set) => ({
     const source = s.tabs.find((t) => t.id === id);
     // A metadata tab is opened once per object (addTableDetailsTab finds the open one).
     if (!source || source.tableDetails || source.diagram) return null;
-    const copy: string = s.addTab(source.connectionId, source.sql);
+    const copy: string = s.addTab(tabConnection(source), source.sql);
     set((now) => {
       const tab = now.tabs.find((t) => t.id === copy);
       if (!tab) return now;
@@ -605,38 +686,30 @@ export const useApp = create<AppStore>((set) => ({
       others.splice(target, 0, tab);
       return { tabs: others };
     }),
-  setActiveTab: (activeTab) => set((s) => ({ activeTab, recentTabs: [activeTab, ...s.recentTabs.filter((id) => id !== activeTab)] })),
+  setActiveTab: (activeTab) => set((s) => ({
+    activeTab,
+    layout: show(s.layout, s.activeTab, activeTab),
+    recentTabs: [activeTab, ...s.recentTabs.filter((id) => id !== activeTab)],
+  })),
+  setLayout: (layout, focus) => set((s) => (focus === undefined
+    ? { layout }
+    : { layout, activeTab: focus, recentTabs: [focus, ...s.recentTabs.filter((id) => id !== focus)] })),
   restoreTabs: (restored, active) => {
-    const tabs: Tab[] = restored.map(({ tab: kept, notes }) => {
-      tabCounter += 1;
-      const file = kept.file ?? null;
-      return {
-        id: `tab-${tabCounter}`,
-        number: tabCounter,
-        title: kept.title ?? undefined,
-        pinned: kept.pinned || undefined,
-        connectionId: kept.connection ?? null,
-        connectionState: DISCONNECTED,
-        sql: kept.text,
-        run: null,
-        snippetName: kept.snippetName ?? undefined,
-        runOptions: kept.onError || kept.timeoutSeconds ? { onError: kept.onError ?? null, timeoutSeconds: kept.timeoutSeconds ?? null } : undefined,
-        file: file
-          ? {
-              path: file.path,
-              name: file.path.split(/[\\/]/).pop() ?? file.path,
-              format: file.format,
-              hash: file.hash ?? null,
-              savedText: file.modified ? null : kept.text,
-            }
-          : undefined,
-        restoreNotes: notes.length > 0 ? notes : undefined,
-      };
-    });
+    const tabs = restored.map(restoredTab);
     const ordered = pinnedFirst(tabs);
     const activeTab = (active !== null ? tabs[active]?.id : undefined) ?? ordered[ordered.length - 1]?.id ?? null;
-    set({ tabs: ordered, activeTab, recentTabs: activeTab ? [activeTab] : [], closedTabs: [], renamingTab: null });
+    set({ tabs: ordered, activeTab, layout: SINGLE, recentTabs: activeTab ? [activeTab] : [], closedTabs: [], renamingTab: null });
   },
+  addRestoredTabs: (restored) => set((s) => {
+    const tabs = [...s.tabs];
+    // By their kept places, so each lands where it was among the ones put back before it.
+    const placed = restored
+      .map((item, order) => ({ item, order }))
+      .sort((a, b) => (a.item.position ?? Number.MAX_SAFE_INTEGER) - (b.item.position ?? Number.MAX_SAFE_INTEGER) || a.order - b.order);
+    for (const { item } of placed) tabs.splice(Math.min(item.position ?? tabs.length, tabs.length), 0, restoredTab(item));
+    const ordered = pinnedFirst(tabs);
+    return { tabs: ordered, activeTab: s.activeTab ?? ordered[ordered.length - 1]?.id ?? null };
+  }),
   updateTab: (id, patch) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
   setConnection: (id, next) => set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, connectionState: next } : t)) })),
   setTransaction: (id, transaction) => set((s) => changeConnection(s, id, (c) => withTransaction(c, transaction))),
@@ -686,12 +759,12 @@ export const useApp = create<AppStore>((set) => ({
   toggleSidePanel: () => set((s) => ({ sidebarSection: isSidePanel(s.sidebarSection) ? null : s.sidePanelToRestore })),
   setBookmarks: (bookmarks) => set({ bookmarks }),
   setExplorerConnected: (connection, connected) => set((s) => ({
-    explorerConnected: connected ? [...new Set([...s.explorerConnected, connection])] : s.explorerConnected.filter((id) => id !== connection),
+    explorerConnected: withConnection(s.explorerConnected, connection, connected),
   })),
   setConnectionOpen: (connection, open) => set((s) => ({
-    openConnections: open ? [...new Set([...s.openConnections, connection])] : s.openConnections.filter((id) => id !== connection),
+    openConnections: withConnection(s.openConnections, connection, open),
   })),
-  clearTabConnections: () => set((s) => ({ tabs: s.tabs.map((tab) => ({ ...tab, connectionId: null, connectionState: DISCONNECTED, run: null })) })),
+  clearTabConnections: () => set((s) => ({ tabs: s.tabs.map((tab) => ({ ...tab, connectionId: null, connectionFolder: null, connectionState: DISCONNECTED, run: null })) })),
   setResultsMaximized: (id, resultsMaximized) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, resultsMaximized: resultsMaximized || undefined } : t)) })),
 }));

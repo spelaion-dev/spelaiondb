@@ -24,6 +24,45 @@ A summary of how the pieces fit together. The reasons behind each decision are i
 
 ## Key flows
 
+**What identifies a connection (ADR-075)**
+A connection is its folder and its id: `spelaion_config::ConnectionKey`, the repository's
+canonical root (none for a personal connection) and the `ConnectionId` as it always was
+(`prod/orders`, or `~/local`). The id's text never holds a folder, and no folder is parsed out of
+it. The local store's keys (`store_scope`: the root's text, or empty) and the keychain's names
+(`repo:<root>/<id>/password`, `~/<id>/password`) come from it, unchanged from before it existed,
+and every new audit entry records the folder beside the id. A PostgreSQL connection's database
+sits beside this identity, never inside it (ADR-074). Every desktop command that takes a
+connection takes the pair (`ConnectionKeyItem`) and checks it against the open folders
+(`connection_config`, `connection_in`). In the page, the explorer, its sessions (`meta:` and the
+pair's tag), the catalog and completion caches, the tabs (`connectionId` and
+`connectionFolder`), the history and saved queries (their stored `identity`), and the dialogs
+and pickers hold the pair (`connectionIdentity.ts`).
+
+**What a connection sees with several folders open (ADR-075)**
+Each folder is one `Config`, loaded alone with the personal layer: no configuration or resolver
+ever holds two repositories. A folder's connection sees its own folder and the personal layer.
+A personal connection sees every open folder, and only to tighten (`Resolver::with_open_folders`):
+its type's safeguards add up across every trusted folder, every folder's `known_hosts` checks
+its tunnel (a key any of them pins differently blocks), and a network profile it names is a
+personal one, else the one folder's that has it (two refuse it). The tunnel pool never shares a
+chain between two folders' profiles, nor between different folders' host keys. With one folder
+open this is what it always was.
+
+**Several folders in one window (ADR-075, SDB-500 to SDB-502)**
+The desktop holds up to ten open folders (`open_folders.rs`), remembered and opened again at the
+next start, each trusted or not as it was. Opening a folder (the folder menu's Add folder…, a
+recent folder, the palette or a launch) adds it and closes nothing, so it asks nothing; its kept
+tabs come back among the ones on screen (`restore_tabs_for_workspace` with that folder). Closing
+one asks what would be lost in its tabs (ADR-031) and closes only its sessions; its tabs are
+written under it first and come back when it opens again, while personal connections' sessions
+and tabs stay. The page (`folders.ts`) holds tab sending while folders change
+(`whileFoldersChange`), so a folder's kept tabs are never written as none. With several open,
+the explorer has a group per folder (named after it, with its parent when two names collide),
+each with its own "not trusted" banner and configuration problems, and the personal group once;
+pickers add the folder to a connection's name where another has the same name
+(`folderNames.ts`). Adding or importing a connection asks which open repository folder, or
+personal (`add_connection`'s and `ImportTarget`'s `repository`); a pasted one is personal.
+
 **Opening a connection**
 1. `spelaion-config` loads `.spelaion/` and the personal directory, and resolves the
    connection (variables, paths, secrets). Repository connections require trusting it.
@@ -92,12 +131,9 @@ relaxed, each for one thing:
   (`style-mod`), and components set `style` attributes. CSS cannot run script; it is the one
   inline relaxation.
 - `img-src data:`: the cell viewer shows images as `data:` URLs of the types the core recognised
-  by their bytes (never SVG), and the chart and ER diagram exports draw their SVG through an
-  `Image` with a `data:image/svg+xml` URL.
-- `img-src https: http://localhost:* http://127.0.0.1:*`: the map's tiles (ADR-045) come from
-  the server the user chose in Settings, whose address the core only accepts over HTTPS, or
-  HTTP to `localhost` or `127.0.0.1` (`spelaion-store`'s `check_tile_server`; not `[::1]`, which
-  a policy cannot name). Off by default.
+  by their bytes (never SVG), the chart and ER diagram exports draw their SVG through an
+  `Image` with a `data:image/svg+xml` URL, and the map's tiles arrive as `data:` images from
+  the core, which fetches them (ADR-085). No image comes from the network to the page.
 - `connect-src ipc: http://ipc.localhost`: Tauri's commands, `fetch_window`'s binary windows
   included (the custom `ipc:` scheme, or `http://ipc.localhost` on Windows). The app reaches no
   other address from the page: updates, plugins and every database go through the Rust side.
@@ -114,17 +150,29 @@ reports, and checks first that an injected inline script does not run.
 words (`spelaion-core`'s `launch.rs`). A folder must exist. A file must be an existing `.sql`
 file no bigger than the editor opens, then read like a picked one (ADR-036). A connection is
 only selected in the explorer. What is not accepted is said in a banner. Nothing is
-connected or run: the files open as tabs without a connection, and a folder goes through
-repository trust (ADR-022).
+connected or run: the files open as tabs without a connection, and a folder is added beside the
+open ones, asking nothing since nothing closes, then goes through repository trust (ADR-022,
+ADR-075). A connection is looked up in the launched folder, then among the personal ones.
 
 One app runs per personal folder (`instance.rs`). The first listens on a local port and writes
 the port and a random token, owner-only, to `desktop-instance.json`. A later launch with the
 same personal folder sends its arguments and its folder there with the token, and ends. The
-running window opens them as above (a folder after the same questions as the folder menu).
+running window opens them as above (a folder is added, as from the folder menu).
 Keyed by the personal folder, so a second profile or the smoke test's folder never sends
 anything to the user's app. No dependency was added for it. The installers register `.sql`
 files (`tauri.conf.json`'s `fileAssociations`); macOS's Finder sends them as an event, read
 the same way.
+
+**Several windows over one core (SDB-30, ADR-083)**
+The app may show more than one window, all in one process over one `AppState`: the main window,
+a connection's own window, and a tab's results in a window of their own. The desktop adapter's
+registry (`src-tauri/src/windows.rs`) says what each window shows and where its closing stands;
+each page asks it (`window_context`) before rendering. Each session records the window whose
+page opened it, and a window other than the main one prefixes its session keys with its label,
+so keys never collide. Closing a window closes its own sessions after its own question; closing
+the main window quits, after asking each connection window. A results window reads the same
+stored results by id; the tab's page sends it what it knows of the run (never a row) and carries
+out its requests, so a result is never run or fetched twice.
 
 ## Phases
 - **Phase 0** (done, 2026-11-02): risk experiments for the conditional decisions; ADR-003,

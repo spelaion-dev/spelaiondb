@@ -7,6 +7,18 @@ to the user. Double-click a MySQL or MariaDB database in the connected explorer 
 query tab already connected to it. Queries and table tabs opened from the connected explorer
 use their own sessions, without asking again for the password already provided there.
 
+A PostgreSQL connection that opens other databases of its server (see
+[Connections](connections.md)) gives its tabs a database selector too, with the connection's
+own database and the others it opens. A PostgreSQL session cannot change database, so
+choosing another one disconnects the tab and connects it to that database: it is refused
+while a script runs, it asks first if a transaction is open (which is rolled back), nothing
+you ran is run again, and the rows on screen, read in the other database, can no longer be
+edited. A tab opened from a database in the explorer is on that database. The tab remembers
+its database: restored after a restart it comes back disconnected, and connects to that
+database when run; if the connection no longer opens it, the tab comes back on the
+connection's own database with a note. Bookmarks and a table's saved filters are kept per
+database.
+
 **Ctrl+Enter** runs the selection or, without one, the statement under the cursor, which is
 highlighted for a moment. The core finds it with the same dialect splitter that runs scripts
 (quotes, comments, dollar-quoted bodies and MySQL `DELIMITER` included), so what is

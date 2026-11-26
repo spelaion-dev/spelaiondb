@@ -177,6 +177,125 @@
   before the ticket arrives; `useJobPhase` and `searchRun.ts` keep the `Job`) and stops any job
   with `cancelJob(id, kind)`. A new job is one `jobs::start` call, held until it ends; no map
   to add or remove from.
+- Split view (SDB-30): the editor area's layout is `useApp`'s `layout`, a `SplitLayout` union
+  (`src/splitView.ts`: one tab, or two in panes `first` / `second`, side by side or one above the
+  other, with the first pane's share), changed only through its transitions (`split`, `show`,
+  `withoutTabs`, `resized`; tested by `scripts/split-view.test.mjs`). The focused pane is
+  `activeTab`, nothing else: `setActiveTab` and `addTab` show the tab in the focused pane,
+  `closeTabs` ends the split when a pane's tab closes. Each pane is an ordinary `TabPanel` (all
+  stay mounted, as before), placed by `data-pane` in the workspace's grid, so a pane has its own
+  session, results and connection row and nothing is shared between panes. The commands are
+  `view.splitRight`, `view.splitDown`, `view.closeSplit` and `view.focusOtherPane`
+  (`splitTab` and friends in `tabActions.ts`); none has default keys. The layout is not kept
+  across restarts or a folder switch.
+- Windows (SDB-30, ADR-083): every window is built by `build_window` in `lib.rs` (never a
+  `WebviewWindowBuilder` elsewhere: WebView2 refuses a second webview with other switches) and
+  registered in `src-tauri/src/windows.rs` (`Windows`: what each window shows, where its closing
+  stands; its unit tests pin the transitions). The page reads its kind once in `main.tsx`
+  (`windowContext.ts`); a results window renders `ResultsWindow.tsx` instead of `App`. Session
+  keys come from `store.ts` (tabs) and `explorerSession` (explorer), both with `sessionPrefix()`:
+  never write `meta:…` or `tab-${n}` by hand. A PostgreSQL connection that opens several
+  databases (ADR-074, SDB-504) has a database level in the explorer (`DatabaseNode` in
+  `Sidebar.tsx`), from `connection_databases` (`explorer_databases.rs`: the core's list and
+  each database's owner connection). Another database's nodes take `onDatabase(key, name)`
+  (`connectionIdentity.ts`) as their identity, so `explorerSession` and `catalogKey` give that
+  database its own session and catalog entries through `connectionTag`, while everything keyed
+  by the connection (`sameConnection`, filters, commands) ignores it; a tab opened from them
+  connects from that session. `connect_database` opens it through the core's
+  `open_other_database`; its `DesktopSession` is marked `other_database` (a session made from
+  it, after an edit, is refused rather than opened on the own database) and records its
+  `explorer_parent`, so `disconnect` of the connection's explorer session closes it too.
+  A tab's database (SDB-505) is `Tab.database` (null for the connection's own), set from the
+  source in `connectTabFromExplorer` and kept in `open_tabs.database`; every connect of an
+  editor tab goes through `openTabSession` (`connect.ts`), which opens its connection then moves
+  it to its database with `change_tab_database` (the core's `change_session_database`: refused
+  mid-run, then `open_other_database`), or leaves it disconnected, never on another database.
+  Bookmarks and table filters carry the database (`BookmarkItem.database`, the filters'
+  commands' `database`), empty in the store for the connection's own. What is opened from
+  another database acts on it (SDB-506): `openBackup`'s `database` (the row's session, the
+  dialog's name), `addDiagramTab`'s `database` (from `sourceDatabase`), the ER diagram and table
+  details connect through `openTabSession`, the data search's choices are catalog tags, and
+  `PrivilegesDialog` takes the connection's `databases` and reads and writes grants in the
+  chosen database's explorer session (`connect_database` is a no-op when it is already open). `DesktopSession::window` is set from the
+  calling window in `connect` / `connect_from_session`; `close_window_sessions` closes one
+  window's sessions. An event meant for one window is sent with `emit_to` and heard with
+  `events.x(getCurrentWebviewWindow()).listen` (a plain `listen` hears every target): SSH
+  questions (`AppInteraction::for_window`, the only constructor: `connect` and the tests take
+  the calling window, a job the window of its source session's `DesktopSession::window`, SDB-522), `QuitRequested` and
+  `LaunchRequested` (main only), `WindowCloseRequested`, `ResultsWindowClosed`. A tab and its
+  results window talk through `resultsWindow.ts` (`sendMirror` / `serveRequests` on the tab's
+  side, `ownerClient` on the other); a new callback of `Results` is a new `ResultsRequest`
+  kind, handled in `EditorTab`'s bridge, whose `switch` ends in a `never` check. Only the main
+  window restores and saves tabs, changes folder and checks for updates.
+- A connection crosses to and from the page as its identity (ADR-075, SDB-495): every command
+  that takes a connection takes a `ConnectionKeyItem` (its folder and its id), never the id's
+  text, and reads it only through `connection_in` in `lib.rs`, which refuses a pair whose
+  folder is not the connection's (or that names no connection). `ConnectionItem` carries the
+  folder; bookmarks carry the identity. In the page the pair is a `ConnectionKey`
+  (`src/connectionIdentity.ts`, pure and unit-tested; `connectionKey.ts` adds
+  `connectionKey(id)`, the lookup for what still holds a bare id). The explorer, its sessions,
+  `explorerActions.ts`, the catalog (`catalogKey`), the completion cache, and the dialogs and
+  pickers the explorer opens all hold it: compare two with `sameConnection` (never `===` on
+  objects, never `includes` on an array of them), and key text (maps, React keys, a
+  `<select>`'s values, session keys) with `connectionTag`, read back only with
+  `connectionOfTag`. An effect depends on the tag, not on the object. The explorer's window
+  events carry the pair: send them with `schemasRefreshed`, `refreshExplorer` and
+  `explorerSessionClosed` (`connect.ts`), never by hand. A tab holds both halves
+  (`connectionId` and `connectionFolder`, ADR-075 point 7, SDB-502): read its identity with
+  `tabConnection`, compare with `tabOnConnection`, and after an await check it with
+  `stillOnConnection`; whatever changes a tab's connection sets both. The tab's connection
+  picker's values are tags. The history and saved queries carry the stored `identity`
+  (`ConnectionKeyItem::stored`: the store's scope and id) and reopen on that folder's
+  connection; `add_connection` returns the new identity. Only a launch and the MCP page still
+  look a bare id up with `connectionKey(id)`. The metadata search (`dbSearch.ts`) gets each
+  connection as its tag.
+- Open folders (ADR-075, SDB-500): `AppState::folders` (`src-tauri/src/open_folders.rs`) is
+  the ordered list of open folders, at most `MAX_FOLDERS` (ten), each with its own `Config`
+  (that folder alone with the personal layer) and its canonical root; the same root is never
+  open twice. `AppState::config()` is the folder the page shows (the last one opened, or the
+  personal layer alone), `open_configs()` every open folder's: a personal connection is
+  resolved with `Resolver::with_open_folders` and its definition with
+  `connection_definition_open` over them, a folder's connection only ever with its own.
+  `reload` loads each folder again on its own and installs it only into the same opening of
+  that folder. Each `DesktopSession` records its connection's folder; `close_folder` closes
+  that folder's sessions and no other (`open_folders::sessions_of`), personal ones stay.
+  Commands: `add_folder` (closes nothing; returns the folder's root and whether it was not
+  open before), `close_folder`, `list_folders` (each with its trust), `trust_workspace(root)`
+  for any open folder (as opened or its canonical root), and `open_workspace`, which closes
+  every other open folder first (the page no longer calls it; kept for raw callers). In the
+  page (SDB-502), `folders.ts`'s `addFolder` and `closeFolder` are the only ways folders
+  change: from the folder menu, a recent folder, the palette, a launch, an explorer group's
+  Close. Both run inside `tabPersistence.ts`'s `whileFoldersChange`, which writes the tabs
+  first and sends none until the tabs on screen match the open folders again: adding puts the
+  folder's kept tabs back (`restore_tabs_for_workspace(folder)`, each at its kept
+  `position`), closing takes its tabs out without letting Ctrl+Shift+T reopen them. Closing
+  asks only about that folder's tabs (`confirmLeaving`'s `among`). The store's `openFolders`
+  is refreshed with the connections (`refreshConnections`). The explorer groups by folder only
+  with two or more open; a connection's folder-tree keys and drops carry its scope (its
+  folder's root, `""` for personal: `scopeOf`, `data-drop-scope`), so it moves only among its
+  own folder's folders. `folderNames.ts` (pure, tested) names folders and, where two share a
+  name, connections in pickers (`useConnectionName`). `SaveInChoices.tsx` is the folder choice
+  of the add and import forms. Adding or closing
+  a folder is a switch of `AppState::folder` (SDB-377), so a connection started before lands
+  nowhere. The open folders are remembered in `desktop-open-folders.json` and opened again at
+  start (a launch that names a folder opens that one); `desktop-last-workspace.txt` is read
+  once, to migrate. The unit tests of `open_folders.rs` pin the limit, the roots, the order,
+  what is remembered and what a reload may replace. Tabs (SDB-501): the page sends the whole
+  window with `save_tabs`, each tab with its connection's folder (`OpenTabItem::folder`), and
+  the core keeps each under that folder or the window's key (`tab_scope`, `window_sets`);
+  `restore_tabs_for_workspace` restores every open folder's and the window's, in the window's
+  order. So a tab on a personal connection, or none, stays across a change of folder, and the
+  page never names a folder key itself. History and saved queries list every open folder's
+  (`library.rs`'s `open_scopes`). Every command that takes a connection finds it with
+  `AppState::connection_config` (SDB-502): the configuration of the open folder its identity
+  names (the shown one for a personal connection), then `connection_in`; never
+  `connection_in(&state.config())`, which only knows the shown folder. Where a new or imported
+  repository connection goes is `folder_config(repository)` (`add_connection`'s and the
+  import's `repository`, the shown folder when none). `list_connections` lists every open
+  folder's connections and the personal ones once (`listed_connections`), each with its own
+  folder's types, and a connection's sessions are told apart by folder as well as id. An
+  "untrusted" outcome (`ConnectOutcome`, `ConnectionTestOutcome`, `EditorAccessOutcome`) names
+  the folder it is about (`root`), which the page trusts: not always the shown one.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

@@ -4,6 +4,7 @@
 // before it keeps it and again when it reads it back, and the page checks it once more.
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ConnectionKey, connectionTag } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { TableFiltersItem } from "../bindings";
@@ -19,7 +20,10 @@ const WORD = /[\p{L}_][\p{L}\p{N}_$]*$/u;
 type Suggestion = { kind: "history"; text: string; isDefault: boolean } | { kind: "column"; text: string };
 
 export function TableFilterBox(props: {
-  connectionId: string | null;
+  connection: ConnectionKey | null;
+  /** The other database of the connection the table is in (ADR-074, SDB-505); null for its own:
+   *  a same-named table of two databases has filters of its own. */
+  database: string | null;
   /** The tab's session, which quotes a column name that needs it. */
   session: string;
   schema: string;
@@ -36,7 +40,8 @@ export function TableFilterBox(props: {
   columns: string[];
   disabled: boolean;
 }) {
-  const { connectionId, schema, name, applied, value } = props;
+  const { connection, database, schema, name, applied, value } = props;
+  const connectionText = connection ? connectionTag(connection) : null;
   const { t } = useTranslation("editor");
   const [memory, setMemory] = useState<TableFiltersItem | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,11 +66,11 @@ export function TableFilterBox(props: {
   };
 
   useEffect(() => {
-    if (!connectionId) return;
-    void ask(() => call(commands.tableFilters(connectionId, schema, name))).catch(() => undefined);
+    if (!connection) return;
+    void ask(() => call(commands.tableFilters(connection, database, schema, name))).catch(() => undefined);
     // `ask` only reads refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, schema, name]);
+  }, [connectionText, database, schema, name]);
 
   // A page that loaded used its filter: the core checks it and the store remembers it. Only
   // when a load ends, never for a filter that has not run yet.
@@ -73,11 +78,11 @@ export function TableFilterBox(props: {
   useEffect(() => {
     const before = wasLoaded.current;
     wasLoaded.current = props.loaded;
-    if (before || !props.loaded || !connectionId || !applied.trim()) return;
-    void ask(() => call(commands.recordTableFilter(connectionId, schema, name, applied))).catch(() => undefined);
+    if (before || !props.loaded || !connection || !applied.trim()) return;
+    void ask(() => call(commands.recordTableFilter(connection, database, schema, name, applied))).catch(() => undefined);
     // `ask` only reads refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.loaded, connectionId, schema, name, applied]);
+  }, [props.loaded, connectionText, database, schema, name, applied]);
 
   // A page that failed has no columns: the last ones seen still name the table's.
   const [columns, setColumns] = useState(props.columns);
@@ -146,9 +151,9 @@ export function TableFilterBox(props: {
   }
 
   async function forget(filter: string) {
-    if (!connectionId) return;
+    if (!connection) return;
     try {
-      await ask(() => call(commands.forgetTableFilter(connectionId, schema, name, filter)));
+      await ask(() => call(commands.forgetTableFilter(connection, database, schema, name, filter)));
     } catch (e) {
       failed(e);
     }
@@ -156,10 +161,10 @@ export function TableFilterBox(props: {
 
   /** Saves the filter on screen as the table's default, or drops the default. */
   async function setDefault(filter: string | null) {
-    if (!connectionId) return;
+    if (!connection) return;
     setError(null);
     try {
-      await ask(() => call(commands.setTableDefaultFilter(connectionId, schema, name, filter)));
+      await ask(() => call(commands.setTableDefaultFilter(connection, database, schema, name, filter)));
     } catch (e) {
       failed(e);
     }
@@ -254,7 +259,7 @@ export function TableFilterBox(props: {
         aria-label={defaultLabel}
         aria-pressed={isDefault}
         title={defaultLabel}
-        disabled={props.disabled || !connectionId || (!canSave && !hasDefault)}
+        disabled={props.disabled || !connection || (!canSave && !hasDefault)}
         onClick={() => void setDefault(isDefault || !canSave ? null : applied.trim())}
       >
         <Icon name="star" filled={isDefault} />

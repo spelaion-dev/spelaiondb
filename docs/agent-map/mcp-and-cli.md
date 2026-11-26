@@ -41,7 +41,16 @@
   a symbolic link stays a link. Tests and the smoke test point it at
   `SPELAION_MCP_CLIENTS_HOME`, never at the user's files; `SPELAION_CLI` names the `spelaiondb` it installs. The installers ship the CLI
   next to the app (`externalBin`, only in `tauri.release.conf.json`).
-  Every MCP tool call goes to the store's append-only `audit` table with its tool and its
-  process's session; the app's Activity tab reads it through `spelaion-core::audit`, which masks
-  secrets (`redact_secrets`) before anything is shown or exported. Clearing (`clear_audit`) is
+  Every MCP tool call goes to the store's append-only `audit` table with its tool, its
+  process's session and its connection's folder (`audit.folder`, ADR-075: the canonical root
+  of the folder the server serves for a repository connection, none for a personal one or for
+  entries from before 0.17; `audit_folder` takes it from the call's snapshot through
+  `ConnectionKey`); the app's Activity tab reads it through `spelaion-core::audit`, which masks
+  secrets (`redact_secrets`) before anything is shown or exported. The Activity tab filters by
+  folder (`AuditFilter.folder`: `AuditFolder::Folder(root)` or `NoFolder`, a store query) and
+  lists the recorded folders (`audit_folders`); both exports end with a `folder` column. The
+  Security tab's rows come from `spelaion_core::agents_by_folder` (`agent_folders.rs`, SDB-503):
+  each open repository folder's connections under it, decided with that folder's trust, types
+  and override scope, then the personal ones; `set_mcp_connection_read_only` finds the
+  connection's own folder by its key. The server itself never reads the open folders. Clearing (`clear_audit`) is
   the only delete and leaves a record.

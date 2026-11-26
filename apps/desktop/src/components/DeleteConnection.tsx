@@ -2,6 +2,8 @@
 // project connections) and its saved password. Open sessions on it are closed first.
 
 import { useState } from "react";
+import { explorerSession } from "../windowContext";
+import { keyOf, tabOnConnection } from "../connectionKey";
 import { Trans, useTranslation } from "react-i18next";
 import { call, commands, type ConnectionItem } from "../api";
 import { useApp } from "../store";
@@ -12,7 +14,7 @@ import { refreshConnections } from "./Sidebar";
 export function DeleteConnection({ connection }: { connection: ConnectionItem }) {
   const { t } = useTranslation("connections");
   const close = () => useApp.getState().setDeletingConnection(null);
-  const busyTabs = useApp((s) => connectionBusy(s.tabs, connection.id));
+  const busyTabs = useApp((s) => connectionBusy(s.tabs, keyOf(connection)));
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const file = connection.personal
@@ -24,16 +26,16 @@ export function DeleteConnection({ connection }: { connection: ConnectionItem })
     setError(null);
     try {
       const app = useApp.getState();
-      const tabs = app.tabs.filter((tab) => tab.connectionId === connection.id);
+      const tabs = app.tabs.filter((tab) => tabOnConnection(tab, keyOf(connection)));
       if (!(await confirmOpenTransactions(tabs.map((tab) => tab.id), "disconnect"))) return;
       // Close what uses it before the file disappears: tabs stay open, without a connection.
       await Promise.all(
-        [...tabs.map((tab) => tab.id), `meta:${connection.id}`].map((session) =>
+        [...tabs.map((tab) => tab.id), explorerSession(keyOf(connection))].map((session) =>
           call(commands.disconnect(session)).catch(() => undefined),
         ),
       );
-      for (const tab of tabs) app.updateTab(tab.id, { connectionId: null, connectionState: DISCONNECTED });
-      await call(commands.deleteConnection(connection.id));
+      for (const tab of tabs) app.updateTab(tab.id, { connectionId: null, connectionFolder: null, connectionState: DISCONNECTED });
+      await call(commands.deleteConnection(keyOf(connection)));
       await refreshConnections();
       close();
     } catch (e) {

@@ -1,34 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { explorerSession } from "../windowContext";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { call, commands, type ConnectionItem } from "../api";
 import type { LockSnapshotItem_Serialize as LockSnapshotItem, ProcessItem_Serialize as ProcessItem, ProcessSnapshotItem_Serialize as ProcessSnapshotItem, ServerSettingItem_Serialize as ServerSettingItem } from "../bindings";
 import { openSession } from "../connect";
 import { useApp } from "../store";
+import { connectionTag, keyOf, sameConnection, tabOnConnection, type ConnectionKey } from "../connectionKey";
 import { CONNECTING, DISCONNECTED, connectedWith, isConnected, isConnecting } from "../tabState";
 import { EngineIcon } from "./EngineIcon";
 import { Icon } from "./Icons";
 import { LockView, SettingsView, type ProcessActions } from "./ServerObservation";
+import { ServerDashboard } from "./ServerDashboard";
 import { HideSidePanelButton } from "./SidePanelButtons";
 
-/** The monitor's views: its processes, their locks, and the server's settings. */
-type MonitorView = "processes" | "locks" | "settings";
-const VIEWS: MonitorView[] = ["processes", "locks", "settings"];
+/** The monitor's views: its processes, their locks, the server's activity over time and its settings. */
+type MonitorView = "processes" | "locks" | "dashboard" | "settings";
+const VIEWS: MonitorView[] = ["processes", "locks", "dashboard", "settings"];
 
 function supported(engine: string) { return ["mysql", "mariadb", "postgres", "sqlserver"].includes(engine); }
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
-export function ProcessSidebar({ selected, onSelect }: { selected: string | null; onSelect(id: string): void }) {
+export function ProcessSidebar({ selected, onSelect }: { selected: ConnectionKey | null; onSelect(connection: ConnectionKey): void }) {
   const { t } = useTranslation("shell");
   const connections = useApp((s) => s.connections);
+  const isSelected = (connection: ConnectionItem) => selected !== null && sameConnection(keyOf(connection), selected);
   return <aside id="processes-sidebar" className="sidebar process-sidebar">
     <div className="sidebar-header"><div className="workspace-name">{t("processMonitor.title")}</div><HideSidePanelButton /></div>
     <div className="tree">
       <div className="group-title">{t("connections")}</div>
       {connections.length === 0 && <div className="empty small">{t("processMonitor.noConnections")}</div>}
-      {connections.map((connection) => <button key={connection.id} type="button" className={`process-connection ${connection.id === selected ? "active" : ""}`}
+      {connections.map((connection) => <button key={connectionTag(keyOf(connection))} type="button" className={`process-connection ${isSelected(connection) ? "active" : ""}`}
         disabled={!supported(connection.engine)} title={supported(connection.engine) ? connection.name : t("processMonitor.unsupported")}
-        aria-pressed={connection.id === selected} onClick={() => onSelect(connection.id)}>
+        aria-pressed={isSelected(connection)} onClick={() => onSelect(keyOf(connection))}>
         <EngineIcon engine={connection.engineMark} fallback={connection.engine} /><span className="process-connection-name">{connection.name}</span>
         {!supported(connection.engine) && <span className="muted small">{t("processMonitor.soon")}</span>}
       </button>)}
@@ -54,6 +58,8 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
   const [database, setDatabase] = useState("");
   const [updated, setUpdated] = useState<Date | null>(null);
   const session = useRef<string | null>(null);
+  /** The monitor session once it is open, for the dashboard, whose sampler reads on it. */
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const inFlight = useRef(false);
   const sequence = useRef(0);
   const translate = useRef(t);
@@ -71,6 +77,12 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     // Each view reads only what it shows; the lock view also needs the processes, for the
     // sessions' details and for the same checked actions as the process table.
     const current = viewRef.current;
+    // The dashboard's sampler is the core's: nothing to read from here.
+    if (current === "dashboard") {
+      inFlight.current = false;
+      setBusy(false);
+      return;
+    }
     try {
       if (current === "settings") {
         const next = await call(commands.serverSettings(id));
@@ -104,7 +116,8 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     async function connect() {
       try {
         // Reuse credentials from an open explorer or query without returning them to the UI.
-        const sources = [`meta:${connection.id}`, ...useApp.getState().tabs.filter((tab) => tab.connectionId === connection.id && isConnected(tab)).map((tab) => tab.id)];
+        const key = keyOf(connection);
+        const sources = [explorerSession(key), ...useApp.getState().tabs.filter((tab) => tabOnConnection(tab, key) && isConnected(tab)).map((tab) => tab.id)];
         let version: string | null = null;
         for (const source of sources) {
           try {
@@ -113,7 +126,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
             if (outcome.kind === "connected") { version = outcome.serverVersion; break; }
           } catch { /* Try another open session. */ }
         }
-        if (version === null && !disposed) version = (await openSession(id, connection.id))?.version ?? null;
+        if (version === null && !disposed) version = (await openSession(id, key))?.version ?? null;
         if (version === null) {
           if (!disposed) { setBusy(false); setError(translate.current("processMonitor.cancelled")); }
           return;
@@ -124,6 +137,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
           return;
         }
         session.current = id;
+        setSessionId(id);
         await refresh();
       } catch (e) {
         if (!disposed) { setBusy(false); setError(message(e)); }
@@ -133,6 +147,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
     return () => {
       disposed = true;
       if (session.current === id) session.current = null;
+      setSessionId((current) => current === id ? null : current);
       if (opened) void call(commands.disconnect(id)).catch(() => undefined);
     };
   }, [attempt, connection.id, refresh]);
@@ -201,7 +216,7 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
   async function openSql(row: ProcessItem) {
     if (!row.sql) return;
     const id = session.current;
-    const tab = useApp.getState().addTab(connection.id, row.sql);
+    const tab = useApp.getState().addTab(keyOf(connection), row.sql);
     if (id) {
       useApp.getState().setConnection(tab, CONNECTING);
       try {
@@ -210,15 +225,15 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         const database = connection.engine === "postgres" ? null : row.database;
         const outcome = await call(commands.connectFromSession(id, tab, database, false));
         // Edited since the monitor's session opened (SDB-426): connect as a new tab does.
-        const session = outcome.kind === "connected" ? { version: outcome.serverVersion } : await openSession(tab, connection.id);
+        const session = outcome.kind === "connected" ? { version: outcome.serverVersion } : await openSession(tab, keyOf(connection));
         const current = useApp.getState().tabs.find((item) => item.id === tab);
-        if (!current || current.connectionId !== connection.id || !isConnecting(current)) { if (session !== null) await call(commands.disconnect(tab)); return; }
+        if (!current || !tabOnConnection(current, keyOf(connection)) || !isConnecting(current)) { if (session !== null) await call(commands.disconnect(tab)); return; }
         if (session === null) { useApp.getState().setConnection(tab, DISCONNECTED); return; }
         if (outcome.kind === "connectAgain" && database) await call(commands.selectDatabase(tab, database)).catch(() => undefined);
         useApp.getState().setConnection(tab, connectedWith(session));
       } catch {
         const current = useApp.getState().tabs.find((item) => item.id === tab);
-        if (current?.connectionId === connection.id && isConnecting(current)) useApp.getState().setConnection(tab, DISCONNECTED);
+        if (current && tabOnConnection(current, keyOf(connection)) && isConnecting(current)) useApp.getState().setConnection(tab, DISCONNECTED);
       }
     }
     if (session.current === id) onOpenEditor();
@@ -231,13 +246,13 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
         <div className="segmented" role="radiogroup" aria-label={t("processMonitor.view")}>
           {VIEWS.map((name) => <button key={name} type="button" role="radio" aria-checked={view === name} className={view === name ? "active" : ""} onClick={() => setView(name)}>{t(`processMonitor.views.${name}`)}</button>)}
         </div>
-        <label className="process-refresh-label">{t("processMonitor.autoRefresh")}
+        {view !== "dashboard" && <><label className="process-refresh-label">{t("processMonitor.autoRefresh")}
           <select aria-label={t("processMonitor.autoRefresh")} value={intervalSeconds} onChange={(e) => setIntervalSeconds(Number(e.target.value))}>
             <option value={0}>{t("processMonitor.off")}</option><option value={5}>5 s</option><option value={10}>10 s</option><option value={30}>30 s</option>
           </select>
         </label>
         <span className="muted small process-status" role="status">{busy ? t("processMonitor.loading") : updated ? t("processMonitor.updated", { time: updated.toLocaleTimeString(i18n.language) }) : ""}</span>
-        <button onClick={() => void refresh()} disabled={busy || !session.current} title={t("processMonitor.refresh")}><Icon name="refresh" /> {t("processMonitor.refresh")}</button>
+        <button onClick={() => void refresh()} disabled={busy || !session.current} title={t("processMonitor.refresh")}><Icon name="refresh" /> {t("processMonitor.refresh")}</button></>}
       </div>
     </header>
     {view === "processes" && <div className="process-toolbar">
@@ -251,9 +266,10 @@ export function ProcessMonitor({ connection, onOpenEditor }: { connection: Conne
       </select>
     </div>}
     {error && <div className="banner banner-warn" role="alert">{error}{!session.current && <button onClick={() => { setError(null); setBusy(true); setAttempt((n) => n + 1); }}>{t("processMonitor.retry")}</button>}</div>}
-    {snapshot?.limited && view !== "settings" && <div className="banner banner-warn" role="status">{t("processMonitor.limitedVisibility")}</div>}
+    {snapshot?.limited && (view === "processes" || view === "locks") && <div className="banner banner-warn" role="status">{t("processMonitor.limitedVisibility")}</div>}
     {view === "locks" && <LockView snapshot={locks} processes={rows} busy={busy} actions={actions} />}
     {view === "settings" && <SettingsView settings={settings} busy={busy} />}
+    {view === "dashboard" && <ServerDashboard session={sessionId} engine={connection.engine} />}
     {view === "processes" && <><div className="process-content">
       <div className="process-table-wrap">
         <table className="process-table">

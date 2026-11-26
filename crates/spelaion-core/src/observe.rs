@@ -15,6 +15,11 @@ pub(crate) struct Rows {
 }
 
 impl Rows {
+    #[cfg(test)]
+    pub(crate) fn new(columns: Vec<String>, rows: Vec<Vec<Option<String>>>) -> Self {
+        Self { columns, rows }
+    }
+
     /// The index of a column by its name (case-insensitive).
     pub(crate) fn column(&self, name: &str) -> Result<usize, String> {
         self.columns

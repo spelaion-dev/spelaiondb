@@ -3,8 +3,27 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { call, commands, type AuditEventItem, type AuditSessionItem, type AuditStatusItem } from "../api";
+import { call, commands, type AuditEventItem, type AuditFolderItem, type AuditSessionItem, type AuditStatusItem } from "../api";
 import { chooseSavePath } from "../dialogs";
+import { folderLabels } from "../folderLabels";
+
+/** The folder filter's value: every folder, one folder's root, or the entries with none. */
+type FolderChoice = { kind: "all" } | { kind: "folder"; root: string } | { kind: "noFolder" };
+
+function folderFilter(choice: FolderChoice): AuditFolderItem | null {
+  switch (choice.kind) {
+    case "all":
+      return null;
+    case "folder":
+      return { kind: "folder", root: choice.root };
+    case "noFolder":
+      return { kind: "noFolder" };
+    default: {
+      const never: never = choice;
+      return never;
+    }
+  }
+}
 
 const PAGE = 500;
 type Sub = "events" | "sessions";
@@ -54,6 +73,10 @@ function Events({ session, onLeaveSession }: { session: AuditSessionItem | null;
   const [query, setQuery] = useState("");
   const [tool, setTool] = useState("");
   const [status, setStatus] = useState<AuditStatusItem | "">("");
+  const [folder, setFolder] = useState<FolderChoice>({ kind: "all" });
+  /** The folders the log records (ADR-075), as the core lists them. */
+  const [folders, setFolders] = useState<string[]>([]);
+  const folderNames = useMemo(() => new Map(folders.map((root, i) => [root, folderLabels(folders)[i]])), [folders]);
   const [events, setEvents] = useState<AuditEventItem[]>([]);
   const [total, setTotal] = useState(0);
   const [tools, setTools] = useState<string[]>([]);
@@ -69,20 +92,21 @@ function Events({ session, onLeaveSession }: { session: AuditSessionItem | null;
   }, [search]);
 
   const filter = useMemo(
-    () => ({ search: query, tool: tool || null, status: status || null, session: session?.session ?? null }),
-    [query, tool, status, session],
+    () => ({ search: query, tool: tool || null, status: status || null, session: session?.session ?? null, folder: folderFilter(folder) }),
+    [query, tool, status, session, folder],
   );
 
   useEffect(() => {
     let current = true;
     setLoading(true);
     setError(null);
-    Promise.all([call(commands.auditEvents(filter, 0, PAGE)), call(commands.auditTools())])
-      .then(([page, toolNames]) => {
+    Promise.all([call(commands.auditEvents(filter, 0, PAGE)), call(commands.auditTools()), call(commands.auditFolders())])
+      .then(([page, toolNames, folderRoots]) => {
         if (!current) return;
         setEvents(page.events);
         setTotal(page.total);
         setTools(toolNames);
+        setFolders(folderRoots);
       })
       .catch((e: unknown) => current && setError(message(e)))
       .finally(() => current && setLoading(false));
@@ -150,6 +174,20 @@ function Events({ session, onLeaveSession }: { session: AuditSessionItem | null;
             <option key={s} value={s}>{t(`activity.statusName.${s}`)}</option>
           ))}
         </select>
+        <select
+          aria-label={t("activity.folder")}
+          value={folder.kind === "folder" ? `folder:${folder.root}` : folder.kind}
+          onChange={(e) => {
+            const value = e.currentTarget.value;
+            setFolder(value.startsWith("folder:") ? { kind: "folder", root: value.slice("folder:".length) } : value === "noFolder" ? { kind: "noFolder" } : { kind: "all" });
+          }}
+        >
+          <option value="all">{t("activity.allFolders")}</option>
+          {folders.map((root) => (
+            <option key={root} value={`folder:${root}`} title={root}>{folderNames.get(root)}</option>
+          ))}
+          <option value="noFolder">{t("activity.noFolder")}</option>
+        </select>
         <button onClick={() => setRefresh((n) => n + 1)}>{t("activity.refresh")}</button>
         <span className="muted mcp-count" role="status" aria-live="polite">
           {loading ? t("activity.loading") : t("activity.count", { count: total })}
@@ -171,13 +209,14 @@ function Events({ session, onLeaveSession }: { session: AuditSessionItem | null;
       {notice && <p className="mcp-notice">{notice}</p>}
       {!loading && events.length === 0 ? (
         <div className="mcp-empty">
-          <p>{query || tool || status || session ? t("activity.noMatch") : t("activity.empty")}</p>
+          <p>{query || tool || status || session || folder.kind !== "all" ? t("activity.noMatch") : t("activity.empty")}</p>
         </div>
       ) : (
         <table className="mcp-events-table" aria-label={t("activity.events")}>
           <thead>
             <tr>
               <th>{t("activity.time")}</th>
+              <th>{t("activity.folder")}</th>
               <th>{t("activity.connection")}</th>
               <th>{t("activity.tool")}</th>
               <th>{t("activity.statement")}</th>
@@ -189,6 +228,7 @@ function Events({ session, onLeaveSession }: { session: AuditSessionItem | null;
             {events.map((e) => (
               <tr key={e.id}>
                 <td className="nowrap">{dates.format(new Date(e.atMs))}</td>
+                <td title={e.folder ?? t("activity.noFolderHint")}>{e.folder === null ? <span className="muted">{t("activity.noFolder")}</span> : (folderNames.get(e.folder) ?? e.folder)}</td>
                 <td>{e.connection}</td>
                 <td>{e.tool ?? "—"}</td>
                 <td>

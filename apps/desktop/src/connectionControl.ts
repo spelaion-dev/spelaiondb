@@ -6,29 +6,31 @@
 // connection is expanded.
 
 import { call, commands } from "./api";
+import { explorerSession } from "./windowContext";
 import { runningOutsideTransactions } from "./closeQuestion";
-import { EXPLORER_SESSION_CLOSED_EVENT, tabName } from "./connect";
+import { explorerSessionClosed, tabName } from "./connect";
+import { sameConnection, tabOnConnection, type ConnectionKey } from "./connectionKey";
 import { useApp, useDialogs, type Tab } from "./store";
 import { DISCONNECTED, hasSession, hasUnsavedEdits, isRunning } from "./tabState";
 
 /** The editor tabs with a session, and the connections open in the explorer, but `keep`'s. */
-function targets(keep: string | null): { tabs: Tab[]; explorer: string[] } {
+function targets(keep: ConnectionKey | null): { tabs: Tab[]; explorer: ConnectionKey[] } {
   const app = useApp.getState();
   return {
-    tabs: app.tabs.filter((tab) => tab.connectionId !== null && tab.connectionId !== keep && hasSession(tab)),
-    explorer: app.explorerConnected.filter((id) => id !== keep),
+    tabs: app.tabs.filter((tab) => tab.connectionId !== null && (keep === null || !tabOnConnection(tab, keep)) && hasSession(tab)),
+    explorer: app.explorerConnected.filter((connection) => keep === null || !sameConnection(connection, keep)),
   };
 }
 
 /** Whether there is anything to disconnect but `keep`'s sessions. */
-export function hasSessions(keep: string | null): boolean {
+export function hasSessions(keep: ConnectionKey | null): boolean {
   const { tabs, explorer } = targets(keep);
   return tabs.length > 0 || explorer.length > 0;
 }
 
 /** Disconnects every session but those of the connection `keep` (none: all). `false` when the
  *  user chose to keep them after being asked. */
-export async function disconnectAll(keep: string | null): Promise<boolean> {
+export async function disconnectAll(keep: ConnectionKey | null): Promise<boolean> {
   const { tabs, explorer } = targets(keep);
   if (tabs.length === 0 && explorer.length === 0) return true;
   const ids = tabs.map((tab) => tab.id);
@@ -50,11 +52,11 @@ export async function disconnectAll(keep: string | null): Promise<boolean> {
   await Promise.all(tabs.filter(isRunning).map((tab) => call(commands.cancel(tab.id)).catch(() => undefined)));
   await Promise.all(ids.map((id) => call(commands.disconnect(id)).catch(() => undefined)));
   for (const id of ids) app.setConnection(id, DISCONNECTED);
-  await Promise.all(explorer.map((id) => call(commands.disconnect(`meta:${id}`)).catch(() => undefined)));
-  for (const id of explorer) {
-    app.setExplorerConnected(id, false);
+  await Promise.all(explorer.map((connection) => call(commands.disconnect(explorerSession(connection))).catch(() => undefined)));
+  for (const connection of explorer) {
+    app.setExplorerConnected(connection, false);
     // The tree folds, as when its session is lost; expanding it connects again.
-    window.dispatchEvent(new CustomEvent(EXPLORER_SESSION_CLOSED_EVENT, { detail: { connectionId: id, idleSeconds: null } }));
+    explorerSessionClosed(connection, null);
   }
   return true;
 }

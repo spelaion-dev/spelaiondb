@@ -67,17 +67,56 @@ fn accepted(result: &AuthResult) -> bool {
 
 // ----------------------------------------------------------------------------- agent
 
-/// Public key of `identity_file`, to filter the agent's keys.
+/// Public key of `identity_file`, to filter the agent's keys: from the `.pub` next to it, from
+/// the key itself when it is not encrypted, or from a PuTTY key's own public lines, which are
+/// never encrypted (Pageant holds `.ppk` keys).
 fn public_key_of(identity: &Path) -> Option<PublicKey> {
     let mut pub_path = identity.as_os_str().to_owned();
     pub_path.push(".pub");
     russh::keys::load_public_key(PathBuf::from(pub_path))
         .ok()
         .or_else(|| {
-            russh::keys::load_secret_key(identity, None)
+            let text = std::fs::read_to_string(identity).ok()?;
+            russh::keys::decode_secret_key(&text, None)
                 .ok()
                 .map(|k| k.public_key().clone())
+                .or_else(|| ppk_public_key(&text))
         })
+}
+
+/// Whether `text` is a key in PuTTY's format (`.ppk`, versions 2 and 3).
+fn is_ppk(text: &str) -> bool {
+    text.trim_start().starts_with("PuTTY-User-Key-File-")
+}
+
+/// The value of a PuTTY key's header line `name: value`, among the lines before its public key.
+fn ppk_header<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    text.lines()
+        .take_while(|line| !line.starts_with("Public-Lines:"))
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+        .map(str::trim)
+}
+
+/// Whether `text` is a PuTTY key encrypted with a passphrase. Reading one without its passphrase
+/// fails with an error of the PPK reader, not `KeyIsEncrypted`: its `Encryption` header is what
+/// says a passphrase is needed (SDB-528).
+fn is_encrypted_ppk(text: &str) -> bool {
+    is_ppk(text) && ppk_header(text, "Encryption").is_some_and(|value| value != "none")
+}
+
+/// A PuTTY key's public key, from its `Public-Lines`, which are stored unencrypted.
+fn ppk_public_key(text: &str) -> Option<PublicKey> {
+    if !is_ppk(text) {
+        return None;
+    }
+    let mut lines = text.lines();
+    let count: usize = lines
+        .find_map(|line| line.strip_prefix("Public-Lines:"))?
+        .trim()
+        .parse()
+        .ok()?;
+    let base64: String = lines.take(count).map(str::trim).collect();
+    russh::keys::parse_public_key_base64(&base64).ok()
 }
 
 async fn with_agent(
@@ -177,23 +216,24 @@ fn key_candidates(spec: &HopSpec) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Loads a key, asking for the passphrase if it is encrypted (up to three attempts).
+/// Loads a key, asking for the passphrase if it is encrypted (up to three attempts): an
+/// OpenSSH or PEM key that says so when read, or a PuTTY key whose header says so. The file is
+/// read once.
 async fn load_key(
     path: &Path,
     hop: usize,
     spec: &HopSpec,
     ui: &Arc<dyn Interaction>,
 ) -> Result<PrivateKey, SshError> {
-    match russh::keys::load_secret_key(path, None) {
+    let reading = |e: &dyn std::fmt::Display| {
+        hop_error(hop, spec, format!("reading {}: {e}", path.display()))
+    };
+    let text = std::fs::read_to_string(path).map_err(|e| reading(&e))?;
+    match russh::keys::decode_secret_key(&text, None) {
         Ok(key) => return Ok(key),
         Err(russh::keys::Error::KeyIsEncrypted) => {}
-        Err(e) => {
-            return Err(hop_error(
-                hop,
-                spec,
-                format!("reading {}: {e}", path.display()),
-            ));
-        }
+        Err(_) if is_encrypted_ppk(&text) => {}
+        Err(e) => return Err(reading(&e)),
     }
     for attempt in 0..3 {
         let request = SecretRequest::KeyPassphrase {
@@ -202,7 +242,7 @@ async fn load_key(
             retry: attempt > 0,
         };
         let passphrase = ui.ask_secret(&request).await.ok_or(SshError::Cancelled)?;
-        if let Ok(key) = russh::keys::load_secret_key(path, Some(passphrase.expose())) {
+        if let Ok(key) = russh::keys::decode_secret_key(&text, Some(passphrase.expose())) {
             return Ok(key);
         }
     }
@@ -324,4 +364,184 @@ async fn with_challenge(
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::HostInfo;
+
+    /// PuTTY keys made with puttygen 0.82 (SDB-528): one RSA and one Ed25519 key, each as PPK
+    /// version 2 and version 3 (Argon2id), without and with the passphrase `spelaion-test`, and
+    /// two of those with Windows line endings, as PuTTYgen on Windows writes them.
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/ppk")
+            .join(name)
+    }
+
+    const PLAIN: &[(&str, &str)] = &[
+        ("ppk_rsa_v2.ppk", "rsa"),
+        ("ppk_rsa_v3.ppk", "rsa"),
+        ("ppk_ed25519_v2.ppk", "ed25519"),
+        ("ppk_ed25519_v3.ppk", "ed25519"),
+    ];
+
+    const ENCRYPTED: &[(&str, &str)] = &[
+        ("ppk_rsa_v2_pass.ppk", "rsa"),
+        ("ppk_rsa_v3_pass.ppk", "rsa"),
+        ("ppk_ed25519_v2_pass.ppk", "ed25519"),
+        ("ppk_ed25519_v3_pass.ppk", "ed25519"),
+        ("ppk_rsa_v2_pass_crlf.ppk", "rsa"),
+        ("ppk_ed25519_v3_pass_crlf.ppk", "ed25519"),
+    ];
+
+    /// The OpenSSH public key puttygen exported for `algorithm`'s key.
+    fn exported(algorithm: &str) -> PublicKey {
+        russh::keys::load_public_key(fixture(&format!("ppk_{algorithm}.pub"))).unwrap()
+    }
+
+    /// Answers each passphrase question in turn (`None` cancels), and records the questions.
+    struct Answers {
+        answers: Mutex<VecDeque<Option<&'static str>>>,
+        asked: Mutex<Vec<SecretRequest>>,
+    }
+
+    impl Answers {
+        fn new(answers: &[Option<&'static str>]) -> Arc<Self> {
+            Arc::new(Self {
+                answers: Mutex::new(answers.iter().copied().collect()),
+                asked: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn retries(&self) -> Vec<bool> {
+            self.asked
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|request| match request {
+                    SecretRequest::KeyPassphrase { retry, .. } => *retry,
+                    other => panic!("only a key's passphrase is asked: {other:?}"),
+                })
+                .collect()
+        }
+    }
+
+    #[async_trait]
+    impl Interaction for Answers {
+        async fn confirm_unknown_host(&self, _host: &HostInfo) -> bool {
+            panic!("no host is checked here")
+        }
+
+        async fn ask_secret(&self, request: &SecretRequest) -> Option<Secret> {
+            self.asked.lock().unwrap().push(request.clone());
+            let answer = self.answers.lock().unwrap().pop_front().flatten();
+            answer.map(Secret::new)
+        }
+    }
+
+    fn spec() -> HopSpec {
+        HopSpec {
+            host: "bastion".into(),
+            port: 22,
+            user: "spelaion".into(),
+            auth: vec![AuthMethod::Key],
+            identity_file: None,
+            password: None,
+            command: None,
+        }
+    }
+
+    async fn load(name: &str, ui: &Arc<Answers>) -> Result<PrivateKey, SshError> {
+        let ui: Arc<dyn Interaction> = ui.clone();
+        load_key(&fixture(name), 0, &spec(), &ui).await
+    }
+
+    #[tokio::test]
+    async fn putty_keys_without_a_passphrase_load_without_asking() {
+        for (name, algorithm) in PLAIN {
+            let ui = Answers::new(&[]);
+            let key = load(name, &ui).await.unwrap();
+            assert_eq!(
+                key.public_key().key_data(),
+                exported(algorithm).key_data(),
+                "{name}"
+            );
+            assert!(ui.retries().is_empty(), "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn putty_keys_with_a_passphrase_ask_for_it_again_after_a_wrong_one() {
+        for (name, algorithm) in ENCRYPTED {
+            let ui = Answers::new(&[Some("wrong"), Some("spelaion-test")]);
+            let key = load(name, &ui).await.unwrap();
+            assert_eq!(
+                key.public_key().key_data(),
+                exported(algorithm).key_data(),
+                "{name}"
+            );
+            assert_eq!(ui.retries(), [false, true], "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn three_wrong_passphrases_end_with_wrong_passphrase() {
+        let ui = Answers::new(&[Some("a"), Some("b"), Some("c"), Some("spelaion-test")]);
+        match load("ppk_ed25519_v3_pass.ppk", &ui).await {
+            Err(SshError::Hop { message, .. }) => {
+                assert!(message.starts_with("wrong passphrase for "), "{message}");
+            }
+            other => panic!("three attempts at most: {:?}", other.map(|_| ())),
+        }
+        assert_eq!(ui.retries(), [false, true, true]);
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_question_cancels() {
+        let ui = Answers::new(&[None]);
+        let result = load("ppk_rsa_v2_pass.ppk", &ui).await;
+        assert!(
+            matches!(result, Err(SshError::Cancelled)),
+            "{:?}",
+            result.map(|_| ())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_no_key_says_so_without_asking() {
+        let ui = Answers::new(&[Some("spelaion-test")]);
+        match load("ppk_rsa.pub", &ui).await {
+            Err(SshError::Hop { message, .. }) => {
+                assert!(message.starts_with("reading "), "{message}")
+            }
+            other => panic!("not a private key: {:?}", other.map(|_| ())),
+        }
+        assert!(ui.retries().is_empty());
+        // A PuTTY key whose header says it is not encrypted, but which cannot be read, is not
+        // asked for a passphrase either.
+        assert!(!is_encrypted_ppk(
+            "PuTTY-User-Key-File-3: ssh-rsa\nEncryption: none\n"
+        ));
+        assert!(is_encrypted_ppk(
+            "PuTTY-User-Key-File-2: ssh-rsa\r\nEncryption: aes256-cbc\r\n"
+        ));
+        assert!(!is_encrypted_ppk(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nEncryption: x\n"
+        ));
+    }
+
+    #[test]
+    fn the_agent_filter_reads_an_encrypted_putty_keys_public_key() {
+        for (name, algorithm) in PLAIN.iter().chain(ENCRYPTED) {
+            let key = public_key_of(&fixture(name)).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(key.key_data(), exported(algorithm).key_data(), "{name}");
+        }
+    }
 }

@@ -39,6 +39,18 @@
   bodies, psql lines and COPY data; `split_statements`, `code_ranges` and `copy_stdio`'s word
   reader read its regions, and a new PostgreSQL rule goes into the scanner alone. `copy_data`
   reads one span's text (the scanner on that text), never the whole script, so a dump is not
-  scanned once per statement. Until another dialect moves, a rule its splitter learns (a quote,
-  a meta line, white space) must be copied into its other readers (`code_ranges`'s skip
-  function) in the same change: that gap is what SDB-436, 437 and 439 were.
+  scanned once per statement. MySQL and MariaDB have moved too (SDB-454): `MysqlScanner` in
+  `mysql.rs` reads quotes as the session's `sql_mode` does (`Quoting`, from `with_sql_mode`),
+  `DELIMITER` lines (a `MetaLine`, code as a whole, never a statement) and executable comments
+  (`ExecutableComment`, which make their statement one); `split`, `code_ranges` and
+  `first_word` read its regions. The classifier's raw-text check for executable comments
+  (`reject_mysql_executable_comments`, SDB-116) deliberately stays off the scanner.
+  SQL Server has moved as well (SDB-455): `SqlServerScanner` in `sqlserver.rs` reads quotes,
+  `[names]`, nested comments, `GO` lines (a statement end, code; a `--` comment after the `GO`
+  is a comment), `BEGIN … END` blocks and the rest of a batch a `DECLARE` or a module takes;
+  `split`, `code_ranges`, `first_word` and `counts_rows` read its regions, and it gives the
+  guard its first word (`Dialect::first_word`). Every other dialect, PostgreSQL and MySQL
+  included for now, answers `None` there and the guard reads the word through its
+  `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
+  white space) must be copied into its other readers (`code_ranges`'s skip function) in the
+  same change: that gap is what SDB-436, 437 and 439 were.

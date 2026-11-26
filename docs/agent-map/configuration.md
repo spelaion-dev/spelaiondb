@@ -7,6 +7,12 @@
   through `TrustStore::update`, one at a time, so none saves over another it did not see
   (`tests/trust_updates.rs`); `TrustStore::load` is for reading. If you change `model.rs`,
   regenerate the schema: `SPELAION_UPDATE_SCHEMA=1 cargo test -p spelaion-config`.
+  A connection's identity is `identity.rs`'s `ConnectionKey` (ADR-075, SDB-495): its folder
+  (the canonical root, none for a personal connection; `new` refuses a mismatch) and its
+  `ConnectionId`, whose text form is `ConnectionId::parse` / `Display` and never holds a folder.
+  The store's keys (`store_scope`, `folder_scope`, `repository_scope`) and the connection's
+  keychain name (`keychain_account`, behind `accounts::connection_account`) come from it: never
+  build one from `workspace_root` by hand. Never put a database in it (ADR-074).
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
   Every password written to the keychain goes through `secrets::store`, which reads it back
@@ -18,12 +24,30 @@
   `definition.rs` (SDB-426) is what a connection's session is opened from, without secrets
   (its file, its network profile, `user.toml`, the connection types, the repository and its
   trust), compared before a session is made from another one; nothing secret is read for it.
+  With several folders open, `Config::connection_definition_open` (each open folder's `Config`
+  and whether it is trusted) makes a personal connection's definition cover what it reads of
+  every folder (its trust, its types, its `known_hosts`, and the profile it names wherever it
+  comes from), so a change in any of them stops its sessions being reused (SDB-526); a folder's
+  connection's, and every one with one folder open, is `connection_definition`'s. It and the
+  resolver find the folders and the profile in one place, `folders.rs`: never look them up
+  twice.
   Poolers and bastions (SDB-396): a PostgreSQL connection's `pooler` (`session` or
   `transaction`), MySQL's and MariaDB's `cleartext_password` and the `databases` a MySQL,
   MariaDB or SQL Server connection shows load only on those engines (`load.rs`); a pooler in
   transaction mode refuses `[session]` and `read_only`, which would hold for one transaction.
   The first two reach the driver only as `ConnectParams::options` (`engine_options.rs`), so an
   older plugin that speaks protocol 1.0 refuses the connection instead of ignoring them.
+  On PostgreSQL `databases` means something else (ADR-074, SDB-491): the other databases of
+  its server the connection opens, its own `database` always included; `all_databases = true`
+  (PostgreSQL only) opens every database the server lists. Without either it is its own
+  database alone, as before, and neither key is written. `load.rs` refuses both together,
+  `all_databases` on another engine, and either behind a `pooler`. The resolved connection
+  carries the choice as `OtherDatabases` (`None`, `Named`, `All`; always `None` off
+  PostgreSQL), which is what the core reads; `databases` keeps feeding `shown.rs`. On
+  PostgreSQL the form's names are case-sensitive, changing the engine keeps `databases` only
+  between engines where it means the same, a paste or a copy leaves both keys out (they widen
+  what opens), and an import never turns `all_databases` on (DBeaver's "Show all databases"
+  is listed as not imported). Trust pins both like every field (`tests/postgres_databases.rs`).
   `tunnel_draft.rs` does the same for SSH tunnels (hops matched by position; a stored hop
   password is forgotten when that hop points to another server).
   Every file the configuration writes goes through `atomic_file` (temporary file + rename, the
@@ -97,3 +121,19 @@
   safeguards only add up across layers, so nothing can loosen Production. Any change there
   needs tests that try to get around it (`tests/connection_types.rs`); `types_edit.rs` writes
   the user's types.
+  Several folders open (ADR-075, SDB-497): each folder is one `Config`, loaded alone with the
+  personal layer; never build a `Config` or a resolver over two repositories. A folder's
+  connection sees its own folder and the personal layer: its folder's types, its folder's
+  `known_hosts`, its folder's network profiles and then the personal ones, whatever else is
+  open. A personal connection sees every open folder, only to tighten, through
+  `Resolver::with_open_folders` (the open folders' `Config`s, in the order they were opened):
+  its type's safeguards and masked columns add up across every open, trusted folder
+  (`ConnectionTypes::load_open`; looks from the user, then the first folder that defines the
+  type, then the built-in one), any folder whose types file does not load or changed since it
+  was trusted refuses the typed personal connections it touches, every trusted folder's
+  `known_hosts` goes with its tunnel (`ResolvedTunnel::known_hosts`, all read by
+  `spelaion-ssh`), and a network profile it names is a personal one first, else the one open
+  folder's that has it (`Resolver::network_profile`), refused, naming the folders, when
+  several have it. A tunnel carries the folder whose profile it is (`ResolvedTunnel::folder`).
+  Without `with_open_folders`, or with one folder, it is today's resolver. Any change there
+  needs tests that try to get around it (`tests/several_folders.rs`).

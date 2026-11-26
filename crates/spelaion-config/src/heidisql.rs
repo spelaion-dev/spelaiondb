@@ -420,9 +420,6 @@ fn connection(path: String, fields: Fields) -> ImportedConnection {
         } else {
             SshAuth::Agent
         };
-        if key.to_ascii_lowercase().ends_with(".ppk") {
-            warnings.push("SSH key: a PuTTY key may need converting to OpenSSH format".into());
-        }
         if !key.is_empty() && ssh_password.is_some() {
             warnings.push("SSH password: not imported with a private key".into());
         }
@@ -672,6 +669,25 @@ mod tests {
                 "{field}={value}"
             );
         }
+    }
+
+    /// PuTTY keys (`.ppk`) are read as they are, with or without a passphrase (SDB-528): the key
+    /// is imported with no warning about converting it.
+    #[test]
+    fn heidisql_putty_keys_are_imported_as_they_are() {
+        let c = session(
+            "Servers\\Example\\SSHtunnelActive<|||>3<|||>1\nServers\\Example\\SSHtunnelPrivateKey<|||>1<|||>C:\\keys\\bastion.ppk\n",
+        );
+        let ssh = c.ssh.as_ref().unwrap();
+        assert_eq!(ssh.auth, SshAuth::Key);
+        assert_eq!(ssh.key_path, "C:\\keys\\bastion.ppk");
+        assert!(
+            !c.unmapped
+                .iter()
+                .any(|w| w.contains("PuTTY") || w.contains("convert")),
+            "{:?}",
+            c.unmapped
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ import { call, commands, type CopySpecialItem, type UpdateSourceItem, type Block
 import { startJob, type Job } from "../jobs";
 import { readClipboardText } from "../clipboardText";
 import { openTableData } from "../connect";
+import type { ConnectionKey } from "../connectionKey";
 import { THEME_CHANGE_EVENT, onPixelRatioChange, usePreferences } from "../preferences";
 import { FindCache } from "../grid/findCache";
 import { RowCache, type ValueKind } from "../grid/rowCache";
@@ -392,11 +393,12 @@ export function ResultGrid({
   restoringView?: boolean;
   /** A table data tab: its table, and the WHERE that "filter by this value" adds to (the
    *  core writes the condition; the page's SELECT is checked when it loads). Its foreign keys
-   *  can be followed to new table data tabs of `connectionId`. */
-  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connectionId: string | null };
+   *  can be followed to new table data tabs of `connection`. */
+  tableData?: { schema: string; name: string; filter: string; onFilter(filter: string): void; connection: ConnectionKey | null };
   /** The table whose foreign keys the rows follow, both ways (SDB-11): a table data tab's own, or
    *  the one table the core matched a query's result to (SDB-93). */
-  keyTable?: { schema: string; name: string; connectionId: string | null };
+  /** The rows' table, and its connection's identity (ADR-075). */
+  keyTable?: { schema: string; name: string; connection: ConnectionKey | null };
   /** The comments of the columns, by name, where they are known (a table's data): shown in
    *  the header when the user asks for it. */
   columnComments?: Record<string, string>;
@@ -1266,7 +1268,8 @@ export function ResultGrid({
    *  reads the row's values and writes the filter of the table data tab it opens. */
   async function followKey(cell: Cell, key: TableKeyItem | undefined = keyColumns.get(cell.col)?.[0]) {
     setMenu(null);
-    if (!keyTable?.connectionId || !key) return;
+    const keyConnection = keyTable?.connection;
+    if (!keyConnection || !key) return;
     try {
       const target = await call(commands.followKey(session, result.id, cell.row, keyTable.schema, keyTable.name, {
         direction: key.direction,
@@ -1274,7 +1277,7 @@ export function ResultGrid({
         table: key.table,
         name: key.name,
       }));
-      openTableData(keyTable.connectionId, session, target.schema, target.table, target.filter);
+      openTableData(keyConnection, session, target.schema, target.table, target.filter);
     } catch (e) {
       setNotice({ text: t("references.followFailed", { detail: e instanceof Error ? e.message : String(e) }), error: true });
     }
@@ -1332,7 +1335,7 @@ export function ResultGrid({
 
   /** Opens a table data tab where a key of the references panel leads (its filter is the core's). */
   function openTarget(target: KeyTargetItem) {
-    if (keyTable?.connectionId) openTableData(keyTable.connectionId, session, target.schema, target.table, target.filter);
+    if (keyTable?.connection) openTableData(keyTable.connection, session, target.schema, target.table, target.filter);
   }
 
   /** The next shown column `delta` steps away (stopping at the first and the last). */

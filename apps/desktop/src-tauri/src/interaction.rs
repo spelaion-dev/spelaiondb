@@ -56,13 +56,13 @@ impl Pending {
 struct Asking<'a> {
     id: u32,
     pending: &'a Pending,
-    app: &'a AppHandle,
+    interaction: &'a AppInteraction,
 }
 
 impl Drop for Asking<'_> {
     fn drop(&mut self) {
         if self.pending.forget(self.id) {
-            let _ = InteractionClosed { id: self.id }.emit(self.app);
+            let _ = self.interaction.send(&InteractionClosed { id: self.id });
         }
     }
 }
@@ -70,11 +70,24 @@ impl Drop for Asking<'_> {
 pub struct AppInteraction {
     app: AppHandle,
     pending: Pending,
+    /// The window whose page asked for what needs the answer (SDB-30, SDB-522): a connect or a
+    /// test that page started, or a job started from one of its sessions. Only it shows the
+    /// question; no question is ever sent to every window.
+    window: String,
 }
 
 impl AppInteraction {
-    pub fn new(app: AppHandle, pending: Pending) -> Self {
-        Self { app, pending }
+    /// Questions shown only in the window `label` (ADR-083).
+    pub fn for_window(app: AppHandle, pending: Pending, label: &str) -> Self {
+        Self {
+            app,
+            pending,
+            window: label.to_owned(),
+        }
+    }
+
+    fn send<E: Event + serde::Serialize + Clone>(&self, event: &E) -> tauri::Result<()> {
+        event.emit_to(&self.app, self.window.as_str())
     }
 
     async fn ask(&self, request: InteractionKind) -> Answer {
@@ -82,10 +95,10 @@ impl AppInteraction {
         let _asking = Asking {
             id,
             pending: &self.pending,
-            app: &self.app,
+            interaction: self,
         };
         let event = InteractionRequest { id, request };
-        if event.emit(&self.app).is_err() {
+        if self.send(&event).is_err() {
             return (false, None);
         }
         match tokio::time::timeout(ANSWER_TIMEOUT, rx).await {

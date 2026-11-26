@@ -3,6 +3,8 @@
 // in the core: this only collects what the user typed.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { explorerSession } from "../windowContext";
+import { type ConnectionKey, listedConnection, tabOnConnection } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import {
   call,
@@ -35,6 +37,7 @@ import { fieldList } from "../fieldNames";
 import { ConnectionImport, IMPORT_CLIENTS, type ImportClientId } from "./ConnectionImport";
 import { ImportSources } from "./ImportSources";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
+import { SaveInChoices, defaultRepository } from "./SaveInChoices";
 import { EMPTY_KUBERNETES, KubernetesTab, withoutProfileFields } from "./KubernetesTab";
 import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionTestLog";
 import { installText, openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
@@ -54,7 +57,7 @@ const DATABASE_FILES: Record<string, { name: string; extensions: string[]; fallb
 export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
   const { t } = useTranslation("connections");
   const close = () => useApp.getState().setConnectionDialog(null);
-  const editing = dialog.kind === "edit" ? dialog.id : null;
+  const editing = dialog.kind === "edit" ? dialog.connection : null;
   const [engines, setEngines] = useState<EngineItem[]>([]);
   const [engine, setEngine] = useState<EngineItem | null>(null);
   /** The server picked when it is a kind of another engine's connection (CockroachDB is a
@@ -117,7 +120,7 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
           <h2>
             {engine && <EngineBadge engine={kind ?? engine} />}
             {editing
-              ? t("editTitle", { name: initial?.name ?? editing })
+              ? t("editTitle", { name: initial?.name ?? editing.id })
               : importing.kind === "list"
                 ? t("importer.sources.title")
                 : importing.kind === "client"
@@ -364,6 +367,19 @@ const CLOUD_TOKENS: CloudToken[] = ["awsRds", "azureAd", "googleCloudSql"];
 const PASSWORDLESS_ENGINES = ["postgres", "mysql", "mariadb"];
 type FormTab = "main" | "ssl" | "ssh" | "kubernetes" | "session" | "options";
 
+/** Which other databases of its server a PostgreSQL connection opens (ADR-074). */
+type OtherDatabasesChoice = "own" | "named" | "all";
+const OTHER_DATABASES: OtherDatabasesChoice[] = ["own", "named", "all"];
+
+function otherDatabasesLabel(choice: OtherDatabasesChoice, database: string, t: (key: string, options?: Record<string, string>) => string): string {
+  switch (choice) {
+    case "own": return database.trim() ? t("fields.otherDatabasesOwn", { database: database.trim() }) : t("fields.otherDatabasesOwnUnnamed");
+    case "named": return t("fields.otherDatabasesNamed");
+    case "all": return t("fields.otherDatabasesAll");
+    default: { const never: never = choice; return never; }
+  }
+}
+
 /** How a SQL Server LocalDB instance is named in place of a host (ADR-068). */
 const LOCALDB_PREFIX = "(localdb)\\";
 /** The instance every LocalDB installation has. */
@@ -447,7 +463,7 @@ function authFrom(mode: PasswordMode): AuthMethod {
 function ConnectionForm(props: {
   engine: EngineItem;
   /** Identifier of the connection being edited; absent when adding one. */
-  editing?: string;
+  editing?: ConnectionKey;
   initial?: ConnectionDraft;
   revision?: string;
   /** Editing: whether the keychain holds its password, so leaving the field empty keeps one. */
@@ -519,6 +535,8 @@ function ConnectionForm(props: {
   const [saving, setSaving] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** The open folder a new repository connection goes into (its root, ADR-075). */
+  const [repository, setRepository] = useState<string | null>(() => defaultRepository(useApp.getState().openFolders));
   const [draft, setDraft] = useState<Omit<ConnectionDraft, "passwordMode" | "tunnel" | "kubernetes">>(() => initial ?? {
     personal: !hasWorkspace,
     folder: "",
@@ -535,6 +553,7 @@ function ConnectionForm(props: {
     pooler: null,
     cleartextPassword: false,
     databases: [],
+    allDatabases: false,
     user: prefill?.user ?? "",
     passwordEnv: "",
     passwordOther: "",
@@ -561,7 +580,7 @@ function ConnectionForm(props: {
   const [tunnel, setTunnel] = useState(initial?.tunnel ?? "");
   // Types and what they do come from the core (ADR-029).
   const connectionTypes = useConnectionTypes();
-  const editedConnection = useApp((s) => s.connections.find((c) => c.id === editing));
+  const editedConnection = useApp((s) => (editing ? listedConnection(s.connections, editing) : undefined));
   const savedType = editing && initial ? { env: initial.env, kind: editedConnection?.kind ?? null } : null;
   // Personal, in the local store and never in the file: saved with the form, apart from it.
   const savedHistory = editedConnection?.historyEnabled ?? true;
@@ -624,6 +643,12 @@ function ConnectionForm(props: {
   const transactionPooled = pooler && draft.pooler === "transaction";
   const cleartext = engine.id === "mysql" || engine.id === "mariadb";
   const choosesDatabases = cleartext || engine.id === "sqlserver";
+  // ADR-074: a PostgreSQL connection opens only its own database, the ones it names, or all
+  // of its server's; never behind a pooler (the core refuses it). Picked here, the choice wins
+  // over what the draft implies, so "these databases" holds while its list is still empty.
+  const opensDatabases = engine.id === "postgres";
+  const [databaseChoice, setDatabaseChoice] = useState<OtherDatabasesChoice | null>(null);
+  const otherDatabases: OtherDatabasesChoice = databaseChoice ?? (draft.allDatabases ? "all" : draft.databases.some((name) => name.trim()) ? "named" : "own");
   // A hint only: the core checks when it opens (a certificate checked, or a profile with SSH
   // hops; a profile with only a proxy or SSM is refused there).
   const cleartextSafeRoute = draft.tlsMode === "verify-ca" || draft.tlsMode === "verify-full" || (useTunnel && !useKubernetes);
@@ -668,7 +693,8 @@ function ConnectionForm(props: {
     // SDB-396: each only on the engine that has it, as the core checks.
     pooler: pooler ? draft.pooler : null,
     cleartextPassword: cleartext && draft.cleartextPassword,
-    databases: choosesDatabases ? draft.databases : [],
+    databases: choosesDatabases || (opensDatabases && otherDatabases === "named") ? draft.databases : [],
+    allDatabases: opensDatabases && otherDatabases === "all",
     // A pooler in transaction mode keeps nothing set for the session (the core refuses it).
     ...(transactionPooled
       ? { readOnly: false, sessionSetup: "", ignoreSetupErrors: false, defaultSchema: "", isolation: null }
@@ -778,11 +804,11 @@ function ConnectionForm(props: {
         test.run((job, onStep) => call(commands.testConnection(request, typedPassword || null, editing ?? null, networkOnly, job, onStep)));
       let outcome = await attempt();
       if (outcome.kind === "untrusted") {
-        if (!(await useDialogs.getState().askTrust(workspace?.workspace ?? null))) {
+        if (!(await useDialogs.getState().askTrust(outcome.root))) {
           test.clear();
           return;
         }
-        useApp.getState().setWorkspace(await call(commands.trustWorkspace(workspace?.workspace ?? "")));
+        useApp.getState().setWorkspace(await call(commands.trustWorkspace(outcome.root)));
         outcome = await attempt();
       }
       // The tunnel this connection uses may have changed in the repository.
@@ -807,7 +833,7 @@ function ConnectionForm(props: {
       const stored = passwordMode === "keychain" && password ? password : null;
       // Changing the engine closes its tabs' sessions: ask first if a transaction is open.
       if (editing && props.savedEngine && props.savedEngine !== engine.id) {
-        const sessions = useApp.getState().tabs.filter((tab) => tab.connectionId === editing).map((tab) => tab.id);
+        const sessions = useApp.getState().tabs.filter((tab) => tabOnConnection(tab, editing)).map((tab) => tab.id);
         if (!(await confirmOpenTransactions(sessions, "disconnect"))) return;
       }
       if (editing) {
@@ -815,16 +841,17 @@ function ConnectionForm(props: {
         if (historyEnabled !== savedHistory) await saveHistoryPreference(editing, historyEnabled);
         await call(commands.updateConnection(editing, request, stored, props.revision ?? ""));
       } else {
-        const id = await call(commands.addConnection(request, stored));
+        // Into the open folder chosen above, or personal (ADR-075).
+        const key = await call(commands.addConnection(request, stored, draft.personal ? null : repository));
         await refreshConnections();
-        // The store remembers it per connection identifier (enabled unless set otherwise).
-        const added = useApp.getState().connections.find((c) => c.id === id);
+        // The store remembers it per connection (enabled unless set otherwise).
+        const added = listedConnection(useApp.getState().connections, key);
         if (added && added.historyEnabled !== historyEnabled) {
           try {
-            await saveHistoryPreference(id, historyEnabled);
+            await saveHistoryPreference(key, historyEnabled);
           } catch (e) {
             // The connection exists: saving this form again would add a second one.
-            useApp.getState().setConnectionDialog({ kind: "edit", id, notice: t("fields.historyNotSaved", { error: errorText(e) }) });
+            useApp.getState().setConnectionDialog({ kind: "edit", connection: key, notice: t("fields.historyNotSaved", { error: errorText(e) }) });
             return;
           }
         }
@@ -832,9 +859,9 @@ function ConnectionForm(props: {
       if (editing && props.savedEngine && props.savedEngine !== engine.id) {
         // Its open sessions belong to the old engine: closed; tabs connect again when run.
         const app = useApp.getState();
-        const tabs = app.tabs.filter((tab) => tab.connectionId === editing);
+        const tabs = app.tabs.filter((tab) => tabOnConnection(tab, editing));
         await Promise.all(
-          [...tabs.map((tab) => tab.id), `meta:${editing}`].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
+          [...tabs.map((tab) => tab.id), explorerSession(editing)].map((session) => call(commands.disconnect(session)).catch(() => undefined)),
         );
         for (const tab of tabs) app.setConnection(tab.id, DISCONNECTED);
       }
@@ -1073,6 +1100,43 @@ function ConnectionForm(props: {
                   </>
                 )}
               </fieldset>
+              {opensDatabases && (
+                <fieldset>
+                  <legend>{t("sections.otherDatabases")}</legend>
+                  <div className="form-row" role="radiogroup" aria-label={t("sections.otherDatabases")}>
+                    {OTHER_DATABASES.map((choice) => (
+                      <label key={choice} className="check">
+                        <input
+                          type="radio"
+                          name="other-databases"
+                          value={choice}
+                          checked={otherDatabases === choice}
+                          disabled={draft.pooler !== null}
+                          onChange={() => {
+                            setDatabaseChoice(choice);
+                            update({ allDatabases: choice === "all" });
+                          }}
+                        />
+                        {otherDatabasesLabel(choice, draft.database, t)}
+                      </label>
+                    ))}
+                  </div>
+                  {otherDatabases === "named" && draft.pooler === null && (
+                    <Field label={t("fields.otherDatabases")}>
+                      <textarea
+                        className="masking-patterns"
+                        name="databases"
+                        rows={3}
+                        spellCheck={false}
+                        value={draft.databases.join("\n")}
+                        placeholder={t("fields.otherDatabasesPlaceholder")}
+                        onChange={(e) => update({ databases: e.target.value.split("\n") })}
+                      />
+                    </Field>
+                  )}
+                  <p className="muted small">{t(draft.pooler !== null ? "fields.otherDatabasesPooler" : "fields.otherDatabasesHint")}</p>
+                </fieldset>
+              )}
               {choosesDatabases && (
                 <fieldset>
                   <legend>{t("sections.databases")}</legend>
@@ -1403,19 +1467,25 @@ function ConnectionForm(props: {
             <legend>{t("sections.organization")}</legend>
             <div className="form-row" role="radiogroup" aria-label={t("fields.saveIn")}>
               <span>{t("fields.saveIn")}</span>
-              <label className="check">
-                <input type="radio" name="save-in" checked={!draft.personal} disabled={!hasWorkspace || Boolean(editing)} onChange={() => {
+              {/* One of the open repository folders, or personal (ADR-075). */}
+              <SaveInChoices
+                name="save-in"
+                personal={draft.personal}
+                repository={repository}
+                disabled={Boolean(editing)}
+                labelClassName="check"
+                onChoose={(choice) => {
+                  if (choice.personal) {
+                    update({ personal: true });
+                    return;
+                  }
                   void (async () => {
                     if (useKubernetes && !(await trustForKubernetes())) return;
+                    setRepository(choice.repository);
                     update({ personal: false });
                   })();
-                }} />
-                {t("fields.project")}
-              </label>
-              <label className="check">
-                <input type="radio" name="save-in" checked={draft.personal} disabled={Boolean(editing)} onChange={() => update({ personal: true })} />
-                {t("fields.personal")}
-              </label>
+                }}
+              />
             </div>
             <p className="muted small">
               {editing ? t("fields.fixedLocationHint") : draft.personal ? t("fields.personalHint") : t("fields.projectHint")}

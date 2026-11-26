@@ -4,6 +4,12 @@
 //! except the keychain, environment variables and commands, so it can be compared as often as
 //! needed without asking a password manager or running a program.
 //!
+//! With several folders open (ADR-075), a personal connection is also opened from what it reads
+//! of every open folder (`folders.rs`): its definition covers each folder's trust, connection
+//! types and `known_hosts`, and the network profile it names wherever it comes from. A
+//! folder's connection reads only its own folder, and its definition is the same whatever else
+//! is open; with one folder open, every definition is what it was before several could be.
+//!
 //! A session opened earlier is still what the configuration says while this stays the same.
 //! The app keeps the definition each session was opened from, and the core compares it with
 //! the current one before another session is made from it (`spelaion-core`'s
@@ -30,6 +36,22 @@ pub struct ConnectionDefinition {
     workspace_root: Option<PathBuf>,
     /// Whether the repository is trusted (ADR-022).
     trusted: bool,
+    /// A personal connection with several folders open (ADR-075): what it reads of each, in
+    /// the order they were opened. Empty for a folder's connection, and with one folder open.
+    open_folders: Vec<FolderKey>,
+}
+
+/// What a personal connection reads of one open folder (ADR-075): whether it is trusted, its
+/// connection types (which tighten the connection's type) and its `known_hosts` (which checks
+/// the connection's tunnel), as they are now.
+#[derive(Debug, Clone, PartialEq)]
+struct FolderKey {
+    root: Option<PathBuf>,
+    trusted: bool,
+    types: TypesKey,
+    /// The file's bytes; `None` when there is none (or it cannot be read, which the resolver
+    /// reports when it opens a session).
+    known_hosts: Option<Vec<u8>>,
 }
 
 /// A `TypesLayer` that can be compared.
@@ -59,16 +81,60 @@ impl Config {
         id: &ConnectionId,
         trusted: bool,
     ) -> Option<ConnectionDefinition> {
+        self.connection_definition_open(id, trusted, &[])
+    }
+
+    /// The definition of connection `id` now with `open` folders open (ADR-075): each open
+    /// folder's configuration (loaded alone with the personal layer, as the resolver is given
+    /// them in `Resolver::with_open_folders`) and whether it is trusted, in the order they were
+    /// opened. `trusted` is this configuration's own folder's. A personal connection's covers
+    /// what it reads of every open folder; a folder's connection's, and any with one folder
+    /// open, is [`Config::connection_definition`]'s.
+    pub fn connection_definition_open(
+        &self,
+        id: &ConnectionId,
+        trusted: bool,
+        open: &[(&Config, bool)],
+    ) -> Option<ConnectionDefinition> {
         let entry = self.connection(id)?;
+        let configs: Vec<&Config> = open.iter().map(|(config, _)| *config).collect();
+        let folders = crate::folders::folders_for(self, &configs, entry.id.source);
+        let is_trusted = |folder: &Config| {
+            if folder.workspace_root == self.workspace_root {
+                return trusted;
+            }
+            open.iter()
+                .find(|(config, _)| config.workspace_root == folder.workspace_root)
+                .is_some_and(|(_, trusted)| *trusted)
+        };
+        let open_folders = if folders.len() > 1 {
+            folders
+                .iter()
+                .map(|folder| FolderKey {
+                    root: folder.workspace_root.clone(),
+                    trusted: is_trusted(folder),
+                    types: TypesKey::of(&folder.team_types),
+                    known_hosts: folder
+                        .workspace_root
+                        .as_deref()
+                        .and_then(|root| std::fs::read(crate::trust::team_known_hosts(root)).ok()),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         Some(ConnectionDefinition {
             file_path: entry.file_path.clone(),
             file: entry.file.clone(),
-            tunnel: entry
-                .file
-                .tunnel
-                .as_deref()
-                .and_then(|name| self.tunnel_for(entry.id.source, name))
-                .map(|t| (t.file_path.clone(), t.file.clone())),
+            // The profile the resolver would use, from whichever folder it comes.
+            tunnel: entry.file.tunnel.as_deref().and_then(|name| {
+                match crate::folders::profile(self, &configs, entry.id.source, name) {
+                    crate::folders::Profile::Found(_, t) => {
+                        Some((t.file_path.clone(), t.file.clone()))
+                    }
+                    crate::folders::Profile::Missing | crate::folders::Profile::Several(_) => None,
+                }
+            }),
             user: self.user.clone(),
             user_unreadable: self.user_unreadable,
             types: [
@@ -77,6 +143,7 @@ impl Config {
             ],
             workspace_root: self.workspace_root.clone(),
             trusted,
+            open_folders,
         })
     }
 }

@@ -135,10 +135,11 @@ pub fn deliver(app: &tauri::AppHandle, request: &LaunchRequest) {
     if request.is_empty() {
         return;
     }
+    // To the main window only (SDB-30): another window never opens what a launch asked for.
     let _ = LaunchRequested {
         request: request.into(),
     }
-    .emit(app);
+    .emit_to(app, crate::windows::MAIN);
     // The smoke test's window never takes the foreground (SDB-274).
     if std::env::var_os(crate::OFFSCREEN_SWITCH).is_none()
         && let Some(window) = app.get_webview_window("main")

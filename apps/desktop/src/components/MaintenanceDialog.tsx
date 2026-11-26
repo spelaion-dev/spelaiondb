@@ -5,6 +5,7 @@
 // outside any transaction (a new tab has none open).
 
 import { useEffect, useState } from "react";
+import { type ConnectionKey } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands } from "../api";
 import type { MaintenanceKindItem, MaintenanceOptionsItem_Deserialize as MaintenanceOptionsItem, MaintenancePlanItem, ObjectTargetItem_Deserialize as ObjectTargetItem } from "../bindings";
@@ -70,7 +71,7 @@ function optionsOf(engine: string, kind: MaintenanceKindItem): { flags: Flag[]; 
 
 export function MaintenanceDialog({
   session,
-  connectionId,
+  identity,
   engine,
   schema,
   name,
@@ -79,7 +80,7 @@ export function MaintenanceDialog({
   onClose,
 }: {
   session: string;
-  connectionId: string;
+  identity: ConnectionKey;
   engine: string;
   /** The schema the tab opens in. */
   schema: string;
@@ -119,9 +120,9 @@ export function MaintenanceDialog({
   function openTab(run: boolean) {
     if (!plan) return;
     const app = useApp.getState();
-    const tab = app.addTab(connectionId, plan.sql);
+    const tab = app.addTab(identity, plan.sql);
     if (run) app.updateTab(tab, { runOnOpen: true });
-    connectTabFromExplorer(tab, session, explorerDatabase(connectionId, schema));
+    connectTabFromExplorer(tab, session, explorerDatabase(identity, schema));
     onClose();
   }
 

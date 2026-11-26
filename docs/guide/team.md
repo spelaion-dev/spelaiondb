@@ -12,6 +12,17 @@ until you have seen what changed, field by field, and accepted it. Changes you m
 the app's forms are yours and need no review. `spelaiondb trust <folder>` does the same from a
 terminal and lists the changes it accepts.
 
+Several repositories can be open in one window, up to ten. **Open… → Add folder…** (or a recent
+folder, the command palette, or `spelaion-desktop <folder>` from a terminal) adds a folder
+beside the ones open and closes nothing. The explorer then shows a group per folder, named
+after it (with its parent's name when two have the same name), and your personal connections
+once. Each folder is trusted, reviewed and checked on its own: trusting one trusts nothing in
+another, and a connection of one folder never uses another folder's tunnels, host keys or
+connection types. Two folders may have a connection of the same name; pickers then add the
+folder to its name. Close a folder from its group's ×, or from **Open…**: it asks first if its
+tabs would lose an open transaction, a running query or row changes, and its tabs come back
+when you open it again. The open folders are opened again at the next start.
+
 What differs from one administrator to another (their database user, their SSH user, the
 name of their key) goes in `${user.…}` variables, such as `user = "${user.db_user}"`. The
 first time a connection needs one you have not defined, SpelaionDB asks for every missing

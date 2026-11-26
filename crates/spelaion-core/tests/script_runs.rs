@@ -270,6 +270,7 @@ fn options(on_error: OnError) -> ScriptOptions {
     ScriptOptions {
         on_error,
         statement_timeout: None,
+        statement_savepoints: false,
     }
 }
 
@@ -769,6 +770,7 @@ async fn a_statement_that_runs_too_long_times_out_on_every_engine() {
                 ScriptOptions {
                     on_error: OnError::Continue,
                     statement_timeout: Some(Duration::from_millis(700)),
+                    statement_savepoints: false,
                 },
                 &[],
             ),
@@ -797,6 +799,7 @@ async fn a_statement_that_runs_too_long_times_out_on_every_engine() {
                 ScriptOptions {
                     on_error: OnError::Stop,
                     statement_timeout: Some(Duration::from_millis(700)),
+                    statement_savepoints: false,
                 },
                 &[],
             ),
@@ -817,10 +820,243 @@ async fn a_statement_that_runs_too_long_times_out_on_every_engine() {
             ScriptOptions {
                 on_error: OnError::Stop,
                 statement_timeout: Some(Duration::from_secs(30)),
+                statement_savepoints: false,
             },
             &[],
         )
         .await;
         assert_eq!(out.finished, [0], "{name}");
+    }
+}
+
+fn with_savepoints(on_error: OnError) -> ScriptOptions {
+    ScriptOptions {
+        statement_savepoints: true,
+        ..options(on_error)
+    }
+}
+
+const ROLLED_BACK_TO_SAVEPOINT: &str =
+    "NOTICE: Only this statement was rolled back: the transaction goes on without it.";
+
+/// ADR-086: with a savepoint per statement, the 3-of-5 script in manual commit goes on past
+/// statement 3 on the engines whose errors abort the whole transaction and that keep
+/// savepoints, and a Commit keeps the 4 rows; with "stop" it stops there with the transaction
+/// still usable. The other engines behave as without savepoints (ADR-035's table): they already
+/// undo only the failed statement, or keep no savepoints and still stop.
+#[tokio::test]
+async fn a_savepoint_per_statement_rolls_back_only_the_failed_one() {
+    let _turn = crate::serial::file_turn(module_path!());
+    for engine in engines().await {
+        let name = engine.name;
+        let savepoints = spelaion_core::statement_savepoints(name);
+        eprintln!("{name}: savepoint per statement {savepoints}");
+        engine.a.follow_transactions(&Safeguards::default()).await;
+        for mode in [Mode::Continue, Mode::AskSkip, Mode::Stop] {
+            let case = format!("{name}, savepoints, {mode:?}");
+            let table = unique("savepoints");
+            let body = async {
+                run(
+                    &engine.b,
+                    &format!("create table {table} (id int primary key)"),
+                    ScriptOptions::default(),
+                    &[],
+                )
+                .await;
+                engine.a.set_auto_commit(false).await.unwrap();
+                let (on_error, answers): (_, &[ErrorAnswer]) = match mode {
+                    Mode::Stop => (OnError::Stop, &[]),
+                    Mode::Continue => (OnError::Continue, &[]),
+                    Mode::AskSkip | Mode::AskStop => (OnError::Ask, &[ErrorAnswer::Skip]),
+                };
+                let out = run(
+                    &engine.a,
+                    &three_of_five(&table),
+                    with_savepoints(on_error),
+                    answers,
+                )
+                .await;
+                assert_eq!(out.failed, [2], "{case}");
+                // Only the user's statements are statements of the run.
+                assert_eq!(out.summary.statements, 5, "{case}");
+                let aborted = engine.aborts_transactions() && !savepoints;
+                let rescued = out.notices.iter().any(|n| n == ROLLED_BACK_TO_SAVEPOINT);
+                assert_eq!(rescued, savepoints, "{case}: {:?}", out.notices);
+                let went_on = !aborted && matches!(mode, Mode::Continue | Mode::AskSkip);
+                if went_on {
+                    assert_eq!(out.finished, [0, 1, 3, 4], "{case}");
+                    assert_eq!(out.summary.stop, None, "{case}");
+                } else {
+                    assert_eq!(out.finished, [0, 1], "{case}");
+                }
+                let status = engine.a.transaction_status();
+                if aborted {
+                    assert_eq!(status.state, Some(TransactionState::Failed), "{case}");
+                    engine.a.rollback().await.unwrap();
+                } else {
+                    // The failed statement is gone; the transaction is still open and usable.
+                    assert_eq!(status.state, Some(TransactionState::Open), "{case}");
+                    assert_eq!(
+                        count(&engine, &table).await,
+                        "0",
+                        "{case}: nothing committed yet"
+                    );
+                    engine.a.commit().await.unwrap();
+                    let kept = if went_on { "4" } else { "2" };
+                    assert_eq!(count(&engine, &table).await, kept, "{case}");
+                }
+            };
+            cleaning_up(body, |panicked| {
+                drop_tables(&engine, vec![table.clone()], panicked)
+            })
+            .await;
+        }
+    }
+}
+
+/// ADR-086: a user's own SAVEPOINT and ROLLBACK TO keep working in a run with the core's: the
+/// core never wraps them, so rolling back to the user's savepoint undoes what came after it,
+/// the core's rollback of a failed statement included.
+#[tokio::test]
+async fn a_users_own_savepoints_work_with_the_cores() {
+    let _turn = crate::serial::file_turn(module_path!());
+    for engine in engines().await {
+        let name = engine.name;
+        if !spelaion_core::statement_savepoints(name) {
+            continue;
+        }
+        engine.a.follow_transactions(&Safeguards::default()).await;
+        let table = unique("user_savepoints");
+        let body = async {
+            run(
+                &engine.b,
+                &format!("create table {table} (id int primary key)"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+            engine.a.set_auto_commit(false).await.unwrap();
+            let script = format!(
+                "insert into {table} values (1);
+                 savepoint mine;
+                 insert into {table} values (2);
+                 insert into {table} values (1);
+                 rollback to savepoint mine;
+                 insert into {table} values (3)"
+            );
+            let out = run(&engine.a, &script, with_savepoints(OnError::Continue), &[]).await;
+            assert_eq!(out.failed, [3], "{name}");
+            assert_eq!(out.finished, [0, 1, 2, 4, 5], "{name}");
+            assert_eq!(out.summary.stop, None, "{name}");
+            engine.a.commit().await.unwrap();
+            // 1 and 3: the user's ROLLBACK TO took 2 away.
+            assert_eq!(count(&engine, &table).await, "2", "{name}");
+            assert_eq!(
+                value(&engine.b, &format!("select sum(id) from {table}")).await,
+                "4",
+                "{name}"
+            );
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
+        .await;
+    }
+}
+
+/// ADR-086: the core's savepoints are its own statements: the history keeps the user's five
+/// statements, the failed one with its error, and nothing of the core's.
+#[tokio::test]
+async fn the_cores_savepoints_never_reach_the_history() {
+    let _turn = crate::serial::file_turn(module_path!());
+    for engine in engines().await {
+        let name = engine.name;
+        if !spelaion_core::statement_savepoints(name) {
+            continue;
+        }
+        engine.a.follow_transactions(&Safeguards::default()).await;
+        let table = unique("history_of_points");
+        let path =
+            std::env::temp_dir().join(format!("{}.db", unique("spelaion-savepoint-history")));
+        let body = async {
+            run(
+                &engine.b,
+                &format!("create table {table} (id int primary key)"),
+                ScriptOptions::default(),
+                &[],
+            )
+            .await;
+            engine.a.set_auto_commit(false).await.unwrap();
+            let history = spelaion_core::QueryHistory::open(path.clone()).unwrap();
+            let events: Vec<CoreEvent> = history
+                .run_script_with_original(
+                    &engine.a,
+                    &three_of_five(&table),
+                    "/repo".into(),
+                    "shop".into(),
+                    None,
+                    with_savepoints(OnError::Continue),
+                )
+                .collect()
+                .await;
+            assert!(matches!(
+                events.last(),
+                Some(CoreEvent::ScriptFinished { executed: 5, .. })
+            ));
+            let saved = history
+                .list("/repo".into(), "".into(), 100, 0)
+                .await
+                .unwrap();
+            assert_eq!(saved.len(), 5, "{name}: {saved:?}");
+            assert!(
+                saved
+                    .iter()
+                    .all(|e| !e.statement.to_lowercase().contains("savepoint")
+                        && !e.statement.contains("spelaion_statement")),
+                "{name}: {saved:?}"
+            );
+            assert_eq!(
+                saved.iter().filter(|e| e.error.is_some()).count(),
+                1,
+                "{name}"
+            );
+            engine.a.commit().await.unwrap();
+            assert_eq!(count(&engine, &table).await, "4", "{name}");
+        };
+        cleaning_up(body, |panicked| {
+            drop_tables(&engine, vec![table.clone()], panicked)
+        })
+        .await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+}
+
+/// Whether the bundled DuckDB keeps savepoints inside a transaction: ADR-086's table must say
+/// what it does.
+#[tokio::test]
+async fn whether_duckdb_keeps_savepoints() {
+    let _turn = crate::serial::file_turn(module_path!());
+    for engine in engines().await {
+        if engine.name != "duckdb" {
+            continue;
+        }
+        let out = run(
+            &engine.a,
+            "begin transaction; savepoint probe; release savepoint probe; rollback",
+            options(OnError::Continue),
+            &[],
+        )
+        .await;
+        eprintln!(
+            "duckdb savepoints: finished {:?}, failed {:?}",
+            out.finished, out.failed
+        );
+        assert_eq!(
+            out.failed.is_empty(),
+            spelaion_core::statement_savepoints("duckdb"),
+            "ADR-086's table must match what DuckDB does"
+        );
     }
 }

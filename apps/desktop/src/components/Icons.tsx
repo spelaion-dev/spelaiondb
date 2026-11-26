@@ -46,6 +46,7 @@ import {
   Network,
   PanelLeftClose,
   PanelRight,
+  PictureInPicture2,
   Pin,
   Play,
   Plug,
@@ -84,6 +85,8 @@ const ICONS = {
   pin: Pin,
   maximize: Maximize2,
   minimize: Minimize2,
+  // Results shown in a window of their own (SDB-30).
+  detach: PictureInPicture2,
   folderOpen: FolderOpen,
   link: Link,
   arrowUpRight: ArrowUpRight,

@@ -213,10 +213,10 @@ let app = startApp({ SPELAION_E2E_STARTUP_CHOICE: "start-over" });
 
 /** Runs `spelaiondb mcp` as an AI client would (stdio, JSON-RPC): `list_connections`, then each
  *  call, as the client "smoke-agent". Needs the CLI, built with the app (see the top). */
-async function agentSession(calls) {
+async function agentSession(calls, workspace = demo) {
   const cli = process.env.SPELAION_E2E_CLI ?? join(root, "target/release/spelaiondb" + (process.platform === "win32" ? ".exe" : ""));
   if (!existsSync(cli)) throw new Error(`${cli} is missing: in apps/desktop, run npx tauri build --no-bundle -- -p spelaion-desktop -p spelaion-cli`);
-  const agent = spawn(cli, ["mcp", "--workspace", demo], {
+  const agent = spawn(cli, ["mcp", "--workspace", workspace], {
     env: { ...process.env, SPELAION_USER_DIR: userDir },
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -377,6 +377,27 @@ try {
     await settled();
     await page.screenshot({ path: join(shots, `${name}.png`) });
   };
+  // The folder menu (SDB-397, ADR-075): Add folder… adds a folder beside the open ones
+  // (`__spelaionOpenFolder` answers the folder chooser); each open folder has its Close.
+  const folderMenu = () => page.getByRole("menu", { name: "Folders" });
+  const addFolderFromMenu = async (folder) => {
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), folder);
+    await page.getByTitle("Add or close folders").click();
+    await folderMenu().getByRole("menuitem", { name: "Add folder…" }).click();
+    await folderMenu().waitFor({ state: "detached" });
+    // Open once the core lists it and the menu's button is usable again.
+    await page.waitForFunction(async (target) => {
+      const { folders } = await window.__TAURI_INTERNALS__.invoke("list_folders");
+      const fold = (path) => path.replace(/[\\/]+$/, "").replaceAll("\\", "/").toLowerCase();
+      return folders.some((f) => fold(f.path) === fold(target)) && !document.querySelector(".folder-menu-button")?.disabled;
+    }, folder);
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+  };
+  const closeFolderFromMenu = async (name) => {
+    await page.getByTitle("Add or close folders").click();
+    await folderMenu().getByRole("menuitem", { name: `Close ${name}`, exact: true }).click();
+    await folderMenu().waitFor({ state: "detached" });
+  };
   // SPELAION_E2E_UNTIL=<the start of a step's text>: the run stops as a pass when the step
   // after that one begins, to repeat one step without the whole run.
   let untilReached = false;
@@ -390,7 +411,12 @@ try {
 
   async function newQuery(connection, sql) {
     // Double-clicking a connection opens a new query on it (its row has no buttons, SDB-102).
-    await page.locator(`.connection-row:has-text("${connection}") > .label`).dblclick();
+    // A name matches any row containing it; a RegExp is matched against the row's label alone,
+    // for a name that imported connections also contain (`/^analytics$/`).
+    const label = connection instanceof RegExp
+      ? page.locator(".connection-row > .label", { hasText: connection })
+      : page.locator(`.connection-row:has-text("${connection}") > .label`);
+    await label.dblclick();
     const panel = page.locator(".tab-panel:not([hidden])");
     // Preserve the run-time password checks below: cancel the new tab's initial prompt,
     // then Run will ask again. Connections that need no prompt finish normally.
@@ -408,6 +434,12 @@ try {
     return panel;
   }
   async function run(panel) {
+    // The tab ignores the shortcut while it cannot start a run: while it connects, and while a
+    // server whose tabs choose a database (SQL Server, MySQL, MariaDB) lists its databases just
+    // after connecting. "Run script" is disabled exactly then, so the run waits for it (SDB-520).
+    // A press while a run is going (Cancel shows instead of Run) is ignored as before, never
+    // waited for; "attached", since maximized results hide the editor's toolbar.
+    await panel.locator('.editor-action-cancel, .editor-action-run[aria-label="Run script"]:enabled').first().waitFor({ state: "attached" });
     await panel.locator(".cm-content").click();
     await page.keyboard.press("Control+Shift+Enter");
   }
@@ -608,6 +640,31 @@ try {
   await untrustedWizard.getByRole("button", { name: "Cancel" }).click();
   await untrustedWizard.waitFor({ state: "detached" });
 
+  step("PostgreSQL form: the other databases a connection opens (SDB-491)");
+  await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+  const databasesWizard = page.locator(".modal.wizard");
+  await databasesWizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+  await databasesWizard.getByLabel("Database", { exact: true }).fill("app");
+  const otherDatabases = databasesWizard.getByRole("radiogroup", { name: "Databases" });
+  const pgOwnOnly = otherDatabases.getByRole("radio", { name: "Only app" });
+  const pgNamed = otherDatabases.getByRole("radio", { name: "These databases too" });
+  const pgAll = otherDatabases.getByRole("radio", { name: "Every database of the server" });
+  assert.ok(await pgOwnOnly.isChecked(), "a new PostgreSQL connection opens only its own database");
+  const otherList = databasesWizard.getByLabel("Other databases it opens");
+  assert.equal(await otherList.count(), 0);
+  await pgNamed.check();
+  await otherList.fill("billing\nreports");
+  await shot("sdb-491-other-databases");
+  await pgAll.check();
+  assert.equal(await otherList.count(), 0, "all databases need no list");
+  // Behind a pooler only its own database opens: the choice is off, and says why.
+  await databasesWizard.getByLabel("Pooler", { exact: true }).selectOption("session");
+  assert.ok(await pgOwnOnly.isDisabled() && await pgAll.isDisabled());
+  await databasesWizard.getByText(/A connection through a pooler opens only its own database/).waitFor();
+  await databasesWizard.getByLabel("Pooler", { exact: true }).selectOption("");
+  await databasesWizard.getByRole("button", { name: "Cancel" }).click();
+  await databasesWizard.waitFor({ state: "detached" });
+
   step("connections sidebar: drag, keyboard resizing, limits and reset");
   const sidebar = page.locator(".sidebar");
   const activities = page.getByRole("navigation", { name: "Activity bar" });
@@ -758,6 +815,48 @@ try {
   await connectionFilter.fill("");
   await page.keyboard.press("Escape");
   await connectionFilter.waitFor({ state: "detached" });
+
+  step("several folders open: a group per folder with its own trust, the same id in both, closing one (SDB-502)");
+  {
+    // A second repository with a connection of the same id and name as the demo's Shop
+    // (SQLite), never trusted: its group says so, the demo's does not (ADR-075).
+    const second = join(userDir, "second-repo");
+    mkdirSync(join(second, ".spelaion", "connections"), { recursive: true });
+    writeFileSync(join(second, ".spelaion", "connections", "shop.toml"), readFileSync(shopFile, "utf8"));
+    const tabsBefore = await page.locator(".tabbar .tab").count();
+    await addFolderFromMenu(second);
+    const demoGroup = page.getByRole("group", { name: "Connections of demo" });
+    const secondGroup = page.getByRole("group", { name: "Connections of second-repo" });
+    await demoGroup.waitFor();
+    await secondGroup.waitFor();
+    assert.equal(await page.locator(".tabbar .tab").count(), tabsBefore, "adding a folder closes no tab");
+    await page.locator(".workspace-name", { hasText: "2 folders" }).waitFor();
+    await demoGroup.locator(".connection-row", { hasText: "Shop (SQLite)" }).first().waitFor();
+    await secondGroup.locator(".connection-row", { hasText: "Shop (SQLite)" }).waitFor();
+    await secondGroup.getByText("This repository is not trusted", { exact: false }).waitFor();
+    assert.equal(await demoGroup.getByText("This repository is not trusted", { exact: false }).count(), 0);
+    await shot("sdb-502-two-folders");
+    // The folder menu lists both open folders, each with its Close.
+    await page.getByTitle("Add or close folders").click();
+    await folderMenu().getByRole("menuitem", { name: "Close second-repo", exact: true }).waitFor();
+    await folderMenu().getByRole("menuitem", { name: "Close demo", exact: true }).waitFor();
+    await shot("sdb-502-folder-menu");
+    await page.keyboard.press("Escape");
+    await folderMenu().waitFor({ state: "detached" });
+    // A tab's picker names each Shop (SQLite) with its folder: the same name in two folders.
+    await page.keyboard.press("Control+t");
+    const options = await page.locator(".tab-panel:not([hidden])").getByRole("combobox", { name: "Connection", exact: true }).locator("option").allInnerTexts();
+    assert.ok(options.some((text) => text.startsWith("Shop (SQLite) · demo")), options.join(" | "));
+    assert.ok(options.some((text) => text.startsWith("Shop (SQLite) · second-repo")), options.join(" | "));
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction((count) => document.querySelectorAll(".tabbar .tab").length === count, tabsBefore);
+    // Closing the second folder from its group: only its connections go.
+    await secondGroup.getByRole("button", { name: "Close second-repo" }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".folder-group").length === 0);
+    assert.equal(await page.locator(".connection-row", { hasText: "Shop (SQLite)" }).count(), 1);
+    assert.equal(await page.locator(".tabbar .tab").count(), tabsBefore);
+    await shot("sdb-502-one-folder-again");
+  }
 
   step("move a repository connection between folders: drag and drop, Move to folder…, still trusted");
   const shopBefore = readFileSync(shopFile, "utf8");
@@ -1005,7 +1104,9 @@ try {
   await panel.locator('.cm-search button[name="next"]', { hasText: "siguiente" }).waitFor();
   await panel.getByRole("textbox", { name: "Editor SQL" }).waitFor();
   await panel.locator(".statusline", { hasText: "6 filas" }).waitFor();
-  await page.getByRole("tab", { name: /Consulta 1/ }).waitFor();
+  // The tab's label in Spanish; its number depends on the tabs earlier steps opened (the
+  // SDB-502 step opens one to read its connection picker).
+  await page.getByRole("tab", { name: /Consulta \d+/ }).waitFor();
   await shot("03-espanol");
   await setLanguage("en");
   await panel.locator('.cm-search button[name="close"]').click();
@@ -3787,6 +3888,87 @@ try {
     await page.locator(".tabbar .tab.active:not([data-pinned])").waitFor();
   }
 
+  step("split view: two tabs side by side and one above the other, each with its own connection row, resized and focused (SDB-30)");
+  {
+    const tabs = page.locator(".tabbar .tab");
+    const activeTab = page.locator(".tabbar .tab.active");
+    const workspace = page.locator(".editor-workspace");
+    const panes = page.locator(".tab-panel:not([hidden])");
+    const tabMenu = page.getByRole("menu", { name: /^Actions for / });
+    const before = await tabs.count();
+    const first = await activeTab.locator(".tab-label").innerText();
+    // Split right on the active tab: the tab used before it opens beside it, and takes the focus.
+    await activeTab.click({ button: "right" });
+    await tabMenu.getByRole("menuitem", { name: "Split right" }).click();
+    await page.locator(".editor-workspace.split-right").waitFor();
+    assert.equal(await panes.count(), 2);
+    assert.equal(await tabs.count(), before, "no tab is opened when another one can go beside");
+    assert.equal(await page.locator('.tab-panel[data-pane="second"]').evaluate((el) => el.classList.contains("focused-pane")), true);
+    const second = await activeTab.locator(".tab-label").innerText();
+    assert.notEqual(second, first);
+    assert.equal(await page.locator(".tabbar .tab.beside .tab-label").innerText(), first);
+    // Each pane is its own tab: its own toolbar, with its own connection.
+    for (const pane of ["first", "second"]) {
+      assert.ok(await page.locator(`.tab-panel[data-pane="${pane}"] .toolbar`).first().isVisible(), `${pane} pane's toolbar`);
+    }
+    // Side by side: the panes share the width, the separator between them.
+    const [left, right] = await Promise.all(["first", "second"].map((pane) => page.locator(`.tab-panel[data-pane="${pane}"]`).boundingBox()));
+    assert.ok(left.x + left.width <= right.x && Math.abs(left.y - right.y) < 2, JSON.stringify({ left, right }));
+    // The separator: arrows (Shift: bigger steps), Home to its limit, a double click back to equal.
+    const separator = page.getByRole("separator", { name: "Resize the split panes" });
+    assert.equal(await separator.getAttribute("aria-valuenow"), "50");
+    await separator.focus();
+    await page.keyboard.press("Shift+ArrowRight");
+    assert.equal(await separator.getAttribute("aria-valuenow"), "60");
+    await page.keyboard.press("Home");
+    assert.equal(await separator.getAttribute("aria-valuenow"), "20");
+    await separator.dblclick();
+    assert.equal(await separator.getAttribute("aria-valuenow"), "50");
+    // A click inside the other pane makes its tab the active one; the strip follows.
+    // (A pointer down on the pane itself: a click at some point could land on its pickers.)
+    await page.locator('.tab-panel[data-pane="first"]').dispatchEvent("pointerdown", { button: 0, bubbles: true });
+    await page.locator('.tab-panel[data-pane="first"].focused-pane').waitFor();
+    assert.equal(await activeTab.locator(".tab-label").innerText(), first);
+    assert.equal(await page.locator(".tabbar .tab.beside .tab-label").innerText(), second);
+    await shot("sdb-30-split-right-light");
+    await setTheme("dark", "dark");
+    await shot("sdb-30-split-right-dark");
+    await setTheme("light", "light");
+    // The palette moves the focus to the other pane.
+    await page.keyboard.press("Control+Shift+P");
+    const commandPalette = page.getByRole("dialog", { name: "Command palette" });
+    await commandPalette.getByRole("combobox").fill("focus the other split pane");
+    await page.keyboard.press("Enter");
+    await commandPalette.waitFor({ state: "detached" });
+    await page.locator('.tab-panel[data-pane="second"].focused-pane').waitFor();
+    // Split down: the same two tabs, one above the other.
+    await activeTab.click({ button: "right" });
+    await tabMenu.getByRole("menuitem", { name: "Split down" }).click();
+    await page.locator(".editor-workspace.split-down").waitFor();
+    const [top, bottom] = await Promise.all(["first", "second"].map((pane) => page.locator(`.tab-panel[data-pane="${pane}"]`).boundingBox()));
+    assert.ok(top.y + top.height <= bottom.y && Math.abs(top.x - bottom.x) < 2, JSON.stringify({ top, bottom }));
+    await shot("sdb-30-split-down-light");
+    // Another tab chosen in the strip takes the focused pane's place; the other pane stays.
+    const third = tabs.filter({ hasNotText: first }).filter({ hasNotText: second }).first();
+    if (await third.count()) {
+      const thirdName = await third.locator(".tab-label").innerText();
+      await third.click();
+      assert.equal(await page.locator(".tabbar .tab.beside .tab-label").innerText(), first);
+      assert.equal(await activeTab.locator(".tab-label").innerText(), thirdName);
+      await page.locator(".tabbar .tab", { hasText: second }).first().click();
+    }
+    // Close split: one pane again, the focused tab kept, no tab closed.
+    await activeTab.click({ button: "right" });
+    await tabMenu.getByRole("menuitem", { name: "Close split" }).click();
+    await workspace.and(page.locator(":not(.split-down)")).waitFor();
+    assert.equal(await panes.count(), 1);
+    assert.equal(await tabs.count(), before);
+    assert.equal(await page.locator(".tabbar .tab.beside").count(), 0);
+    // Back to the tab the step started on, for the steps below.
+    await page.locator(".tabbar .tab", { hasText: first }).first().click();
+    assert.equal(await activeTab.locator(".tab-label").innerText(), first);
+  }
+
   step("explorer: view rows and generate SQL written by the core");
   await page.locator('.connection-row:has-text("Shop (SQLite)") .twisty').click();
   const mainSchemaNode = page.getByRole("button", { name: "Expand or collapse schema main" });
@@ -3839,7 +4021,7 @@ try {
     const menu = await connectionMenu("Shop (SQLite)");
     const labels = () => menu.getByRole("menuitem").evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")));
     assert.deepEqual(await labels(), [
-      "New query", "Open object by name…", "Refresh all schemas",
+      "New query", "Open in a new window", "Open object by name…", "Refresh all schemas",
       "Edit…", "Configure filters…",
       "Back up…", "Run SQL file…",
       // Only Shop's own sessions are open here: nothing else to disconnect (SDB-395).
@@ -3876,6 +4058,101 @@ try {
     await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count + 1, tabsBefore);
     await page.keyboard.press("Control+w");
     await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count, tabsBefore);
+  }
+
+  step("windows: a tab's results in their own window without running the query again, and a connection in its own window whose closing leaves the main window's sessions (SDB-30)");
+  {
+    const context = page.context();
+    // What each window copies, captured instead of the system clipboard (one list per page;
+    // the main window's list, made by an earlier step, is kept).
+    const captureCopies = (target) => target.evaluate(() => {
+      if (window.__copied) return;
+      window.__copied = [];
+      navigator.clipboard.writeText = (text) => {
+        window.__copied.push(text);
+        return Promise.resolve();
+      };
+    });
+    const copyAll = async (target, grid) => {
+      const before = await target.evaluate(() => window.__copied.length);
+      // The first data cell, as the copy step clicks it: below the 34 px header, right of the
+      // row numbers (the canvas sits under the scroller, which takes the pointer).
+      const box = await grid.locator(".grid-scroller").boundingBox();
+      await target.mouse.click(box.x + 80, box.y + 34 + 12);
+      await target.keyboard.press("Control+a");
+      await target.keyboard.press("Control+c");
+      await target.waitForFunction((n) => window.__copied.length === n + 1, before);
+      // Rows end with a line break, the last one too, as the copy step reads them.
+      return (await target.evaluate(() => window.__copied[window.__copied.length - 1])).trimEnd();
+    };
+    // random(): a second run could never copy the same numbers.
+    const panel = await newQuery("Shop (SQLite)", "select abs(random()) as r union all select abs(random()) union all select abs(random())");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "3 rows" }).waitFor();
+    await captureCopies(page);
+    const inTab = await copyAll(page, panel);
+    assert.match(inTab, /^\d+\n\d+\n\d+$/);
+
+    // Show results in a new window: the tab keeps its editor and one line; the new window has
+    // the same results panel over the same stored result.
+    const [resultsPage] = await Promise.all([
+      context.waitForEvent("page"),
+      panel.getByRole("button", { name: "Show results in a new window" }).click(),
+    ]);
+    await resultsPage.locator(".results-window .grid-scroller").waitFor();
+    await panel.locator(".results-detached").waitFor();
+    assert.equal(await panel.locator(".results-pane").count(), 0);
+    assert.match(await resultsPage.locator(".results-window-title").innerText(), /^Results of /);
+    await captureCopies(resultsPage);
+    assert.equal(await copyAll(resultsPage, resultsPage.locator(".results-window")), inTab, "the same rows, read from the core, not run again");
+    await resultsPage.screenshot({ path: join(shots, "sdb-30-results-window.png") });
+    await shot("sdb-30-results-detached-tab");
+    // Re-attach: the window closes and the tab shows the same result again, still not run again.
+    await Promise.all([
+      resultsPage.waitForEvent("close"),
+      resultsPage.getByRole("button", { name: "Re-attach results" }).click(),
+    ]);
+    await panel.locator(".results-detached").waitFor({ state: "detached" });
+    assert.equal(await copyAll(page, panel), inTab);
+
+    // A connection in its own window: its own tab and session, its explorer offering only it.
+    const shop = await connectionMenu("Shop (SQLite)");
+    const [connectionPage] = await Promise.all([
+      context.waitForEvent("page"),
+      shop.getByRole("menuitem", { name: "Open in a new window" }).click(),
+    ]);
+    const ownPanel = connectionPage.locator(".tab-panel:not([hidden])");
+    await ownPanel.locator(".status-connected").waitFor();
+    assert.equal(await connectionPage.locator(".connection-row").count(), 1);
+    await ownPanel.locator(".cm-content").click();
+    await connectionPage.keyboard.insertText("select 41 + 1 as answer");
+    await ownPanel.locator(".cm-content").click();
+    await connectionPage.keyboard.press("Control+Shift+Enter");
+    await ownPanel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    await captureCopies(connectionPage);
+    assert.equal(await copyAll(connectionPage, ownPanel), "42");
+    await connectionPage.screenshot({ path: join(shots, "sdb-30-connection-window.png") });
+    // Closing it asks about its own tab only (its SQL is kept nowhere else), then closes its
+    // session and none of the main window's.
+    await connectionPage.keyboard.press("Control+Shift+P");
+    const palette = connectionPage.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("close this window");
+    await connectionPage.keyboard.press("Enter");
+    const question = connectionPage.getByRole("dialog", { name: "Close the window with SQL that is not saved?" });
+    await question.waitFor();
+    await Promise.all([
+      connectionPage.waitForEvent("close"),
+      question.getByRole("button", { name: "Close and discard" }).click(),
+    ]);
+    // The main window's tab still has its session: it runs at once, with no question.
+    await panel.locator(".status-connected").waitFor();
+    await panel.locator(".cm-content").click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.insertText("select 'still connected' as s");
+    await run(panel);
+    await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+    assert.equal(await copyAll(page, panel), "still connected");
+    await page.keyboard.press("Control+w");
   }
   // Objects are in folders by type (ADR-024), with how many each holds.
   const tablesFolder = page.getByRole("button", { name: "Expand or collapse Tables", exact: true });
@@ -5468,6 +5745,30 @@ try {
     const svg = chart.locator("svg.chart-svg");
     // The first text column is X and the first number the values: one bar per row.
     await note.filter({ hasText: "6 rows, one point each." }).waitFor();
+    // The pressed chart toggle is a pressed toggle, not a result tab (SDB-523): no tab underline,
+    // rounded on every corner, the accent's soft background.
+    {
+      const toggle = panel.getByRole("button", { name: "Show as grid" });
+      assert.equal(await toggle.getAttribute("aria-pressed"), "true");
+      const look = await toggle.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const soft = getComputedStyle(document.documentElement).getPropertyValue("--accent-soft").trim();
+        const probe = document.createElement("span");
+        probe.style.background = soft;
+        document.body.append(probe);
+        const expected = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return { shadow: style.boxShadow, bottomLeft: style.borderBottomLeftRadius, background: style.backgroundColor, expected };
+      });
+      assert.equal(look.shadow, "none", JSON.stringify(look));
+      assert.notEqual(look.bottomLeft, "0px", JSON.stringify(look));
+      assert.equal(look.background, look.expected, JSON.stringify(look));
+      const toolbar = panel.locator(".result-tabs");
+      await toolbar.screenshot({ path: join(shots, "sdb-523-chart-toggle-light.png") });
+      await setTheme("dark", "dark");
+      await toolbar.screenshot({ path: join(shots, "sdb-523-chart-toggle-dark.png") });
+      await setTheme("light", "light");
+    }
     assert.equal(await chart.getByRole("combobox", { name: "X axis" }).inputValue(), "0");
     await svg.locator(".chart-title", { hasText: "orders by country" }).waitFor();
     assert.equal(await svg.locator("rect").count(), 6);
@@ -5646,11 +5947,13 @@ try {
     const away = requests.filter((url) => /^https?:/.test(url) && !new URL(url).hostname.endsWith("localhost"));
     assert.deepEqual(away, [], "the map without tiles asks nothing of the network");
 
-    // Tiles from a server of the user's own (here a local one): sent without a referrer.
+    // Tiles from a server of the user's own (here a local one), fetched by the core (ADR-085):
+    // with its User-Agent and without a referrer. Never tile.openstreetmap.org.
     const tileRequests = [];
+    let tileCacheControl = "no-store";
     const tileServer = createHttpServer((req, res) => {
-      tileRequests.push({ url: req.url, referer: req.headers.referer ?? null });
-      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      tileRequests.push({ url: req.url, referer: req.headers.referer ?? null, userAgent: req.headers["user-agent"] ?? "" });
+      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": tileCacheControl });
       res.end(tilePng());
     });
     await new Promise((done) => tileServer.listen(0, "127.0.0.1", done));
@@ -5683,11 +5986,55 @@ try {
       for (const request of tileRequests) {
         assert.match(request.url, /^\/\d+\/\d+\/\d+\.png$/);
         assert.equal(request.referer, null, "tiles go without a referrer");
+        assert.match(request.userAgent, /^SpelaionDB\/\d+\.\d+\.\d+ \(\+https:\/\/github\.com\/spelaion-dev\/spelaiondb\)$/, "the core's own User-Agent");
       }
       await shot("sdb-60-map-tiles");
-      // Hidden for this map with its toggle.
+      // Hidden for this map with its toggle: its attribution goes with its tiles.
       await mapHost.getByRole("button", { name: "Tiles" }).click();
       await mapHost.locator(".map-tiles").waitFor({ state: "detached" });
+      assert.equal(await mapHost.locator(".map-attribution").count(), 0);
+
+      // SDB-212: "Use OpenStreetMap" fills the server and turns tiles on. No map is open while
+      // OpenStreetMap is the server, so nothing is asked of it: the address is then pointed at
+      // the local server, keeping OpenStreetMap's name, attribution and its link.
+      await viewerToggle.click();
+      await viewer.waitFor({ state: "detached" });
+      await withSettings("map", async (settings) => {
+        await settings.getByRole("button", { name: "Use OpenStreetMap" }).click();
+        await page.waitForFunction(() => document.querySelector('input[name="tileUrl"]')?.value === "https://tile.openstreetmap.org/{z}/{x}/{y}.png");
+        assert.equal(await settings.locator('input[name="tileName"]').inputValue(), "OpenStreetMap");
+        assert.equal(await settings.locator('input[name="tileAttribution"]').inputValue(), "© OpenStreetMap contributors");
+        assert.equal(await settings.locator('input[name="tileAttributionUrl"]').inputValue(), "https://www.openstreetmap.org/copyright");
+        assert.ok(await settings.locator('input[name="mapTiles"]').isChecked(), "choosing it turns tiles on");
+        await settings.getByText(/^SpelaionDB fetches each tile itself/).waitFor();
+        await shot("sdb-212-settings-openstreetmap");
+        await settings.locator('input[name="tileUrl"]').fill(`http://127.0.0.1:${tilePort}/{z}/{x}/{y}.png`);
+        await page.keyboard.press("Enter");
+        await page.waitForFunction((port) => !document.querySelector(".settings-page input:disabled") && document.querySelector('input[name="tileUrl"]')?.value.includes(`:${port}/`), tilePort);
+      });
+      // Kept for an hour now: a map opened again asks nothing more for the same tiles.
+      tileCacheControl = "max-age=3600";
+      const openMap = async () => {
+        await viewerToggle.click();
+        await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 34 + 12);
+        await mapHost.locator(".map-tiles img").first().waitFor();
+        await page.waitForFunction(() => [...document.querySelectorAll(".map-tiles img")].some((img) => img.complete && img.naturalWidth === 256));
+      };
+      await openMap();
+      const attribution = mapHost.locator(".map-attribution", { hasText: "OpenStreetMap · © OpenStreetMap contributors" });
+      await attribution.waitFor();
+      await attribution.getByRole("button", { name: "© OpenStreetMap contributors" }).waitFor();
+      await shot("sdb-212-map-attribution");
+      await setTheme("dark", "dark");
+      await shot("sdb-212-map-attribution-dark");
+      await setTheme("light", "light");
+      await page.waitForTimeout(500);
+      const asked = tileRequests.length;
+      await viewerToggle.click();
+      await viewer.waitFor({ state: "detached" });
+      await openMap();
+      await page.waitForTimeout(500);
+      assert.equal(tileRequests.length, asked, "the tiles kept by the core are not asked again");
     } finally {
       // A dialog left open by a failure above is closed first, so the cleanup cannot hide it.
       if (await page.locator(".settings-dialog").count()) await page.locator(".settings-dialog .wizard-header button").click();
@@ -5701,6 +6048,9 @@ try {
     await viewer.waitFor({ state: "detached" });
   }
 
+  // Where the saved ER diagram's table, note and group were drawn when it was saved (SDB-219),
+  // checked again after the restart below.
+  let savedDiagramMarks = null;
   step("ER diagram: read from the explorer's catalog, laid out once by the core, panned and zoomed, exported");
   {
     const queryTitle = (await page.locator(".tabbar .tab.active").innerText()).trim();
@@ -5768,6 +6118,108 @@ try {
     await page.keyboard.press("Control+w");
     await page.locator(".tabbar .tab", { hasText: "orders · ER diagram" }).waitFor({ state: "detached" });
 
+    // SDB-219 (ADR-084): a diagram saved with a table moved, a note and a colored group opens
+    // again the same from the palette, and its four exports still work. The restart step
+    // opens it once more and deletes it.
+    {
+      await page.getByRole("button", { name: "Expand or collapse orders", exact: true }).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "ER diagram of related tables" }).click();
+      await page.locator(".tabbar .tab.active", { hasText: "orders · ER diagram" }).waitFor();
+      await canvas.locator(".er-node").nth(1).waitFor();
+      const layoutCount = async () => Number(await canvas.getAttribute("data-layouts"));
+      const before = await layoutCount();
+      const customer = canvas.locator(".er-node:not(.focus)");
+      const startTransform = await customer.getAttribute("transform");
+      const from = await customer.locator(".er-box").boundingBox();
+      await page.mouse.move(from.x + 24, from.y + 8);
+      await page.mouse.down();
+      await page.mouse.move(from.x + 24 - 140, from.y + 8 + 200, { steps: 6 });
+      await page.mouse.up();
+      await page.waitForFunction((n) => Number(document.querySelector(".tab-panel:not([hidden]) .er-canvas")?.getAttribute("data-layouts")) > n, before);
+      assert.notEqual(await customer.getAttribute("transform"), startTransform, "the table moved");
+      await view.locator(".er-status", { hasText: "Unsaved changes" }).waitFor();
+      await page.locator(".tabbar .tab.active .tab-unsaved").waitFor();
+      // A note, in amber.
+      await view.getByRole("button", { name: "Add note", exact: true }).click();
+      const noteDialog = page.getByRole("dialog", { name: "Note" });
+      await noteDialog.locator("textarea").fill("Orders are never deleted.\nAsk billing first.");
+      await noteDialog.getByRole("radio", { name: "Amber" }).click();
+      await noteDialog.getByRole("button", { name: "Done" }).click();
+      const note = canvas.locator(".er-note.er-color-amber", { hasText: "Orders are never deleted." });
+      await note.waitFor();
+      // It lands in empty space next to the focused table, never on it.
+      const noteBox = await note.locator("rect").boundingBox();
+      const ordersBox = await canvas.locator(".er-node.focus .er-box").boundingBox();
+      assert.ok(
+        noteBox.x >= ordersBox.x + ordersBox.width || noteBox.x + noteBox.width <= ordersBox.x
+          || noteBox.y >= ordersBox.y + ordersBox.height || noteBox.y + noteBox.height <= ordersBox.y,
+        `the new note does not cover the table: ${JSON.stringify({ noteBox, ordersBox })}`,
+      );
+      // A blue group around orders, from its menu: the table's header, since its rows (each with
+      // its own tooltip) cover the middle of its box.
+      await canvas.locator(".er-node.focus .er-title").click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Group…" }).click();
+      const groupDialog = page.getByRole("dialog", { name: "Group of tables" });
+      await groupDialog.getByRole("textbox").fill("Sales");
+      await groupDialog.getByRole("radio", { name: "Blue" }).click();
+      await groupDialog.getByRole("button", { name: "Done" }).click();
+      await canvas.locator(".er-group-frame.er-color-blue", { hasText: "Sales" }).waitFor();
+      // Saved under a name: the tab takes it and the unsaved mark goes.
+      await view.getByRole("button", { name: "Save", exact: true }).click();
+      const saveDialog = page.getByRole("dialog", { name: "Save the diagram" });
+      await saveDialog.getByRole("textbox").fill("Orders diagram");
+      await saveDialog.getByRole("button", { name: "Save", exact: true }).click();
+      await view.locator(".er-status", { hasText: "Saved as Orders diagram" }).waitFor();
+      await page.locator(".tabbar .tab.active", { hasText: "Orders diagram" }).waitFor();
+      assert.equal(await page.locator(".tabbar .tab.active .tab-unsaved").count(), 0);
+      const marks = async () => ({
+        customer: await customer.getAttribute("transform"),
+        note: await canvas.locator(".er-note").getAttribute("transform"),
+        group: await canvas.locator(".er-group-frame").getAttribute("transform"),
+      });
+      savedDiagramMarks = await marks();
+      await shot("sdb-219-saved");
+      await setTheme("dark", "dark");
+      await shot("sdb-219-saved-dark");
+      await setTheme("light", "light");
+      // Closed (it asks nothing: it is saved) and opened again from the palette.
+      await page.keyboard.press("Control+w");
+      await page.locator(".tabbar .tab", { hasText: "Orders diagram" }).waitFor({ state: "detached" });
+      await page.keyboard.press("Control+Shift+P");
+      const savedPalette = page.getByRole("dialog", { name: "Command palette" });
+      await savedPalette.getByRole("combobox").fill("Orders diagram");
+      await savedPalette.locator(".palette-item", { hasText: "Saved ER diagram" }).first().click();
+      await page.locator(".tabbar .tab.active", { hasText: "Orders diagram" }).waitFor();
+      await canvas.locator(".er-note", { hasText: "Orders are never deleted." }).waitFor();
+      await canvas.locator(".er-group-frame", { hasText: "Sales" }).waitFor();
+      assert.deepEqual(await marks(), savedDiagramMarks, "the saved diagram opens again the same");
+      assert.equal(await canvas.locator(".er-node.new, .er-gone").count(), 0, "no table is new or gone");
+      assert.equal(await page.locator(".tabbar .tab.active .tab-unsaved").count(), 0);
+      await shot("sdb-219-reopened");
+      // Its exports: the images carry the note and the group; the texts are the model's.
+      const exports = {};
+      for (const [extension, item] of Object.entries({ png: "PNG image…", svg: "SVG image…", mmd: "Mermaid…", dbml: "DBML…" })) {
+        const target = join(tmpdir(), `spelaion-sdb219-${process.pid}.${extension}`);
+        await page.evaluate((path) => (window.__spelaionSavePath = path), target);
+        await view.getByRole("button", { name: "Export", exact: true }).click();
+        await page.getByRole("menuitem", { name: item }).click();
+        await view.getByText(`Saved spelaion-sdb219-${process.pid}.${extension}`).waitFor({ timeout: 60_000 });
+        exports[extension] = target;
+      }
+      await page.evaluate(() => delete window.__spelaionSavePath);
+      assert.deepEqual([...readFileSync(exports.png).subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const savedSvg = readFileSync(exports.svg, "utf8");
+      assert.ok(savedSvg.includes("Sales") && savedSvg.includes("Orders are never deleted.") && !savedSvg.includes("var(--"), "the SVG carries the note, the group and real colors");
+      assert.ok(!savedSvg.includes(">New<"), "the marks of the screen stay out of the file");
+      const { default: savedMermaid } = await import("mermaid");
+      await savedMermaid.parse(readFileSync(exports.mmd, "utf8"));
+      const { Parser: SavedParser } = await import("@dbml/core");
+      assert.equal(new SavedParser().parse(readFileSync(exports.dbml, "utf8"), "dbml").schemas.flatMap((schema) => schema.tables).length, 2);
+      for (const path of Object.values(exports)) rmSync(path, { force: true });
+      await page.keyboard.press("Control+w");
+      await page.locator(".tabbar .tab", { hasText: "Orders diagram" }).waitFor({ state: "detached" });
+    }
+
     // The schema's explorer menu: the demo's three tables, product with no keys.
     const mainRow = page.getByRole("button", { name: "Expand or collapse schema main" });
     await mainRow.scrollIntoViewIfNeeded();
@@ -5812,8 +6264,20 @@ try {
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.wheel(0, -600);
       await page.waitForFunction((before) => document.querySelector(".tab-panel:not([hidden]) .er-zoom")?.textContent !== before, zoomBefore);
+      // Dragging a table moves it (ADR-084): the pan starts on the background between them.
+      const empty = await page.evaluate(({ x, y, width, height }) => {
+        for (let dy = 8; dy < height - 8; dy += 6) {
+          for (let dx = 8; dx < width - 8; dx += 6) {
+            const element = document.elementFromPoint(x + dx, y + dy);
+            if (element?.closest(".er-canvas") && !element.closest("[data-node],[data-gone],[data-note],[data-group]")) return { x: x + dx, y: y + dy };
+          }
+        }
+        return null;
+      }, box);
+      assert.ok(empty, "the diagram has background to drag");
+      await page.mouse.move(empty.x, empty.y);
       await page.mouse.down();
-      await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 80, { steps: 5 });
+      await page.mouse.move(empty.x + 120, empty.y + 80, { steps: 5 });
       await page.mouse.up();
       await schemaCanvas.focus();
       for (const key of ["ArrowLeft", "ArrowDown", "+", "-", "1", "0"]) await page.keyboard.press(key);
@@ -6873,6 +7337,134 @@ try {
     await page.locator(".connection-row", { hasText: "PG session setup" }).waitFor({ state: "detached" });
   }
 
+  step("explorer: a PostgreSQL connection's databases, each opened when first expanded (SDB-504)");
+  {
+    // A personal connection that opens every database of the server (ADR-074), made in the form.
+    await page.getByRole("button", { name: "Add connection", exact: true }).first().click();
+    const wizard = page.locator(".modal.wizard");
+    await wizard.locator(".engine-card", { hasText: "PostgreSQL" }).click();
+    await wizard.getByLabel("Name", { exact: true }).fill("PG all databases");
+    await wizard.getByLabel("Host", { exact: true }).fill("127.0.0.1");
+    await wizard.getByLabel("Port", { exact: true }).fill("15432");
+    await wizard.getByLabel("Database", { exact: true }).fill("spelaion");
+    await wizard.getByLabel("User", { exact: true }).fill("spelaion");
+    await wizard.getByRole("checkbox", { name: "Save password" }).uncheck();
+    await wizard.getByRole("radiogroup", { name: "Databases" }).getByRole("radio", { name: "Every database of the server" }).check();
+    await wizard.getByRole("tab", { name: "Options" }).click();
+    await wizard.getByRole("radio", { name: "Personal", exact: true }).check();
+    await wizard.getByRole("button", { name: "Save", exact: true }).click();
+    await wizard.waitFor({ state: "detached" });
+    assert.match(readFileSync(join(userDir, "connections", "pg-all-databases.toml"), "utf8"), /all_databases = true/);
+
+    const node = page.locator('.node:has(> .connection-row:has-text("PG all databases"))');
+    await node.locator(".connection-row .twisty").click();
+    await page.getByRole("dialog").getByText("Password for PG all databases").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("spelaion");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    // Its own database first, then the server's, never a template.
+    const databaseRow = (name) => node.locator(".database-row").filter({ has: page.locator(".label", { hasText: new RegExp(`^${name}$`) }) });
+    await databaseRow("spelaion \\(its own\\)").waitFor();
+    await databaseRow("spelaion_gis").waitFor();
+    assert.equal(await databaseRow("template1").count(), 0, "templates are not listed");
+    assert.equal(await node.locator(".database-row").first().locator(".label").innerText(), "spelaion (its own)");
+
+    // Expanding another database opens exactly one more session, on that database.
+    const sessionsOn = (database) => Number(execFileSync("docker", [
+      "compose", "-f", join(root, "testing/docker/compose.yaml"), "exec", "-T", "postgres",
+      "psql", "-U", "spelaion", "-d", "spelaion", "-X", "-q", "-tA", "-c",
+      `select count(*) from pg_stat_activity where datname = '${database}'`,
+    ], { encoding: "utf8" }).trim());
+    const before = sessionsOn("spelaion_gis");
+    const gis = databaseRow("spelaion_gis");
+    // A `has` locator is resolved inside each candidate, so it starts from its row, not the page.
+    const gisNode = node.locator(".database-node").filter({
+      has: page.locator(".database-row").filter({ has: page.locator(".label", { hasText: /^spelaion_gis$/ }) }),
+    });
+    await gis.locator(".twisty").click();
+    await gisNode.locator(".row .label", { hasText: /^public$/ }).first().waitFor();
+    assert.equal(sessionsOn("spelaion_gis"), before + 1, "one session for the expanded database");
+    await shot("sdb-504-databases");
+    await setTheme("dark", "dark");
+    await shot("sdb-504-databases-dark");
+    await setTheme("light", "light");
+
+    // A query opened from its row is connected to that database.
+    await gis.click({ button: "right" });
+    await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "New query", exact: true }).click();
+    const gisPanel = page.locator(".tab-panel:not([hidden])");
+    await gisPanel.locator(".status-connected").waitFor();
+    await gisPanel.locator(".cm-content").click();
+    await page.keyboard.insertText("select current_database() where current_database() = 'spelaion_gis';");
+    await run(gisPanel);
+    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+
+    // SDB-505: the tab's database picker. Choosing another is a disconnect and a connect, never
+    // a switch: back to the connection's own database, then to spelaion_gis again.
+    const picker = gisPanel.locator('select[name="tab-database"]');
+    assert.equal(await picker.inputValue(), "spelaion_gis");
+    await shot("sdb-505-database-picker");
+    await picker.selectOption("spelaion");
+    await gisPanel.locator(".status-connected").waitFor();
+    assert.equal(await picker.inputValue(), "spelaion");
+    await replaceQuery(gisPanel, "select current_database() where current_database() = 'spelaion';");
+    await run(gisPanel);
+    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    // With a transaction open, choosing another database asks first; Cancel keeps the session.
+    await replaceQuery(gisPanel, "begin;");
+    await run(gisPanel);
+    await gisPanel.locator(".tx-badge").waitFor();
+    await picker.selectOption("spelaion_gis");
+    const changeOpen = page.getByRole("dialog", { name: "Disconnect with an open transaction?" });
+    await changeOpen.getByRole("button", { name: "Cancel", exact: true }).click();
+    await changeOpen.waitFor({ state: "detached" });
+    await gisPanel.locator(".tx-badge").waitFor();
+    assert.equal(await picker.inputValue(), "spelaion");
+    await picker.selectOption("spelaion_gis");
+    await changeOpen.getByRole("button", { name: "Disconnect and roll back", exact: true }).click();
+    await changeOpen.waitFor({ state: "detached" });
+    await gisPanel.locator(".tx-badge").waitFor({ state: "detached" });
+    await gisPanel.locator(".status-connected").waitFor();
+    assert.equal(await picker.inputValue(), "spelaion_gis");
+    // A tab whose session ended connects again to its database, as a restored tab does when it
+    // runs: never quietly to the connection's own.
+    await replaceQuery(gisPanel, "select pg_terminate_backend(pg_backend_pid());");
+    await run(gisPanel);
+    await gisPanel.locator(".status-lost").getByRole("button", { name: "Reconnect" }).click();
+    await page.getByRole("dialog").getByText("Password for PG all databases").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("spelaion");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await gisPanel.locator(".status-connected").waitFor();
+    await replaceQuery(gisPanel, "select current_database() where current_database() = 'spelaion_gis';");
+    await run(gisPanel);
+    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    await page.locator(".tabbar .tab.active .close").click();
+
+    // SDB-506: backup and restore from a database's row act on that database, and say so.
+    await gis.click({ button: "right" });
+    await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "Back up…", exact: true }).click();
+    const gisBackup = page.getByRole("dialog", { name: "Back up PG all databases · spelaion_gis" });
+    await gisBackup.waitFor();
+    await shot("sdb-506-backup-database");
+    await gisBackup.getByRole("button", { name: "Close", exact: true }).click();
+    await gisBackup.waitFor({ state: "detached" });
+    await gis.click({ button: "right" });
+    await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "Restore…", exact: true }).click();
+    const gisRestore = page.getByRole("dialog", { name: "Restore into PG all databases · spelaion_gis" });
+    await gisRestore.waitFor();
+    await gisRestore.getByRole("button", { name: "Close", exact: true }).click();
+    await gisRestore.waitFor({ state: "detached" });
+
+    // Disconnecting from its row closes its session; deleting the connection closes the rest.
+    await gis.click({ button: "right" });
+    await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "Disconnect", exact: true }).click();
+    await gisNode.locator(".row .label", { hasText: /^public$/ }).first().waitFor({ state: "detached" });
+    await (await connectionMenu("PG all databases")).getByRole("menuitem", { name: "Delete…" }).click();
+    const deleteAll = page.getByRole("dialog", { name: "Delete connection?" });
+    await deleteAll.getByRole("button", { name: "Delete connection", exact: true }).click();
+    await deleteAll.waitFor({ state: "detached" });
+    await page.locator(".connection-row", { hasText: "PG all databases" }).waitFor({ state: "detached" });
+  }
+
   step("import: a CSV into a new table, with its preview, columns and SQL shown first");
   {
     // ADR-038. A value made of quotes and SQL must arrive as plain text.
@@ -7093,7 +7685,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     const connection = (await invoke("list_connections")).find((item) => item.name === "MySQL (Docker)");
     const session = "e2e-process-confirmation";
     try {
-      const outcome = await invoke("connect", { session, connection: connection.id, password: "spelaion", remember: false, editor: false });
+      // A connection is named by its folder and its id (ADR-075), as the page names it.
+      const key = { folder: connection.folder ?? null, id: connection.id };
+      const outcome = await invoke("connect", { session, connection: key, password: "spelaion", remember: false, editor: false });
       if (outcome.kind !== "connected") throw new Error(`unexpected connection outcome: ${outcome.kind}`);
       const snapshot = await invoke("list_processes", { session });
       const row = snapshot.processes.find((item) => item.id === snapshot.ownId);
@@ -7188,6 +7782,43 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await monitor.getByLabel("Search settings…").fill("no-such-setting-marker");
     await monitor.getByText("No settings match this search.").waitFor();
     await monitor.getByLabel("Search settings…").fill("");
+
+    step("process monitor: the live dashboard samples while it is shown (SDB-192)");
+    await monitor.getByRole("radio", { name: "Dashboard", exact: true }).click();
+    await monitor.getByText("Sampling every 5 s while this view is shown").waitFor();
+    // No Auto refresh or Refresh here: the core's sampler decides when to read.
+    assert.equal(await monitor.getByLabel("Auto refresh").count(), 0, "the dashboard has no auto refresh of its own");
+    const dashboard = monitor.locator(".dashboard");
+    await dashboard.getByRole("heading", { name: "Sessions", exact: true }).waitFor({ timeout: 20_000 });
+    // Some work on the server; a second sample has rates, so the transactions show a number.
+    execFileSync("docker", psql("CREATE TABLE smoke_dashboard AS SELECT g FROM generate_series(1, 20000) g; DROP TABLE smoke_dashboard;"), { stdio: "ignore" });
+    const transactionsChart = dashboard.locator(".dashboard-chart", { has: page.getByRole("heading", { name: "Transactions", exact: true }) });
+    await transactionsChart.locator(".dashboard-value dd", { hasText: /\d/ }).waitFor({ timeout: 20_000 });
+    // What the chart has is drawn: a rate's first value is a dot until the next sample joins it
+    // in a line. Waited for as it is, never through a hover.
+    await transactionsChart.locator("svg circle.chart-dot, svg path.chart-line[d^='M']").first().waitFor({ state: "attached", timeout: 20_000 });
+    assert.equal(await dashboard.locator(".dashboard-chart").count(), 4, "sessions, transactions, reads and log writes");
+    await dashboard.getByText(/^Waiting: active sessions waiting on a lock/).waitFor();
+    await shot("sdb-192-dashboard");
+    await setTheme("dark", "dark");
+    await dashboard.getByRole("heading", { name: "Log writes", exact: true }).waitFor();
+    await shot("sdb-192-dashboard-dark");
+    await setTheme("light", "light");
+    // The keyboard moves between samples: Home shows the first one's time.
+    const transactionsSvg = transactionsChart.locator("svg");
+    await transactionsSvg.focus();
+    await page.keyboard.press("Home");
+    // A vertical guide has no width, so it never counts as visible: it is checked as present.
+    await transactionsChart.locator(".chart-guide").waitFor({ state: "attached" });
+    await page.keyboard.press("Escape");
+    assert.equal(await transactionsChart.locator(".chart-guide").count(), 0, "Escape goes back to the latest sample");
+    // Hidden, it pauses; shown again, it still has its samples.
+    await monitor.getByRole("radio", { name: "Settings", exact: true }).click();
+    await monitor.locator(".settings-table").waitFor();
+    await monitor.getByRole("radio", { name: "Dashboard", exact: true }).click();
+    await dashboard.getByRole("heading", { name: "Sessions", exact: true }).waitFor({ timeout: 2_000 });
+    assert.equal(await dashboard.getByText("Taking the first sample…").count(), 0, "the samples were kept while hidden");
+    await monitor.getByText("Sampling every 5 s while this view is shown").waitFor();
     await monitor.getByRole("radio", { name: "Processes", exact: true }).click();
     await monitor.locator(".process-table tbody tr:has(.process-own)").waitFor();
   } finally {
@@ -10400,6 +11031,49 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.keyboard.press("Control+o");
     await page.locator(".tabbar .tab.active .tab-label", { hasText: "restart.sql" }).waitFor();
     await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    // A tab belongs to its connection's folder (ADR-075, SDB-501, SDB-502). Adding another
+    // folder closes nothing. Closing the demo folder keeps its tab on Shop (SQLite) for it and
+    // takes it out; a tab on the personal analytics connection, the console without one and the
+    // file stay. Adding the demo folder again brings its tab back, in its place.
+    await newQuery(/^analytics$/, "select 'personal_tab_marker';");
+    const firstLines = async () => {
+      const lines = [];
+      const tabs = page.locator(".tabbar .tab");
+      for (let i = 0; i < await tabs.count(); i++) {
+        await tabs.nth(i).click();
+        await page.locator(".tabbar .tab.active").nth(0).waitFor();
+        lines.push((await page.locator(".tab-panel:not([hidden]) .cm-content").innerText()).split("\n")[0]);
+      }
+      return lines;
+    };
+    const shopShown = (expected) => page.waitForFunction((shown) => [...document.querySelectorAll(".connection-row")].some((row) => row.textContent.includes("analytics"))
+      && [...document.querySelectorAll(".connection-row")].some((row) => row.textContent.includes("Shop (SQLite)")) === shown, expected);
+    const inDemo = ["select 'restart_console_marker' as restored;", "-- second console, no connection", "select 'restart_file_marker';", "select 'personal_tab_marker';"];
+    assert.deepEqual(await firstLines(), inDemo);
+    const elsewhere = join(userDir, "tabs-elsewhere");
+    mkdirSync(elsewhere, { recursive: true });
+    await addFolderFromMenu(elsewhere);
+    await page.getByRole("group", { name: "Connections of tabs-elsewhere" }).waitFor();
+    assert.equal(await page.locator(".tabbar .tab").count(), 4, "adding a folder closes no tab");
+    await closeFolderFromMenu("demo");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 3);
+    await shopShown(false);
+    assert.deepEqual(await firstLines(), inDemo.slice(1));
+    await shot("sdb-501-personal-tabs-in-another-folder");
+    await addFolderFromMenu(demo);
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 4);
+    await shopShown(true);
+    assert.deepEqual(await firstLines(), inDemo);
+    // Back to the demo folder alone.
+    await closeFolderFromMenu("tabs-elsewhere");
+    await page.waitForFunction(() => document.querySelectorAll(".folder-group").length === 0);
+    assert.equal(await page.locator(".tabbar .tab").count(), 4);
+    // Back to the three tabs this step keeps: the personal one closes, the file is shown.
+    await page.locator(".tabbar .tab").nth(3).click();
+    await page.keyboard.press("Control+w");
+    await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 3);
+    await page.locator(".tabbar .tab", { hasText: "restart.sql" }).click();
+    await page.locator(".tabbar .tab.active .tab-label", { hasText: "restart.sql" }).waitFor();
     // An unsaved change: it comes back unsaved.
     await page.locator(".tab-panel:not([hidden]) .cm-content").click();
     await page.keyboard.press("Control+End");
@@ -10502,6 +11176,36 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await change.getByRole("button", { name: "Accept the change" }).click();
   await change.waitFor({ state: "detached" });
   await panel.locator(".status-connected").waitFor();
+  // SDB-219: the ER diagram saved before the restart opens again the same from the palette,
+  // over the catalog read again, then it is deleted and this console is shown again.
+  if (savedDiagramMarks) {
+    const consoleLabel = (await page.locator(".tabbar .tab.active .tab-label").innerText()).trim();
+    await page.keyboard.press("Control+Shift+P");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("Orders diagram");
+    await palette.locator(".palette-item", { hasText: "Saved ER diagram" }).first().click();
+    await page.locator(".tabbar .tab.active", { hasText: "Orders diagram" }).waitFor();
+    const diagramCanvas = page.locator(".tab-panel:not([hidden]) .er-canvas");
+    await diagramCanvas.locator(".er-note", { hasText: "Orders are never deleted." }).waitFor({ timeout: 60_000 });
+    await diagramCanvas.locator(".er-group-frame", { hasText: "Sales" }).waitFor();
+    assert.deepEqual({
+      customer: await diagramCanvas.locator(".er-node:not(.focus)").getAttribute("transform"),
+      note: await diagramCanvas.locator(".er-note").getAttribute("transform"),
+      group: await diagramCanvas.locator(".er-group-frame").getAttribute("transform"),
+    }, savedDiagramMarks, "the saved diagram opens again the same after a restart");
+    await shot("sdb-219-after-restart");
+    const diagramView = page.locator(".tab-panel:not([hidden]) .er-view");
+    await diagramView.getByRole("button", { name: "More diagram actions" }).click();
+    await page.getByRole("menuitem", { name: "Delete saved diagram…" }).click();
+    const confirmDelete = page.getByRole("dialog", { name: "Delete saved diagram?" });
+    await confirmDelete.getByText('"Orders diagram" is deleted from this computer', { exact: false }).waitFor();
+    await confirmDelete.getByRole("button", { name: "Delete diagram" }).click();
+    await diagramView.locator(".er-status", { hasText: "Deleted the saved diagram Orders diagram" }).waitFor();
+    await page.keyboard.press("Control+w");
+    await page.locator(".tabbar .tab", { hasText: "Orders diagram" }).waitFor({ state: "detached" });
+    await page.locator(".tabbar .tab .tab-label").filter({ hasText: new RegExp(`^${consoleLabel}$`) }).click();
+    await panel.locator(".status-connected").waitFor();
+  }
   // History saving is still off for this connection: this first run is not recorded.
   await panel.locator(".cm-content").click();
   await page.keyboard.insertText("select 'history_resumed_marker' as resumed;");
@@ -10731,7 +11435,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mcp.getByRole("button", { name: "Export CSV" }).click();
   await mcp.getByText("4 events exported to", { exact: false }).waitFor();
   const activityCsv = readFileSync(csvPath, "utf8");
-  assert.ok(activityCsv.startsWith("time,session,client,connection,tool,statement,status,rows,duration_ms,detail\n"), activityCsv);
+  assert.ok(activityCsv.startsWith("time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder\n"), activityCsv);
   assert.ok(activityCsv.includes(",smoke-agent,shop,execute_write,alter user bob password '***',refused,"), activityCsv);
   assert.ok(!activityCsv.includes("hunter2"), activityCsv);
   const jsonPath = join(userDir, "activity.json");
@@ -10759,6 +11463,88 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await events.getByText("Log cleared").waitFor();
   await page.getByRole("button", { name: "Connections", exact: true }).click();
   await mcp.waitFor({ state: "detached" });
+
+  step("MCP server page with two folders open: each folder's connections and activity apart (SDB-503)");
+  {
+    // A second repository folder with a connection of the same id as the demo's `shop`, on a
+    // copy of its database, that lets agents write: its local restriction then shows.
+    const second = join(userDir, "second-folder");
+    mkdirSync(join(second, ".spelaion", "connections"), { recursive: true });
+    copyFileSync(join(demo, "data", "shop.db"), join(second, "shop.db"));
+    writeFileSync(
+      join(second, ".spelaion", "connections", "shop.toml"),
+      `schema_version = 1\nname = "Second shop"\nengine = "sqlite"\ndatabase = '${join(second, "shop.db")}'\n\n[mcp]\nexposed = true\nwrites = "allow"\n`,
+    );
+    const invoke = (command, args) => page.evaluate(([c, a]) => window.__TAURI_INTERNALS__.invoke(c, a), [command, args]);
+    const opened = await invoke("add_folder", { path: second });
+    const secondRoot = opened.folders.find((f) => f.path === second).root;
+    await invoke("trust_workspace", { root: second });
+    const demoRoot = opened.folders.find((f) => f.path !== second).root;
+
+    // Security: each folder's `shop` under its folder; the override of one leaves the other.
+    await page.getByRole("button", { name: "MCP server", exact: true }).click();
+    await mcp.getByRole("tab", { name: "Security" }).click();
+    await mcp.getByText("An agent's MCP server serves one folder", { exact: false }).waitFor();
+    const shopIn = (root) => mcp.locator(`tbody[data-folder="${root.replaceAll("\\", "\\\\")}"] tr[data-connection="shop"]`);
+    await shopIn(secondRoot).waitFor();
+    await shopIn(demoRoot).waitFor();
+    await mcp.getByRole("rowgroup", { name: "second-folder" }).waitFor();
+    await mcp.getByRole("rowgroup", { name: "Personal connections" }).waitFor();
+    await shot("sdb-503-security-folders");
+    const restriction = (root) => shopIn(root).getByRole("checkbox", { name: /^Make agents read-only on / });
+    // The box shows what the core stored: it changes once the change is saved and read back,
+    // not at the click (`setChecked` would see it unchanged at once).
+    const restrict = async (root, on) => {
+      await restriction(root).click();
+      await page.waitForFunction(
+        ([sel, want]) => document.querySelector(sel)?.checked === want && !document.querySelector(sel)?.disabled,
+        [`tbody[data-folder="${root.replaceAll("\\", "\\\\")}"] tr[data-connection="shop"] input[type=checkbox]`, on],
+      );
+    };
+    const demoBefore = await restriction(demoRoot).isChecked();
+    assert.equal(await restriction(secondRoot).isChecked(), false, "no restriction yet");
+    await shopIn(secondRoot).getByText("Read and write").waitFor();
+    await restrict(secondRoot, true);
+    await shopIn(secondRoot).getByText("Local MCP restriction.").waitFor();
+    assert.equal(await restriction(demoRoot).isChecked(), demoBefore, "the demo folder's shop keeps its own override");
+    // The restriction is the second folder's: a server started there refuses the write.
+    await agentSession([["execute_write", { connection: "shop", sql: "insert into product (name) values ('restricted')" }]], second);
+
+    // Activity: a server started in each folder, told apart and filtered by folder.
+    await agentSession([["run_query", { connection: "shop", sql: "select 'from the second folder'" }]], second);
+    await agentSession([["run_query", { connection: "shop", sql: "select 'from the demo folder'" }]]);
+    await mcp.getByRole("tab", { name: "Activity" }).click();
+    await mcp.getByRole("button", { name: "Refresh" }).click();
+    const folderFilter = mcp.getByLabel("Folder", { exact: true });
+    await folderFilter.locator("option", { hasText: "second-folder" }).waitFor({ state: "attached" });
+    await folderFilter.selectOption({ label: "second-folder" });
+    await events.getByRole("row").filter({ hasText: "from the second folder" }).getByText("second-folder").waitFor();
+    await events.getByRole("row").filter({ hasText: "insert into product (name) values ('restricted')" }).getByText("Refused").waitFor();
+    assert.equal(await events.getByText("from the demo folder").count(), 0);
+    // Every call shown is the second folder's (its `list_connections` calls too).
+    const shownFolders = await events.locator("tbody tr td:nth-child(2)").allInnerTexts();
+    assert.ok(shownFolders.length >= 2 && shownFolders.every((name) => name === "second-folder"), shownFolders.join(" | "));
+    await shot("sdb-503-activity-by-folder");
+    // The export carries the folder.
+    const folderCsv = join(userDir, "activity-second.csv");
+    await page.evaluate((path) => { window.__spelaionSavePath = path; }, folderCsv);
+    await mcp.getByRole("button", { name: "Export CSV" }).click();
+    await mcp.getByText(`${shownFolders.length} events exported to`, { exact: false }).waitFor();
+    await page.evaluate(() => { delete window.__spelaionSavePath; });
+    const exported = readFileSync(folderCsv, "utf8").trimEnd().split("\n").slice(1);
+    assert.ok(exported.length === shownFolders.length && exported.every((line) => line.endsWith(`,${secondRoot}`)), exported.join("\n"));
+    // Entries with no folder: the clearing record.
+    await folderFilter.selectOption("noFolder");
+    await events.getByText("Log cleared").waitFor();
+    await folderFilter.selectOption("all");
+    // Leave the second folder's restriction as it was.
+    await mcp.getByRole("tab", { name: "Security" }).click();
+    await restrict(secondRoot, false);
+
+    await page.getByRole("button", { name: "Connections", exact: true }).click();
+    await mcp.waitFor({ state: "detached" });
+    await invoke("close_folder", { root: secondRoot });
+  }
 
   step("tabs: close all, then close others asks once for a transaction and a running query, keeps pinned tabs, and reopen brings tabs back disconnected");
   {
@@ -10907,7 +11693,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await page.waitForFunction(() => document.querySelectorAll(".tabbar .tab").length === 0);
   }
 
-  step("quitting or opening another folder with unapplied row edits or a running query asks first; Cancel keeps everything");
+  step("quitting or closing a folder with unapplied row edits or a running query asks first; Cancel keeps everything");
   {
     const shown = page.locator(".tab-panel:not([hidden])");
     const activeTab = page.locator(".tabbar .tab.active");
@@ -10944,22 +11730,16 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await quitEdits.waitFor({ state: "detached" });
     assert.equal(app.exitCode, null, "Cancel keeps the app open");
     await shown.getByText("Updated: 1", { exact: false }).waitFor();
-    // Opening another folder asks the same before changing anything; Cancel keeps this one.
-    const otherFolder = join(userDir, "other-folder");
-    mkdirSync(otherFolder, { recursive: true });
-    await page.evaluate((target) => (window.__spelaionOpenFolder = target), otherFolder);
-    await page.getByTitle("Open another folder").click();
-    // The folder's menu (SDB-397): Open folder… and the recent folders.
-    const folderMenu = page.getByRole("menu", { name: "Folders" });
-    await folderMenu.getByRole("menuitem", { name: "Open folder…" }).click();
-    const folderEdits = page.getByRole("dialog", { name: "Open another folder with unsaved row changes?" });
+    // Closing the folder asks the same before changing anything; Cancel keeps it (ADR-075:
+    // adding a folder closes nothing, so it asks nothing).
+    await closeFolderFromMenu("demo");
+    const folderEdits = page.getByRole("dialog", { name: "Close the folder with unsaved row changes?" });
     await folderEdits.waitFor();
     assert.deepEqual(await folderEdits.locator(".unsaved-edits-list li").allInnerTexts(), [editTab]);
-    await folderEdits.getByRole("button", { name: "Open and discard" }).waitFor();
-    await shotBoth("11d-open-folder-unsaved-edits");
+    await folderEdits.getByRole("button", { name: "Close folder and discard" }).waitFor();
+    await shotBoth("11d-close-folder-unsaved-edits");
     await folderEdits.getByRole("button", { name: "Cancel", exact: true }).click();
     await folderEdits.waitFor({ state: "detached" });
-    await page.evaluate(() => delete window.__spelaionOpenFolder);
     await shown.getByText("Updated: 1", { exact: false }).waitFor();
     await activeTab.locator(".dot-connected").waitFor();
     await page.locator('.connection-row:has-text("Shop (SQLite)")').waitFor();

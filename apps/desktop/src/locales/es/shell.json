@@ -1,11 +1,26 @@
 {
+  "databases": {
+    "own": "{{name}} (la suya)",
+    "toggle": "Desplegar o plegar la base de datos {{name}}",
+    "menu": "Base de datos {{name}}",
+    "disconnect": "Desconectar",
+    "ownedHint": "{{name}} tiene su propia conexión, {{connection}}: se abre allí, con los ajustes de esa conexión.",
+    "openOwner": "Abrir en {{connection}}",
+    "ownOnly": "Solo se muestra su propia base de datos: {{reason}}"
+  },
   "queryTab": "Consulta {{number}}",
-  "openFolderTitle": "Abrir carpeta con .spelaion/",
+  "openFolderTitle": "Añadir una carpeta con .spelaion/",
   "personal": "Personal",
   "noFolder": "Ninguna carpeta abierta",
-  "openAnotherFolder": "Abrir otra carpeta",
+  "openAnotherFolder": "Añadir o cerrar carpetas",
   "folderMenu": "Carpetas",
-  "openFolderMenu": "Abrir carpeta…",
+  "openFolderMenu": "Añadir carpeta…",
+  "openFolders": "Carpetas abiertas",
+  "closeFolder": "Cerrar {{name}}",
+  "foldersOpen_one": "{{count}} carpeta",
+  "foldersOpen_other": "{{count}} carpetas",
+  "folderGroup": "Conexiones de {{name}}",
+  "folderEmpty": "Esta carpeta no tiene conexiones.",
   "recentFolders": "Carpetas recientes",
   "noRecentFolders": "Aún no hay carpetas recientes.",
   "recentFolderMissing": "{{path}} ya no existe",
@@ -78,6 +93,7 @@
     "views": {
       "processes": "Procesos",
       "locks": "Bloqueos",
+      "dashboard": "Panel",
       "settings": "Configuración"
     }
   },
@@ -93,6 +109,7 @@
   "hideNames": "Ocultar los {{count}} elegidos",
   "showOnlyNames": "Mostrar solo los {{count}} elegidos",
   "newQuery": "Nueva consulta",
+  "openWindow": "Abrir en una ventana nueva",
   "loadingDetails": "Cargando detalles de la tabla…",
   "connecting": "Conectando…",
   "quickFilter": "Filtrar el explorador",
@@ -430,6 +447,7 @@
     "failed": "No se ha podido cambiar la cuenta: {{detail}}"
   },
   "privileges": {
+    "database": "Permisos en la base de datos",
     "menu": "Privilegios…",
     "title": "Privilegios de {{name}}",
     "has": "Lo que tiene",
@@ -599,7 +617,7 @@
       "close": "¿Cerrar con una transacción abierta?",
       "disconnect": "¿Desconectar con una transacción abierta?",
       "quit": "¿Salir con una transacción abierta?",
-      "folder": "¿Abrir otra carpeta con una transacción abierta?"
+      "folder": "¿Cerrar la carpeta con una transacción abierta?"
     },
     "explanation_one": "Esta pestaña tiene una transacción abierta. Su sesión terminará y el servidor deshará lo que no se haya confirmado:",
     "explanation_other": "Estas pestañas tienen una transacción abierta. Sus sesiones terminarán y el servidor deshará lo que no se haya confirmado:",
@@ -609,13 +627,13 @@
       "close": "Cerrar y deshacer",
       "disconnect": "Desconectar y deshacer",
       "quit": "Salir y deshacer",
-      "folder": "Abrir y deshacer"
+      "folder": "Cerrar carpeta y deshacer"
     },
     "titleRunning": {
       "close": "¿Cerrar con una consulta en ejecución?",
       "disconnect": "¿Desconectar con una consulta en ejecución?",
       "quit": "¿Salir con una consulta en ejecución?",
-      "folder": "¿Abrir otra carpeta con una consulta en ejecución?"
+      "folder": "¿Cerrar la carpeta con una consulta en ejecución?"
     },
     "running_one": "La consulta de esta pestaña sigue en ejecución. Se cancelará:",
     "running_other": "Las consultas de estas pestañas siguen en ejecución. Se cancelarán:",
@@ -623,13 +641,13 @@
       "close": "Cerrar y cancelar",
       "disconnect": "Desconectar y cancelar",
       "quit": "Salir y cancelar",
-      "folder": "Abrir y cancelar"
+      "folder": "Cerrar carpeta y cancelar"
     },
     "titleUnsaved": {
       "close": "¿Cerrar con cambios de filas sin aplicar?",
       "disconnect": "¿Desconectar con cambios de filas sin aplicar?",
       "quit": "¿Salir con cambios de filas sin aplicar?",
-      "folder": "¿Abrir otra carpeta con cambios de filas sin aplicar?"
+      "folder": "¿Cerrar la carpeta con cambios de filas sin aplicar?"
     },
     "unsaved_one": "Esta pestaña tiene cambios de filas sin aplicar. Se perderán:",
     "unsaved_other": "Estas pestañas tienen cambios de filas sin aplicar. Se perderán:",
@@ -638,7 +656,22 @@
       "close": "Cerrar y descartar",
       "disconnect": "Desconectar y descartar",
       "quit": "Salir y descartar",
-      "folder": "Abrir y descartar"
+      "folder": "Cerrar carpeta y descartar"
+    },
+    "titleUnkept": {
+      "close": "¿Cerrar la ventana con SQL sin guardar?",
+      "disconnect": "¿Desconectar con SQL sin guardar?",
+      "quit": "¿Salir con SQL sin guardar?",
+      "folder": "¿Cerrar la carpeta con SQL sin guardar?"
+    },
+    "unkept_one": "El SQL de esta pestaña solo se guarda en esta ventana. Se perderá:",
+    "unkept_other": "El SQL de estas pestañas solo se guarda en esta ventana. Se perderá:",
+    "unkeptHint": "Para conservarlo, cancela y guárdalo en un archivo, o cópialo a una pestaña de la ventana principal.",
+    "proceedUnkept": {
+      "close": "Cerrar y descartar",
+      "disconnect": "Desconectar y descartar",
+      "quit": "Salir y descartar",
+      "folder": "Cerrar carpeta y descartar"
     }
   },
   "exportTable": "Exportar…",
@@ -763,6 +796,36 @@
     "waitCount_other": "{{count}} esperas",
     "visibility": "Ver los bloqueos de todas las sesiones requiere permisos: PROCESS y performance_schema en MySQL, VIEW SERVER STATE en SQL Server."
   },
+  "serverDashboard": {
+    "starting": "Iniciando…",
+    "sampling": "Muestreando cada {{seconds}} s mientras esta vista está visible",
+    "paused": "En pausa mientras está oculta",
+    "failedStatus": "Detenido tras un error",
+    "stopped": "Detenido",
+    "memoryOnly": "Solo se guarda en memoria, los últimos 30 minutos.",
+    "failed": "No se pudieron leer los contadores del servidor: {{detail}}",
+    "tryAgain": "Reintentar",
+    "firstSample": "Tomando la primera muestra…",
+    "chartLabel": "{{title}}, {{count}} muestras. Las flechas izquierda y derecha recorren las muestras.",
+    "sessions": "Sesiones",
+    "connected": "Conectadas",
+    "active": "Activas",
+    "waiting": "En espera",
+    "transactions": "Transacciones",
+    "perSecond": "Por segundo",
+    "reads": "Lecturas lógicas",
+    "pagesPerSecond": "Páginas por segundo",
+    "readsHint": "Bloques o páginas leídos, de memoria o de disco.",
+    "log": "Escrituras en el log",
+    "written": "Escrito",
+    "logHint": "Bytes escritos en el log del servidor (WAL, redo log o log de transacciones): lo que cuesta cada cambio.",
+    "waitingHint": {
+      "postgres": "En espera: sesiones activas que esperan un bloqueo, E/S u otro evento del servidor. La sesión de este monitor no se cuenta.",
+      "mysql": "En espera: esperas de bloqueos de fila de InnoDB. La conexión de este monitor no se cuenta.",
+      "mariadb": "En espera: esperas de bloqueos de fila de InnoDB. La conexión de este monitor no se cuenta.",
+      "sqlserver": "En espera: peticiones de usuario con un tipo de espera. La sesión de este monitor no se cuenta."
+    }
+  },
   "serverSettings": {
     "search": "Buscar configuración…",
     "kind": "Clase",
@@ -844,7 +907,63 @@
     "relation": "{{name}}: {{from}} → {{to}}",
     "focus": "Centrar en esta tabla",
     "openData": "Abrir datos",
-    "openStructure": "Abrir estructura"
+    "openStructure": "Abrir estructura",
+    "save": "Guardar",
+    "saveTitle": "Guardar el diagrama",
+    "saveAsTitle": "Guardar como un diagrama nuevo",
+    "name": "Nombre",
+    "saveConfirm": "Guardar",
+    "more": "Más acciones del diagrama",
+    "saveAs": "Guardar como…",
+    "rename": "Cambiar el nombre…",
+    "renameTitle": "Cambiar el nombre del diagrama",
+    "renameConfirm": "Cambiar el nombre",
+    "layOutAgain": "Volver a distribuir",
+    "delete": "Eliminar el diagrama guardado…",
+    "deleteTitle": "¿Eliminar el diagrama guardado?",
+    "deleteBody": "«{{name}}» se elimina de este equipo: se pierden sus posiciones, notas y grupos. Las tablas de la base de datos no se tocan.",
+    "deleteAction": "Eliminar el diagrama",
+    "deleted": "Eliminado el diagrama guardado {{name}}",
+    "deleteFailed": "No se pudo eliminar el diagrama guardado: {{detail}}",
+    "savedDiagram": "Guardado como {{name}}",
+    "saveDiagramFailed": "No se pudo guardar el diagrama: {{detail}}",
+    "openFailed": "No se pudo abrir el diagrama guardado: {{detail}}",
+    "unsaved": "Cambios sin guardar",
+    "closeUnsaved": "El diagrama tiene cambios sin guardar. ¿Descartarlos y cerrar esta pestaña?",
+    "closeUnsavedMany_one": "{{count}} diagrama tiene cambios sin guardar ({{tabs}}). ¿Descartarlos y cerrar?",
+    "closeUnsavedMany_other": "{{count}} diagramas tienen cambios sin guardar ({{tabs}}). ¿Descartarlos y cerrar?",
+    "addNote": "Añadir nota",
+    "noteTitle": "Nota",
+    "noteText": "Texto",
+    "noteConfirm": "Hecho",
+    "editNote": "Editar la nota…",
+    "deleteNote": "Eliminar la nota",
+    "group": "Agrupar…",
+    "groupTitle": "Grupo de tablas",
+    "groupName": "Nombre",
+    "groupConfirm": "Hecho",
+    "editGroup": "Editar el grupo…",
+    "ungroup": "Deshacer el grupo",
+    "removeFromGroup": "Quitar del grupo",
+    "color": "Color",
+    "colors": {
+      "gray": "Gris",
+      "blue": "Azul",
+      "green": "Verde",
+      "amber": "Ámbar",
+      "red": "Rojo",
+      "purple": "Morado"
+    },
+    "cancel": "Cancelar",
+    "gone": "No está en la base de datos",
+    "goneTip": "{{name}} ya no se lee en este diagrama. Se queda donde estaba hasta que la quites.",
+    "removeTable": "Quitar del diagrama",
+    "new": "Nueva",
+    "newTip": "No está en el diagrama guardado: se coloca debajo de las demás. Al guardar se queda donde está.",
+    "newCount_one": "{{formattedCount}} tabla nueva desde que se guardó el diagrama.",
+    "newCount_other": "{{formattedCount}} tablas nuevas desde que se guardó el diagrama.",
+    "goneCount_one": "{{formattedCount}} tabla del diagrama guardado no está en la base de datos.",
+    "goneCount_other": "{{formattedCount}} tablas del diagrama guardado no están en la base de datos."
   },
   "maintenance": {
     "menu": "Mantenimiento",

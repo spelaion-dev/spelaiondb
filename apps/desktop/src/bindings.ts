@@ -15,13 +15,32 @@ export const commands = {
 	readDiagram: (session: string, diagram: number, scope: DiagramScopeItem_Deserialize, onProgress: Channel<DiagramProgressItem>) => typedError<DiagramSummaryItem_Serialize, string>(__TAURI_INVOKE("read_diagram", { session, diagram, scope, onProgress })),
 	/**
 	 *  Where each table of the diagram goes and how its relations are drawn, for these display
-	 *  options and font measures. Panning and zooming never ask for it again.
+	 *  options and font measures, and as `arrangement` places tables, notes and groups (checked by
+	 *  the core first; with no positions the layout is automatic). Panning and zooming never ask
+	 *  for it again.
 	 */
-	diagramLayout: (diagram: number, options: DiagramOptionsItem, metrics: DiagramMetricsItem) => typedError<DiagramLayoutItem_Serialize, string>(__TAURI_INVOKE("diagram_layout", { diagram, options, metrics })),
+	diagramLayout: (diagram: number, options: DiagramOptionsItem, metrics: DiagramMetricsItem, arrangement: DiagramArrangementItem) => typedError<DiagramLayoutItem_Serialize, string>(__TAURI_INVOKE("diagram_layout", { diagram, options, metrics, arrangement })),
 	/**  Writes the diagram's whole model as Mermaid or DBML (written by the core) to `path`. */
 	saveDiagramText: (diagram: number, format: DiagramTextFormatItem, path: string) => typedError<null, string>(__TAURI_INVOKE("save_diagram_text", { diagram, format, path })),
 	/**  Forgets a diagram's model (its tab closed or read it again under another id). */
 	closeDiagram: (diagram: number) => typedError<null, string>(__TAURI_INVOKE("close_diagram", { diagram })),
+	/**
+	 *  The saved diagrams of the open folder's connections, each checked by the core: one that
+	 *  cannot be read says why.
+	 */
+	savedDiagrams: () => typedError<SavedDiagramItem_Serialize[], string>(__TAURI_INVOKE("saved_diagrams")),
+	/**  A saved diagram with what it holds, read back and checked by the core. */
+	openSavedDiagram: (id: number) => typedError<SavedDiagramDetailItem_Serialize, string>(__TAURI_INVOKE("open_saved_diagram", { id })),
+	/**
+	 *  Saves a diagram of `connection` under `name`: a new one, or over `id`. The core checks the
+	 *  name, the scope and the arrangement; another saved diagram of the connection with the same
+	 *  name is refused.
+	 */
+	saveDiagram: (connection: ConnectionKeyItem_Deserialize, id: number | null, name: string, scope: DiagramScopeItem_Deserialize, options: DiagramOptionsItem, arrangement: DiagramArrangementItem) => typedError<SavedDiagramDetailItem_Serialize, string>(__TAURI_INVOKE("save_diagram", { connection, id, name, scope, options, arrangement })),
+	/**  Renames a saved diagram, keeping what it holds. */
+	renameSavedDiagram: (id: number, name: string) => typedError<SavedDiagramItem_Serialize, string>(__TAURI_INVOKE("rename_saved_diagram", { id, name })),
+	/**  Deletes a saved diagram; whether it was there. */
+	deleteSavedDiagram: (id: number) => typedError<boolean, string>(__TAURI_INVOKE("delete_saved_diagram", { id })),
 	/**  Whether `session` can take part in a comparison: `None`, or the core's reason why not. */
 	schemaCompareSupport: (session: string) => typedError<string | null, string>(__TAURI_INVOKE("schema_compare_support", { session })),
 	/**
@@ -67,14 +86,22 @@ export const commands = {
 	mcpSettings: () => typedError<McpSettingsItem, string>(__TAURI_INVOKE("mcp_settings")),
 	/**  Read-only mode for every agent (ADR-033): `spelaiondb mcp` reads it on every call. */
 	setMcpReadOnly: (readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_read_only", { readOnly })),
-	/**  Changes only the local write restriction, in the workspace that the user was shown. */
-	setMcpConnectionReadOnly: (connection: string, workspace: string, readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_connection_read_only", { connection, workspace, readOnly })),
+	/**
+	 *  Changes only the local write restriction of one folder's connection, in the workspace that
+	 *  the user was shown: another folder's connection of the same id keeps its own (ADR-075).
+	 */
+	setMcpConnectionReadOnly: (connection: ConnectionKeyItem_Deserialize, workspace: string, readOnly: boolean) => typedError<null, string>(__TAURI_INVOKE("set_mcp_connection_read_only", { connection, workspace, readOnly })),
 	setMcpOutputFormat: (format: ToolOutputItem) => typedError<null, string>(__TAURI_INVOKE("set_mcp_output_format", { format })),
-	/**  What agents can do on each connection, as the core decides it. */
-	mcpAccess: () => typedError<McpAccessItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
+	/**
+	 *  What agents can do on every open folder's connections, each under its folder as that
+	 *  folder decides it, then the personal ones (ADR-033, ADR-075 point 9; decided by the core).
+	 */
+	mcpAccess: () => typedError<McpAccessGroupItem_Serialize[], string>(__TAURI_INVOKE("mcp_access")),
 	/**  The MCP activity the filter keeps, newest first (ADR-033); secrets masked by the core. */
 	auditEvents: (filter: AuditFilterItem_Deserialize, offset: number, limit: number) => typedError<AuditPageItem_Serialize, string>(__TAURI_INVOKE("audit_events", { filter, offset, limit })),
 	auditTools: () => typedError<string[], string>(__TAURI_INVOKE("audit_tools")),
+	/**  The folders the MCP activity records (ADR-075), for the Activity tab's filter. */
+	auditFolders: () => typedError<string[], string>(__TAURI_INVOKE("audit_folders")),
 	/**  The latest `spelaiondb mcp` processes and their calls. */
 	auditSessions: () => typedError<AuditSessionItem[], string>(__TAURI_INVOKE("audit_sessions")),
 	/**
@@ -222,6 +249,21 @@ export const commands = {
 	/**  Saves the map's preferences; the core checks the tile server first. */
 	setMapPreferences: (preferences: MapPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
 	/**
+	 *  Tile `z/x/y` of map view `view`, from the stored tile server, as a `data:` image. Refused with
+	 *  tiles off, past the view's requests, or when the server sends no image.
+	 */
+	mapTile: (view: number, z: number, x: number, y: number) => typedError<string, string>(__TAURI_INVOKE("map_tile", { view, z, x, y })),
+	/**
+	 *  The preferences that choose OpenStreetMap's tiles, with tiles on (the user's opt-in): the
+	 *  page saves them as they come, and the core checks them again then.
+	 */
+	openstreetmapTiles: () => __TAURI_INVOKE<MapPreferencesItem>("openstreetmap_tiles"),
+	/**
+	 *  Opens the stored tile server's attribution link in the system's browser, on the user's click:
+	 *  an `https://` address checked when it was saved and again here.
+	 */
+	openTileAttribution: () => typedError<null, string>(__TAURI_INVOKE("open_tile_attribution")),
+	/**
 	 *  The side panel as the user left it (SDB-451): hidden or not, its width, and the widths the
 	 *  core allows.
 	 */
@@ -261,15 +303,20 @@ export const commands = {
 	recentFiles: () => typedError<RecentFileItem[], string>(__TAURI_INVOKE("recent_files")),
 	forgetRecentFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("forget_recent_file", { path })),
 	/**
-	 *  The open folder's kept tabs, checked by the core: every one comes back disconnected,
-	 *  with its text and a note when its connection or file is gone. Nothing is run.
+	 *  The kept tabs of the window and of every open folder (ADR-075), checked by the core: every
+	 *  one comes back disconnected, in the window's order, with its text and a note when its
+	 *  connection or file is gone. A connection is looked up in the folder the tab was kept under
+	 *  (and personal ones among the personal connections), never in another folder. Nothing is run.
+	 *  With `folder` (an open folder's root, as listed), only that folder's tabs: it was just
+	 *  opened beside the others, whose tabs are on screen.
 	 */
-	restoreTabsForWorkspace: () => typedError<RestoredTabsItem_Serialize, string>(__TAURI_INVOKE("restore_tabs_for_workspace")),
+	restoreTabsForWorkspace: (folder: string | null) => typedError<RestoredTabsItem_Serialize, string>(__TAURI_INVOKE("restore_tabs_for_workspace", { folder })),
 	/**
-	 *  The open tabs as they are now, for the folder `scope` (from `restore_tabs_for_workspace`).
-	 *  The core writes them within a second (ADR-036).
+	 *  The window's tabs as they are now, in the tab bar's order (ADR-075): the core keeps each
+	 *  under its connection's folder, or under the window's key, and writes them within a second
+	 *  (ADR-036). Closed folders keep the tabs they had.
 	 */
-	saveTabs: (scope: string, tabs: OpenTabItem_Deserialize[], active: number | null) => typedError<null, string>(__TAURI_INVOKE("save_tabs", { scope, tabs, active })),
+	saveTabs: (tabs: OpenTabItem_Deserialize[], active: number | null) => typedError<null, string>(__TAURI_INVOKE("save_tabs", { tabs, active })),
 	/**  Writes the tabs waiting now (before switching folders). */
 	flushTabs: () => typedError<null, string>(__TAURI_INVOKE("flush_tabs")),
 	getReconnectOnStart: () => typedError<boolean, string>(__TAURI_INVOKE("get_reconnect_on_start")),
@@ -363,23 +410,24 @@ export const commands = {
 	 *  any: its stored password is used when none is typed. `network_only` stops before logging
 	 *  in. The steps, their errors and the diagnostics come from the core, redacted.
 	 */
-	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: string | null, networkOnly: boolean, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, job, onStep })),
+	testConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, editing: ConnectionKeyItem_Deserialize | null, networkOnly: boolean, job: Channel<JobTicket>, onStep: Channel<TestStepItem_Deserialize[]>) => typedError<ConnectionTestOutcome_Serialize, string>(__TAURI_INVOKE("test_connection", { draft, password, editing, networkOnly, job, onStep })),
 	/**
 	 *  Saves a new connection file (and, for `keychain`, its password) and reloads the
-	 *  configuration. Returns the new connection's identifier.
+	 *  configuration. Returns the new connection's identity (its folder and id). A repository
+	 *  connection goes into the open folder `repository` (its root, ADR-075), or the shown one.
 	 */
-	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null) => typedError<string, string>(__TAURI_INVOKE("add_connection", { draft, password })),
+	addConnection: (draft: ConnectionDraftItem_Deserialize, password: string | null, repository: string | null) => typedError<ConnectionKeyItem_Serialize, string>(__TAURI_INVOKE("add_connection", { draft, password, repository })),
 	/**  Checks whether an existing connection can be opened in the editor. */
-	connectionEditorAccess: (connection: string) => typedError<EditorAccessOutcome_Serialize, string>(__TAURI_INVOKE("connection_editor_access", { connection })),
+	connectionEditorAccess: (connection: ConnectionKeyItem_Deserialize) => typedError<EditorAccessOutcome_Serialize, string>(__TAURI_INVOKE("connection_editor_access", { connection })),
 	/**  The form of an existing connection, to edit it. */
-	connectionDraft: (connection: string) => typedError<EditedConnectionItem_Serialize, string>(__TAURI_INVOKE("connection_draft", { connection })),
+	connectionDraft: (connection: ConnectionKeyItem_Deserialize) => typedError<EditedConnectionItem_Serialize, string>(__TAURI_INVOKE("connection_draft", { connection })),
 	/**
 	 *  Saves an edited connection (same file; for `keychain`, a typed password replaces the
 	 *  stored one) and reloads the configuration.
 	 */
-	updateConnection: (connection: string, draft: ConnectionDraftItem_Deserialize, password: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password, revision })),
+	updateConnection: (connection: ConnectionKeyItem_Deserialize, draft: ConnectionDraftItem_Deserialize, password: string | null, revision: string) => typedError<null, string>(__TAURI_INVOKE("update_connection", { connection, draft, password, revision })),
 	/**  Deletes a connection file and its stored password. The UI closes its sessions first. */
-	deleteConnection: (connection: string) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
+	deleteConnection: (connection: ConnectionKeyItem_Deserialize) => typedError<null, string>(__TAURI_INVOKE("delete_connection", { connection })),
 	/**
 	 *  The form mapped to another engine (ADR-030): what still applies is kept, the rest is
 	 *  changed or dropped by the core; nothing is saved until the form is.
@@ -389,16 +437,16 @@ export const commands = {
 	 *  Duplicates a connection next to the original (ADR-030). A stored password is copied to the
 	 *  copy's own keychain entry by the core; a repository connection must be as trusted.
 	 */
-	duplicateConnection: (connection: string) => typedError<DuplicatedItem, string>(__TAURI_INVOKE("duplicate_connection", { connection })),
+	duplicateConnection: (connection: ConnectionKeyItem_Deserialize) => typedError<DuplicatedItem, string>(__TAURI_INVOKE("duplicate_connection", { connection })),
 	/**
 	 *  Moves a connection to another folder (`""` for none) in its layer. The core moves its
 	 *  file, its keychain password and, for a repository connection, what trust pinned for it,
 	 *  without adding any (ADR-022); its explorer filter, bookmarks, history setting and saved
 	 *  tabs follow. A connection in use is not moved: the UI disconnects it first.
 	 */
-	moveConnection: (connection: string, folder: string) => typedError<MovedItem, string>(__TAURI_INVOKE("move_connection", { connection, folder })),
+	moveConnection: (connection: ConnectionKeyItem_Deserialize, folder: string) => typedError<MovedItem, string>(__TAURI_INVOKE("move_connection", { connection, folder })),
 	/**  The text Ctrl+C puts on the clipboard for a connection: without secrets or programs. */
-	copyConnection: (connection: string) => typedError<ClipboardConnectionItem, string>(__TAURI_INVOKE("copy_connection", { connection })),
+	copyConnection: (connection: ConnectionKeyItem_Deserialize) => typedError<ClipboardConnectionItem, string>(__TAURI_INVOKE("copy_connection", { connection })),
 	/**  A personal connection from clipboard text, checked by the core as untrusted input. */
 	pasteConnection: (text: string) => typedError<PastedItem, string>(__TAURI_INVOKE("paste_connection", { text })),
 	/**  The pattern new connections are named with (ADR-030). */
@@ -544,13 +592,13 @@ export const commands = {
 	 *  as it reads it, and a default that no longer passes comes back as refused, never as a
 	 *  filter.
 	 */
-	tableFilters: (connection: string, schema: string, name: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("table_filters", { connection, schema, name })),
+	tableFilters: (connection: ConnectionKeyItem_Deserialize, database: string | null, schema: string, name: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("table_filters", { connection, database, schema, name })),
 	/**  Remembers a filter the tab just used, checked by the core first. */
-	recordTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("record_table_filter", { connection, schema, name, filter })),
+	recordTableFilter: (connection: ConnectionKeyItem_Deserialize, database: string | null, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("record_table_filter", { connection, database, schema, name, filter })),
 	/**  Takes one filter out of a table's history. */
-	forgetTableFilter: (connection: string, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, schema, name, filter })),
+	forgetTableFilter: (connection: ConnectionKeyItem_Deserialize, database: string | null, schema: string, name: string, filter: string) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("forget_table_filter", { connection, database, schema, name, filter })),
 	/**  Saves the filter a table's tab opens with (checked by the core), or drops it (`None`). */
-	setTableDefaultFilter: (connection: string, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, schema, name, filter })),
+	setTableDefaultFilter: (connection: ConnectionKeyItem_Deserialize, database: string | null, schema: string, name: string, filter: string | null) => typedError<TableFiltersItem_Serialize, string>(__TAURI_INVOKE("set_table_default_filter", { connection, database, schema, name, filter })),
 	/**
 	 *  Every column of a schema's relations, read with one catalog query on the explorer's
 	 *  session: metadata search keeps them with the schema (ADR-043).
@@ -869,7 +917,7 @@ export const commands = {
 	 *  Saves the query under `name` for the open workspace (or personally outside one),
 	 *  replacing a saved query with that name. Returns its identifier.
 	 */
-	saveSnippet: (name: string, sql: string, connection: string | null) => typedError<number, string>(__TAURI_INVOKE("save_snippet", { name, sql, connection })),
+	saveSnippet: (name: string, sql: string, connection: ConnectionKeyItem_Deserialize | null) => typedError<number, string>(__TAURI_INVOKE("save_snippet", { name, sql, connection })),
 	/**  Saved queries of the open workspace and the personal ones, by name. */
 	listSnippets: (search: string) => typedError<SnippetItem_Serialize[], string>(__TAURI_INVOKE("list_snippets", { search })),
 	deleteSnippet: (id: number) => typedError<boolean, string>(__TAURI_INVOKE("delete_snippet", { id })),
@@ -939,12 +987,12 @@ export const commands = {
 	 */
 	substituteVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("substitute_variables", { session, sql, tab })),
 	/**  A connection's variables, by name (SDB-383): local values, kept in the local store. */
-	connectionVariables: (connection: string) => typedError<VariableItem[], string>(__TAURI_INVOKE("connection_variables", { connection })),
+	connectionVariables: (connection: ConnectionKeyItem_Deserialize) => typedError<VariableItem[], string>(__TAURI_INVOKE("connection_variables", { connection })),
 	/**
 	 *  Sets one of a connection's variables, or removes it (`null`). The store refuses a name or
 	 *  a value that cannot be one.
 	 */
-	setConnectionVariable: (connection: string, name: string, value: string | null) => typedError<null, string>(__TAURI_INVOKE("set_connection_variable", { connection, name, value })),
+	setConnectionVariable: (connection: ConnectionKeyItem_Deserialize, name: string, value: string | null) => typedError<null, string>(__TAURI_INVOKE("set_connection_variable", { connection, name, value })),
 	/**
 	 *  Whether a name and a value can be a variable's, as the core decides it (for a tab's own
 	 *  variables, which never leave the page's memory).
@@ -958,7 +1006,7 @@ export const commands = {
 	 *  (TablePlus's) is opened with `file_password`; without it, or with a wrong one, the scan
 	 *  says so instead of failing.
 	 */
-	scanConnections: (client: string, path: string | null, filePassword: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path, filePassword })),
+	scanConnections: (client: string, path: string | null, filePassword: string | null, repository: string | null) => typedError<ImportScan_Serialize, string>(__TAURI_INVOKE("scan_connections", { client, path, filePassword, repository })),
 	/**
 	 *  What a client has on this computer, for the import's list (SDB-446): counted by the core
 	 *  without reading any saved password, keychain or encrypted export, off the UI thread. The page
@@ -979,9 +1027,29 @@ export const commands = {
 	 *  the client saved go to the keychain (those it keeps in the system keychain are only read
 	 *  now), otherwise they are asked when connecting.
 	 */
-	importConnections: (client: string, path: string | null, filePassword: string | null, choices: ImportChoice[], target: ImportTarget) => typedError<ImportReport, string>(__TAURI_INVOKE("import_connections", { client, path, filePassword, choices, target })),
+	importConnections: (client: string, path: string | null, filePassword: string | null, choices: ImportChoice[], target: ImportTarget_Deserialize) => typedError<ImportReport, string>(__TAURI_INVOKE("import_connections", { client, path, filePassword, choices, target })),
+	/**
+	 *  The page chose a folder (it shows one at a time, ADR-075): every other open folder closes,
+	 *  with its sessions, and `path` opens. Personal connections' sessions stay; the page asked
+	 *  first and disconnected its own tabs.
+	 */
 	openWorkspace: (path: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("open_workspace", { path })),
-	/**  Trusts the open repository (ADR-009). The UI asks for it after showing what it implies. */
+	/**
+	 *  Opens `path` beside the folders already open (ADR-075): nothing closes. The same root again
+	 *  is the folder already open; an eleventh is refused. The page shows the last one opened.
+	 */
+	addFolder: (path: string) => typedError<AddedFolderItem, string>(__TAURI_INVOKE("add_folder", { path })),
+	/**
+	 *  Closes the open folder of `root` (as listed) and its sessions (ADR-075). Personal
+	 *  connections' sessions and other folders' stay.
+	 */
+	closeFolder: (root: string) => typedError<OpenFoldersItem, string>(__TAURI_INVOKE("close_folder", { root })),
+	/**  The open folders, in the order they were opened, each with its trust. */
+	listFolders: () => typedError<OpenFoldersItem, string>(__TAURI_INVOKE("list_folders")),
+	/**
+	 *  Trusts the open repository `root` (ADR-009), one of the open folders (ADR-075). The UI asks
+	 *  for it after showing what it implies.
+	 */
 	trustWorkspace: (root: string) => typedError<WorkspaceInfo_Serialize, string>(__TAURI_INVOKE("trust_workspace", { root })),
 	/**
 	 *  Accepts a reviewed change to a repository connection or tunnel (ADR-022): it is recorded
@@ -1032,12 +1100,12 @@ export const commands = {
 	snippetFolders: () => typedError<SnippetFolderItem[], string>(__TAURI_INVOKE("snippet_folders")),
 	createSnippetFolder: (name: string) => typedError<number, string>(__TAURI_INVOKE("create_snippet_folder", { name })),
 	moveSnippet: (id: number, folder: number | null) => typedError<null, string>(__TAURI_INVOKE("move_snippet", { id, folder })),
-	setHistoryEnabled: (connection: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
+	setHistoryEnabled: (connection: ConnectionKeyItem_Deserialize, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_history_enabled", { connection, enabled })),
 	/**
 	 *  Opens a session (`session` is chosen by the UI). If a password is needed, it says so
 	 *  instead of failing, so the UI can ask for it.
 	 */
-	connect: (session: string, connection: string, password: string | null, remember: boolean, editor: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember, editor })),
+	connect: (session: string, connection: ConnectionKeyItem_Deserialize, password: string | null, remember: boolean, editor: boolean) => typedError<ConnectOutcome_Serialize, string>(__TAURI_INVOKE("connect", { session, connection, password, remember, editor })),
 	/**
 	 *  Open an independent tab from an existing explorer session, reusing its in-memory
 	 *  credentials and exact resolved connection while the configuration still says the same
@@ -1046,6 +1114,24 @@ export const commands = {
 	 *  one does. Passwords never cross back into the UI.
 	 */
 	connectFromSession: (source: string, session: string, database: string | null, editor: boolean) => typedError<FromSessionOutcome, string>(__TAURI_INVOKE("connect_from_session", { source, session, database, editor })),
+	/**  The databases the explorer shows under the connection whose explorer session is `session`. */
+	connectionDatabases: (session: string) => typedError<ConnectionDatabasesItem_Serialize, string>(__TAURI_INVOKE("connection_databases", { session })),
+	/**
+	 *  Opens `database` of the connection whose explorer session is `source` as the session
+	 *  `session` (ADR-074 point 4): a new session, never a switch, with the connection's settings and
+	 *  the password typed for `source`. What the core refuses comes back as its reason.
+	 */
+	connectDatabase: (source: string, session: string, database: string) => typedError<null, string>(__TAURI_INVOKE("connect_database", { source, session, database })),
+	/**
+	 *  Moves the editor tab `session` to `database` of its connection (ADR-074 point 4, SDB-505):
+	 *  on PostgreSQL a session never changes database, so this is a new session on that database,
+	 *  opened through the core (`open_other_database`, with its refusals) with the password typed
+	 *  for the tab, which then takes the tab's place; the old one is closed (its transaction, which
+	 *  the page asked about, rolls back). Refused while a run goes on. Nothing the user ran is run
+	 *  again; results the old session read stay, and are no longer editable (ADR-061: they are of
+	 *  that session). Answers the new session's server version.
+	 */
+	changeTabDatabase: (session: string, database: string) => typedError<string, string>(__TAURI_INVOKE("change_tab_database", { session, database })),
 	disconnect: (session: string) => typedError<null, string>(__TAURI_INVOKE("disconnect", { session })),
 	listProcesses: (session: string) => typedError<ProcessSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_processes", { session })),
 	controlProcess: (session: string, target: ProcessTargetItem_Deserialize, terminate: boolean, confirmed: boolean) => typedError<null, string>(__TAURI_INVOKE("control_process", { session, target, terminate, confirmed })),
@@ -1053,6 +1139,17 @@ export const commands = {
 	listLocks: (session: string) => typedError<LockSnapshotItem_Serialize, string>(__TAURI_INVOKE("list_locks", { session })),
 	/**  Every setting, variable, status counter or property the server exposes. */
 	serverSettings: (session: string) => typedError<ServerSettingItem_Serialize[], string>(__TAURI_INVOKE("server_settings", { session })),
+	/**
+	 *  Shows the dashboard of the monitor session `session`: its sampler, shown, with the samples
+	 *  it kept while hidden, or a new one sampling every few seconds
+	 *  (`spelaion_core::DASHBOARD_INTERVAL`) when it has none or the one it had stopped. Its state
+	 *  goes to `on_state` (and no longer to an earlier channel) each time it changes.
+	 */
+	startDashboard: (session: string, onState: Channel<DashboardStateItem_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("start_dashboard", { session, onState })),
+	/**  Whether the dashboard of `session` is shown: hidden, its sampler reads nothing. */
+	setDashboardVisible: (session: string, visible: boolean) => typedError<null, string>(__TAURI_INVOKE("set_dashboard_visible", { session, visible })),
+	/**  Stops the sampler of `session` and forgets its samples. */
+	stopDashboard: (session: string) => typedError<null, string>(__TAURI_INVOKE("stop_dashboard", { session })),
 	/**
 	 *  A table's size on disk, index size and row estimate, from the catalog's statistics;
 	 *  `None` when the engine keeps none or the object is not a table.
@@ -1145,22 +1242,22 @@ export const commands = {
 	/**  Roles, logins, tablespaces and extensions, for the connection's folders (ADR-024). */
 	listServerObjects: (session: string) => typedError<ServerObjectItem_Serialize[], string>(__TAURI_INVOKE("list_server_objects", { session })),
 	/**  A connection's explorer filter (ADR-025), personal and per workspace. */
-	getExplorerFilter: (connection: string) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("get_explorer_filter", { connection })),
-	setExplorerFilter: (connection: string, filter: ExplorerFilterItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_filter", { connection, filter })),
+	getExplorerFilter: (connection: ConnectionKeyItem_Deserialize) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("get_explorer_filter", { connection })),
+	setExplorerFilter: (connection: ConnectionKeyItem_Deserialize, filter: ExplorerFilterItem) => typedError<null, string>(__TAURI_INVOKE("set_explorer_filter", { connection, filter })),
 	/**
 	 *  The explorer's bookmarks (ADR-026) of the personal connections and of the open workspace's,
 	 *  for the connections that exist now.
 	 */
-	listBookmarks: () => typedError<BookmarkItem[], string>(__TAURI_INVOKE("list_bookmarks")),
-	addBookmark: (bookmark: BookmarkItem) => typedError<null, string>(__TAURI_INVOKE("add_bookmark", { bookmark })),
+	listBookmarks: () => typedError<BookmarkItem_Serialize[], string>(__TAURI_INVOKE("list_bookmarks")),
+	addBookmark: (bookmark: BookmarkItem_Deserialize) => typedError<null, string>(__TAURI_INVOKE("add_bookmark", { bookmark })),
 	/**  Whether the bookmark was there. */
-	removeBookmark: (bookmark: BookmarkItem) => typedError<boolean, string>(__TAURI_INVOKE("remove_bookmark", { bookmark })),
+	removeBookmark: (bookmark: BookmarkItem_Deserialize) => typedError<boolean, string>(__TAURI_INVOKE("remove_bookmark", { bookmark })),
 	/**
 	 *  "Hide" or "Show only" on the schemas, objects or columns chosen in the explorer: their
 	 *  names, with their wildcard characters escaped, go into the connection's filter. Returns the
 	 *  new filter.
 	 */
-	filterExplorerName: (connection: string, kind: FilterKindItem, names: string[], action: FilterActionItem) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("filter_explorer_name", { connection, kind, names, action })),
+	filterExplorerName: (connection: ConnectionKeyItem_Deserialize, kind: FilterKindItem, names: string[], action: FilterActionItem) => typedError<ExplorerFilterItem, string>(__TAURI_INVOKE("filter_explorer_name", { connection, kind, names, action })),
 	/**  The DDL of an object, to open in a new tab (nothing runs). */
 	objectDefinition: (session: string, object: SchemaObjectItem_Deserialize) => typedError<string, string>(__TAURI_INVOKE("object_definition", { session, object })),
 	/**
@@ -1226,6 +1323,38 @@ export const commands = {
 	 *  committed, applied or saved; the servers roll back open transactions.
 	 */
 	quitApp: () => typedError<null, string>(__TAURI_INVOKE("quit_app")),
+	windowContext: () => __TAURI_INVOKE<WindowContextItem_Serialize>("window_context"),
+	/**
+	 *  Opens `connection` in a window of its own, titled `title`: its own tabs and explorer, its
+	 *  own sessions, over the same core. Nothing is connected or run until its page asks.
+	 */
+	openConnectionWindow: (connection: ConnectionKeyItem_Deserialize, title: string) => typedError<string, string>(__TAURI_INVOKE("open_connection_window", { connection, title })),
+	/**
+	 *  Shows the results of the calling window's editor tab `tab` in a window of their own, or
+	 *  brings forward the one already showing them. The rows stay in the core's store: the new
+	 *  window asks for windows of the same results by id, and nothing is run again.
+	 */
+	openResultsWindow: (tab: string, title: string) => typedError<string, string>(__TAURI_INVOKE("open_results_window", { tab, title })),
+	/**
+	 *  Closes the results window of the calling window's tab `tab` ("Re-attach results"): the
+	 *  tab hears `ResultsWindowClosed` and shows them again. Nothing if there is none.
+	 */
+	closeResultsWindow: (tab: string) => typedError<null, string>(__TAURI_INVOKE("close_results_window", { tab })),
+	/**
+	 *  Closes the calling window (not the main one, which quits): the sessions it opened close
+	 *  first, through the same path as closing their tabs. Another window's sessions are not
+	 *  touched. Its page has asked whatever closing would lose.
+	 */
+	closeWindow: () => typedError<null, string>(__TAURI_INVOKE("close_window")),
+	/**  The calling window's page went back from its closing question. */
+	windowStaysOpen: () => typedError<null, string>(__TAURI_INVOKE("window_stays_open")),
+	/**
+	 *  Before the main window quits, every connection window is asked to close, one at a time,
+	 *  each asking its own questions (its page closes at once when nothing would be lost).
+	 *  `false`: one stayed open, and quitting stops. A window whose page never answers is closed
+	 *  by a second click on its own close button, which answers `true` here.
+	 */
+	closeOtherWindows: () => typedError<boolean, string>(__TAURI_INVOKE("close_other_windows")),
 };
 
 /** Events */
@@ -1237,13 +1366,24 @@ export const events = {
 	pluginInstallChanged: makeEvent<PluginInstallChanged, PluginInstallChanged>("plugin-install-changed"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
+	resultsWindowClosed: makeEvent<ResultsWindowClosed, ResultsWindowClosed>("results-window-closed"),
 	runChanged: makeEvent<RunChanged, RunChanged>("run-changed"),
 	sessionLost: makeEvent<SessionLost_Serialize, SessionLost_Deserialize>("session-lost"),
 	transactionChanged: makeEvent<TransactionChanged, TransactionChanged>("transaction-changed"),
 	updateChanged: makeEvent<UpdateChanged_Serialize, UpdateChanged_Deserialize>("update-changed"),
+	windowCloseRequested: makeEvent<WindowCloseRequested, WindowCloseRequested>("window-close-requested"),
 };
 
 /* Types */
+/**  A folder `add_folder` opened, or found open already (ADR-075). */
+export type AddedFolderItem = {
+	/**  Its canonical root, as `OpenFolderItem::root` names it. */
+	root: string,
+	/**  It was not open before: its kept tabs come back (`restore_tabs_for_workspace`). */
+	added: boolean,
+	folders: OpenFolderItem[],
+};
+
 /**  The script a structure form would run, written by the core, to show before it does. */
 export type AlterationPreviewItem = {
 	/**  The whole script, as shown and as sent back to apply it. */
@@ -1278,6 +1418,11 @@ export type AuditEventItem_Deserialize = {
 	rows?: number | null,
 	durationMs?: number | null,
 	detail?: string | null,
+	/**
+	 *  The connection's folder (ADR-075); none for a personal connection, and for entries
+	 *  written before 0.17.
+	 */
+	folder?: string | null,
 };
 
 /**  One MCP call, with its secrets already masked by the core. */
@@ -1293,6 +1438,11 @@ export type AuditEventItem_Serialize = {
 	rows: number | null,
 	durationMs: number | null,
 	detail: string | null,
+	/**
+	 *  The connection's folder (ADR-075); none for a personal connection, and for entries
+	 *  written before 0.17.
+	 */
+	folder: string | null,
 };
 
 export type AuditFilterItem = AuditFilterItem_Serialize | AuditFilterItem_Deserialize;
@@ -1302,6 +1452,8 @@ export type AuditFilterItem_Deserialize = {
 	tool?: string | null,
 	status?: AuditStatusItem | null,
 	session?: string | null,
+	/**  Only one folder's entries, or only those with none (ADR-075). */
+	folder?: AuditFolderItem | null,
 };
 
 export type AuditFilterItem_Serialize = {
@@ -1309,7 +1461,16 @@ export type AuditFilterItem_Serialize = {
 	tool: string | null,
 	status: AuditStatusItem | null,
 	session: string | null,
+	/**  Only one folder's entries, or only those with none (ADR-075). */
+	folder: AuditFolderItem | null,
 };
+
+/**  The folder the Activity tab keeps (ADR-075). */
+export type AuditFolderItem = 
+/**  Entries of this folder: its canonical root, as the log records it. */
+{ kind: "folder"; root: string } | 
+/**  Entries with no folder: on a personal connection, or written before 0.17. */
+{ kind: "noFolder" };
 
 export type AuditFormatItem = "csv" | "json";
 
@@ -1449,8 +1610,28 @@ export type BlockingNodeItem = {
 };
 
 /**  An object bookmarked in the explorer (ADR-026). */
-export type BookmarkItem = {
-	connection: string,
+export type BookmarkItem = BookmarkItem_Serialize | BookmarkItem_Deserialize;
+
+/**  An object bookmarked in the explorer (ADR-026). */
+export type BookmarkItem_Deserialize = {
+	/**  The connection's identity (ADR-075). */
+	connection: ConnectionKeyItem_Deserialize,
+	/**  The other database of the connection it is in (ADR-074, SDB-505); `None` for its own. */
+	database?: string | null,
+	/**  The schema the object is in, or the schema itself (with an empty `name`). */
+	schema: string,
+	name: string,
+	kind: BookmarkKindItem,
+	/**  A function's arguments…; empty if nothing tells it apart from others of its name. */
+	detail: string,
+};
+
+/**  An object bookmarked in the explorer (ADR-026). */
+export type BookmarkItem_Serialize = {
+	/**  The connection's identity (ADR-075). */
+	connection: ConnectionKeyItem_Serialize,
+	/**  The other database of the connection it is in (ADR-074, SDB-505); `None` for its own. */
+	database: string | null,
 	/**  The schema the object is in, or the schema itself (with an empty `name`). */
 	schema: string,
 	name: string,
@@ -1928,8 +2109,11 @@ setupSkipped: SkippedSetupItem[] } |
 { kind: "authFailed"; message: string; canRemember: boolean } | 
 /**  The user declined an SSH question or cancelled an authentication prompt. */
 { kind: "cancelled" } | 
-/**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" } | 
+/**
+ *  The repository `root` is not trusted: ask before resolving anything. With several
+ *  folders open (ADR-075) it is the folder the connection reads, not always the one shown.
+ */
+{ kind: "untrusted"; root: string } | 
 /**
  *  A repository connection or tunnel is new or changed since the repository was trusted
  *  (ADR-022): show the change and ask before resolving anything.
@@ -1955,8 +2139,11 @@ setupSkipped: SkippedSetupItem[] } |
 { kind: "authFailed"; message: string; canRemember: boolean } | 
 /**  The user declined an SSH question or cancelled an authentication prompt. */
 { kind: "cancelled" } | 
-/**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" } | 
+/**
+ *  The repository `root` is not trusted: ask before resolving anything. With several
+ *  folders open (ADR-075) it is the folder the connection reads, not always the one shown.
+ */
+{ kind: "untrusted"; root: string } | 
 /**
  *  A repository connection or tunnel is new or changed since the repository was trusted
  *  (ADR-022): show the change and ask before resolving anything.
@@ -1969,6 +2156,33 @@ item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string } 
  *  their values, save them with `set_user_vars` and try again.
  */
 { kind: "missingVariables"; names: string[] };
+
+/**  The databases a connection's explorer shows (`spelaion_core::ConnectionDatabases`). */
+export type ConnectionDatabasesItem = ConnectionDatabasesItem_Serialize | ConnectionDatabasesItem_Deserialize;
+
+/**  The databases a connection's explorer shows (`spelaion_core::ConnectionDatabases`). */
+export type ConnectionDatabasesItem_Deserialize = 
+/**  Only its own: the tree has no database level. */
+{ kind: "own" } | 
+/**  Several: a database level, its own first. */
+{ kind: "several"; databases: ExplorerDatabaseItem_Deserialize[] } | 
+/**
+ *  Its own only, because the others could not be listed: a database level with its own,
+ *  and why.
+ */
+{ kind: "ownOnly"; databases: ExplorerDatabaseItem_Deserialize[]; reason: string };
+
+/**  The databases a connection's explorer shows (`spelaion_core::ConnectionDatabases`). */
+export type ConnectionDatabasesItem_Serialize = 
+/**  Only its own: the tree has no database level. */
+{ kind: "own" } | 
+/**  Several: a database level, its own first. */
+{ kind: "several"; databases: ExplorerDatabaseItem_Serialize[] } | 
+/**
+ *  Its own only, because the others could not be listed: a database level with its own,
+ *  and why.
+ */
+{ kind: "ownOnly"; databases: ExplorerDatabaseItem_Serialize[]; reason: string };
 
 /**
  *  What the "add connection" form sends. The password travels apart and is never stored in
@@ -2004,8 +2218,13 @@ export type ConnectionDraftItem_Deserialize = {
 	 *  connection only over a checked certificate or an SSH tunnel.
 	 */
 	cleartextPassword: boolean,
-	/**  The databases the connection shows (SDB-396); empty for all of them. */
+	/**
+	 *  MySQL, MariaDB and SQL Server: the databases the connection shows (SDB-396); empty for
+	 *  all of them. PostgreSQL: the other databases it opens (ADR-074); empty for only its own.
+	 */
 	databases: string[],
+	/**  PostgreSQL: it opens every database the server lists (ADR-074). */
+	allDatabases: boolean,
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -2074,8 +2293,13 @@ export type ConnectionDraftItem_Serialize = {
 	 *  connection only over a checked certificate or an SSH tunnel.
 	 */
 	cleartextPassword: boolean,
-	/**  The databases the connection shows (SDB-396); empty for all of them. */
+	/**
+	 *  MySQL, MariaDB and SQL Server: the databases the connection shows (SDB-396); empty for
+	 *  all of them. PostgreSQL: the other databases it opens (ADR-074); empty for only its own.
+	 */
 	databases: string[],
+	/**  PostgreSQL: it opens every database the server lists (ADR-074). */
+	allDatabases: boolean,
 	user: string,
 	passwordMode: PasswordMode,
 	passwordEnv: string,
@@ -2121,6 +2345,11 @@ export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deseriali
 export type ConnectionItem_Deserialize = {
 	/**  `prod/orders`, or `~/local` if it is personal. */
 	id: string,
+	/**
+	 *  The folder of its identity (ADR-075): the repository's canonical root, or none for a
+	 *  personal connection. With `id`, what every command that takes a connection is given.
+	 */
+	folder?: string | null,
 	name: string,
 	/**  What the database is for, in the user's words; may span lines. */
 	description?: string | null,
@@ -2157,6 +2386,11 @@ export type ConnectionItem_Deserialize = {
 export type ConnectionItem_Serialize = {
 	/**  `prod/orders`, or `~/local` if it is personal. */
 	id: string,
+	/**
+	 *  The folder of its identity (ADR-075): the repository's canonical root, or none for a
+	 *  personal connection. With `id`, what every command that takes a connection is given.
+	 */
+	folder: string | null,
 	name: string,
 	/**  What the database is for, in the user's words; may span lines. */
 	description: string | null,
@@ -2191,6 +2425,33 @@ export type ConnectionItem_Serialize = {
 };
 
 /**
+ *  A connection's identity as the page holds it and sends it back (ADR-075, SDB-495): its
+ *  folder (the repository's canonical root as the core wrote it, none for a personal
+ *  connection) and its id's text. The core checks both against what is open before using it.
+ */
+export type ConnectionKeyItem = ConnectionKeyItem_Serialize | ConnectionKeyItem_Deserialize;
+
+/**
+ *  A connection's identity as the page holds it and sends it back (ADR-075, SDB-495): its
+ *  folder (the repository's canonical root as the core wrote it, none for a personal
+ *  connection) and its id's text. The core checks both against what is open before using it.
+ */
+export type ConnectionKeyItem_Deserialize = {
+	folder?: string | null,
+	id: string,
+};
+
+/**
+ *  A connection's identity as the page holds it and sends it back (ADR-075, SDB-495): its
+ *  folder (the repository's canonical root as the core wrote it, none for a personal
+ *  connection) and its id's text. The core checks both against what is open before using it.
+ */
+export type ConnectionKeyItem_Serialize = {
+	folder: string | null,
+	id: string,
+};
+
+/**
  *  What testing a connection from its form gives (ADR-032). The steps arrive as they change
  *  through the command's channel; this is the end.
  */
@@ -2203,8 +2464,8 @@ export type ConnectionTestOutcome = ConnectionTestOutcome_Serialize | Connection
 export type ConnectionTestOutcome_Deserialize = { kind: "tested"; report: TestReportItem_Deserialize; 
 /**  The connection's TLS does not check its server (SDB-395), from its resolved form. */
 tlsWarning?: TlsWarningItem | null } | 
-/**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" } | 
+/**  The repository `root` is not trusted: ask before resolving anything. */
+{ kind: "untrusted"; root: string } | 
 /**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
 { kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string } | 
 /**  Personal `${user.…}` variables to ask for first (ADR-022). */
@@ -2217,8 +2478,8 @@ tlsWarning?: TlsWarningItem | null } |
 export type ConnectionTestOutcome_Serialize = { kind: "tested"; report: TestReportItem_Serialize; 
 /**  The connection's TLS does not check its server (SDB-395), from its resolved form. */
 tlsWarning: TlsWarningItem | null } | 
-/**  The repository is not trusted: ask before resolving anything. */
-{ kind: "untrusted" } | 
+/**  The repository `root` is not trusted: ask before resolving anything. */
+{ kind: "untrusted"; root: string } | 
 /**  A repository connection or tunnel is new or changed since it was trusted (ADR-022). */
 { kind: "changed"; item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string } | 
 /**  Personal `${user.…}` variables to ask for first (ADR-022). */
@@ -2432,6 +2693,74 @@ export type CopySpecialItem = {
 /**  What "Create" in the explorer can start (see `spelaion_core::CreateKind`). */
 export type CreateKindItem = "table" | "view" | "materializedView" | "sequence" | "schema";
 
+/**  Where a sampler stands (`spelaion_core::DashboardPhase`). */
+export type DashboardPhaseItem = 
+/**  Shown: it reads every interval. */
+{ kind: "sampling" } | 
+/**  Hidden: it reads nothing. */
+{ kind: "paused" } | 
+/**  A read failed: it stopped, with the server's words. */
+{ kind: "failed"; message: string } | 
+/**  It stopped. */
+{ kind: "stopped" };
+
+/**
+ *  One sample (`spelaion_core::DashboardSample`): gauges at that moment, rates since the one
+ *  before; `null` where the server gives nothing or there is nothing to compare with.
+ */
+export type DashboardSampleItem = DashboardSampleItem_Serialize | DashboardSampleItem_Deserialize;
+
+/**
+ *  One sample (`spelaion_core::DashboardSample`): gauges at that moment, rates since the one
+ *  before; `null` where the server gives nothing or there is nothing to compare with.
+ */
+export type DashboardSampleItem_Deserialize = {
+	/**  Milliseconds since the sampler started (49 days fit). */
+	atMs: number,
+	/**  The first sample after a start or a pause: the line breaks before it. */
+	gap: boolean,
+	sessions?: number | null,
+	active?: number | null,
+	waiting?: number | null,
+	transactionsPerSecond?: number | null,
+	readsPerSecond?: number | null,
+	logBytesPerSecond?: number | null,
+};
+
+/**
+ *  One sample (`spelaion_core::DashboardSample`): gauges at that moment, rates since the one
+ *  before; `null` where the server gives nothing or there is nothing to compare with.
+ */
+export type DashboardSampleItem_Serialize = {
+	/**  Milliseconds since the sampler started (49 days fit). */
+	atMs: number,
+	/**  The first sample after a start or a pause: the line breaks before it. */
+	gap: boolean,
+	sessions: number | null,
+	active: number | null,
+	waiting: number | null,
+	transactionsPerSecond: number | null,
+	readsPerSecond: number | null,
+	logBytesPerSecond: number | null,
+};
+
+/**  The sampler's state as the page draws it, sent whole each time it changes. */
+export type DashboardStateItem = DashboardStateItem_Serialize | DashboardStateItem_Deserialize;
+
+/**  The sampler's state as the page draws it, sent whole each time it changes. */
+export type DashboardStateItem_Deserialize = {
+	phase: DashboardPhaseItem,
+	intervalMs: number,
+	samples: DashboardSampleItem_Deserialize[],
+};
+
+/**  The sampler's state as the page draws it, sent whole each time it changes. */
+export type DashboardStateItem_Serialize = {
+	phase: DashboardPhaseItem,
+	intervalMs: number,
+	samples: DashboardSampleItem_Serialize[],
+};
+
 /**  What a data search tells while it runs. */
 export type DataSearchEventItem = DataSearchEventItem_Serialize | DataSearchEventItem_Deserialize;
 
@@ -2467,6 +2796,21 @@ export type DataSearchRequestItem = {
 export type DataSearchSummaryItem = {
 	tables: number,
 	hits: number,
+};
+
+/**  A connection that a database opens only as (ADR-074 point 3). */
+export type DatabaseOwnerItem = DatabaseOwnerItem_Serialize | DatabaseOwnerItem_Deserialize;
+
+/**  A connection that a database opens only as (ADR-074 point 3). */
+export type DatabaseOwnerItem_Deserialize = {
+	connection: ConnectionKeyItem_Deserialize,
+	name: string,
+};
+
+/**  A connection that a database opens only as (ADR-074 point 3). */
+export type DatabaseOwnerItem_Serialize = {
+	connection: ConnectionKeyItem_Serialize,
+	name: string,
 };
 
 /**
@@ -2514,6 +2858,16 @@ export type DependencyItem_Serialize = {
 /**  What a dependency is. */
 export type DependencyKindItem = "table" | "view" | "materializedView" | "function" | "procedure" | "trigger" | "foreignKey" | "sequence" | "type" | "index" | "other";
 
+/**  What the user arranged: with no positions the tables follow the automatic layout. */
+export type DiagramArrangementItem = {
+	positions: DiagramPlacementItem[],
+	notes: DiagramNoteItem[],
+	groups: DiagramGroupItem[],
+};
+
+/**  The palette a note or a group is colored from (ADR-084), drawn with `--er-color-*`. */
+export type DiagramColorItem = "gray" | "blue" | "green" | "amber" | "red" | "purple";
+
 export type DiagramColumnsItem = "all" | "keys" | "none";
 
 /**
@@ -2533,22 +2887,69 @@ export type DiagramEdgeItem = {
 	points: DiagramPointItem[],
 };
 
+/**  A table the saved diagram placed that is no longer read in its scope, where it was. */
+export type DiagramGoneItem = {
+	schema: string,
+	name: string,
+	title: string,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+};
+
+/**  A group's frame around its tables. */
+export type DiagramGroupFrameItem = {
+	/**  Its position in the arrangement's groups. */
+	group: number,
+	label: string,
+	color: DiagramColorItem,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+};
+
+export type DiagramGroupItem = {
+	name: string,
+	color: DiagramColorItem,
+	tables: TableNameItem[],
+};
+
 export type DiagramLayoutItem = DiagramLayoutItem_Serialize | DiagramLayoutItem_Deserialize;
 
 export type DiagramLayoutItem_Deserialize = {
+	/**
+	 *  The top left corner of what is drawn (a table placed by hand may be left of or above
+	 *  the origin).
+	 */
+	x: number,
+	y: number,
 	width: number,
 	height: number,
 	lineHeight: number,
 	nodes: DiagramNodeItem_Deserialize[],
 	edges: DiagramEdgeItem[],
+	gone: DiagramGoneItem[],
+	notes: DiagramNoteBoxItem[],
+	groups: DiagramGroupFrameItem[],
 };
 
 export type DiagramLayoutItem_Serialize = {
+	/**
+	 *  The top left corner of what is drawn (a table placed by hand may be left of or above
+	 *  the origin).
+	 */
+	x: number,
+	y: number,
 	width: number,
 	height: number,
 	lineHeight: number,
 	nodes: DiagramNodeItem_Serialize[],
 	edges: DiagramEdgeItem[],
+	gone: DiagramGoneItem[],
+	notes: DiagramNoteBoxItem[],
+	groups: DiagramGroupFrameItem[],
 };
 
 /**  The diagram font's measures, in pixels, as the UI measured them. */
@@ -2578,6 +2979,8 @@ export type DiagramNodeItem_Deserialize = {
 	typeX: number,
 	commentX: number,
 	rows: DiagramRowItem_Deserialize[],
+	/**  Not placed by the saved diagram: laid out by the core below the placed tables. */
+	new: boolean,
 };
 
 /**  A table's box, in pixels; the row and text positions are relative to its corner. */
@@ -2598,12 +3001,42 @@ export type DiagramNodeItem_Serialize = {
 	typeX: number,
 	commentX: number,
 	rows: DiagramRowItem_Serialize[],
+	/**  Not placed by the saved diagram: laid out by the core below the placed tables. */
+	new: boolean,
+};
+
+/**  A note, its text wrapped by the core. */
+export type DiagramNoteBoxItem = {
+	/**  Its position in the arrangement's notes. */
+	note: number,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	lines: string[],
+	color: DiagramColorItem,
+};
+
+export type DiagramNoteItem = {
+	x: number | null,
+	y: number | null,
+	width: number | null,
+	text: string,
+	color: DiagramColorItem,
 };
 
 export type DiagramOptionsItem = {
 	columns: DiagramColumnsItem,
 	types: boolean,
 	comments: boolean,
+};
+
+/**  Where the user put a table: its box's top left corner. */
+export type DiagramPlacementItem = {
+	schema: string,
+	name: string,
+	x: number | null,
+	y: number | null,
 };
 
 export type DiagramPointItem = {
@@ -2835,12 +3268,16 @@ export type EditedTunnelItem_Serialize = {
 export type EditorAccessOutcome = EditorAccessOutcome_Serialize | EditorAccessOutcome_Deserialize;
 
 /**  Trust status of an existing connection before opening its editor. */
-export type EditorAccessOutcome_Deserialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
+export type EditorAccessOutcome_Deserialize = { kind: "ready" } | 
+/**  The connection's repository `root` is not trusted. */
+{ kind: "untrusted"; root: string } | { kind: "changed"; 
 /**  `connection:<id>`, for `accept_change`. */
 item: string; new: boolean; fields: FieldChangeItem_Deserialize[]; root: string };
 
 /**  Trust status of an existing connection before opening its editor. */
-export type EditorAccessOutcome_Serialize = { kind: "ready" } | { kind: "untrusted" } | { kind: "changed"; 
+export type EditorAccessOutcome_Serialize = { kind: "ready" } | 
+/**  The connection's repository `root` is not trusted. */
+{ kind: "untrusted"; root: string } | { kind: "changed"; 
 /**  `connection:<id>`, for `accept_change`. */
 item: string; new: boolean; fields: FieldChangeItem_Serialize[]; root: string };
 
@@ -3042,6 +3479,27 @@ export type ExplainOptions_Serialize = {
 	confirmed: boolean,
 	/**  This tab's override, as for ordinary scripts: None uses the connection, zero disables. */
 	timeoutSeconds: number | null,
+};
+
+/**  One database of the connection, its own first. */
+export type ExplorerDatabaseItem = ExplorerDatabaseItem_Serialize | ExplorerDatabaseItem_Deserialize;
+
+/**  One database of the connection, its own first. */
+export type ExplorerDatabaseItem_Deserialize = {
+	name: string,
+	/**  The connection's own database (`database` in its file). */
+	own: boolean,
+	/**  Another connection has it as its own: its row leads there instead of opening. */
+	ownedBy?: DatabaseOwnerItem_Deserialize | null,
+};
+
+/**  One database of the connection, its own first. */
+export type ExplorerDatabaseItem_Serialize = {
+	name: string,
+	/**  The connection's own database (`database` in its file). */
+	own: boolean,
+	/**  Another connection has it as its own: its row leads there instead of opening. */
+	ownedBy: DatabaseOwnerItem_Serialize | null,
 };
 
 /**  A connection's explorer filter: personal, per workspace and connection (ADR-025). */
@@ -3461,6 +3919,8 @@ export type HistoryItem_Deserialize = {
 	id: number,
 	atMs: number,
 	connection: string,
+	/**  The identity of `connection` (ADR-075): reopening the statement uses that folder's. */
+	identity?: ConnectionKeyItem_Deserialize | null,
 	statement: string,
 	durationMs: number,
 	rows: number,
@@ -3473,6 +3933,8 @@ export type HistoryItem_Serialize = {
 	id: number,
 	atMs: number,
 	connection: string,
+	/**  The identity of `connection` (ADR-075): reopening the statement uses that folder's. */
+	identity: ConnectionKeyItem_Serialize | null,
 	statement: string,
 	durationMs: number,
 	rows: number,
@@ -3832,8 +4294,18 @@ export type ImportSourceItem = { kind: "file"; path: string } |
 { kind: "text"; text: string };
 
 /**  Where the connections go. */
-export type ImportTarget = {
+export type ImportTarget = ImportTarget_Serialize | ImportTarget_Deserialize;
+
+export type ImportTargetItem = { kind: "existing"; schema: string; table: string } | { kind: "new"; schema: string; table: string; ifExists: IfExistsItem };
+
+/**  Where the connections go. */
+export type ImportTarget_Deserialize = {
 	personal: boolean,
+	/**
+	 *  The open folder repository connections go into (its root, ADR-075); none: the shown
+	 *  one. Duplicates are looked for there.
+	 */
+	repository?: string | null,
 	savePasswords: boolean,
 	/**  A folder to put them in; empty for the top level. */
 	folder: string,
@@ -3841,7 +4313,20 @@ export type ImportTarget = {
 	keepClientFolders: boolean,
 };
 
-export type ImportTargetItem = { kind: "existing"; schema: string; table: string } | { kind: "new"; schema: string; table: string; ifExists: IfExistsItem };
+/**  Where the connections go. */
+export type ImportTarget_Serialize = {
+	personal: boolean,
+	/**
+	 *  The open folder repository connections go into (its root, ADR-075); none: the shown
+	 *  one. Duplicates are looked for there.
+	 */
+	repository: string | null,
+	savePasswords: boolean,
+	/**  A folder to put them in; empty for the top level. */
+	folder: string,
+	/**  Keep the client's folders under it. */
+	keepClientFolders: boolean,
+};
 
 export type IndexCleanupItem = "auto" | "on" | "off";
 
@@ -3997,10 +4482,10 @@ export type KubeEditor = KubeEditor_Serialize | KubeEditor_Deserialize;
  */
 export type KubeEditor_Deserialize = 
 /**
- *  The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
- *  the Kubernetes network profile it uses, whose settings come first.
+ *  The connection form's Kubernetes tab; `editing` is the connection's identity, and
+ *  `profile` the Kubernetes network profile it uses, whose settings come first.
  */
-{ kind: "connection"; personal: boolean; editing?: string | null; profile?: string | null } | 
+{ kind: "connection"; personal: boolean; editing?: ConnectionKeyItem_Deserialize | null; profile?: string | null } | 
 /**  The network profile editor; `editing` is the profile's name. */
 { kind: "profile"; personal: boolean; editing?: string | null };
 
@@ -4010,10 +4495,10 @@ export type KubeEditor_Deserialize =
  */
 export type KubeEditor_Serialize = 
 /**
- *  The connection form's Kubernetes tab; `editing` is the connection's id, and `profile`
- *  the Kubernetes network profile it uses, whose settings come first.
+ *  The connection form's Kubernetes tab; `editing` is the connection's identity, and
+ *  `profile` the Kubernetes network profile it uses, whose settings come first.
  */
-{ kind: "connection"; personal: boolean; editing: string | null; profile: string | null } | 
+{ kind: "connection"; personal: boolean; editing: ConnectionKeyItem_Serialize | null; profile: string | null } | 
 /**  The network profile editor; `editing` is the profile's name. */
 { kind: "profile"; personal: boolean; editing: string | null };
 
@@ -4288,6 +4773,8 @@ export type MapPreferencesItem = {
 	/**  An image address with `{z}`, `{x}` and `{y}`. */
 	tileUrl: string,
 	tileAttribution: string,
+	/**  Where the attribution links to; empty for no link (ADR-085). */
+	tileAttributionUrl: string,
 };
 
 /**  One shape of a column's map and the row of the current view it is on. */
@@ -4311,11 +4798,37 @@ export type MappedConnectionItem_Serialize = {
 	change: EngineChangeItem_Serialize,
 };
 
+/**
+ *  One open folder's connections, or the personal ones, with what agents can do on each as
+ *  that folder decides it.
+ */
+export type McpAccessGroupItem = McpAccessGroupItem_Serialize | McpAccessGroupItem_Deserialize;
+
+/**
+ *  One open folder's connections, or the personal ones, with what agents can do on each as
+ *  that folder decides it.
+ */
+export type McpAccessGroupItem_Deserialize = {
+	folder: McpFolderItem,
+	connections: McpAccessItem_Deserialize[],
+};
+
+/**
+ *  One open folder's connections, or the personal ones, with what agents can do on each as
+ *  that folder decides it.
+ */
+export type McpAccessGroupItem_Serialize = {
+	folder: McpFolderItem,
+	connections: McpAccessItem_Serialize[],
+};
+
 /**  What agents can do on one connection, as the core decides it. */
 export type McpAccessItem = McpAccessItem_Serialize | McpAccessItem_Deserialize;
 
 /**  What agents can do on one connection, as the core decides it. */
 export type McpAccessItem_Deserialize = {
+	/**  Its folder (ADR-075): the repository's canonical root, none for a personal connection. */
+	folder?: string | null,
 	id: string,
 	name: string,
 	engine: string,
@@ -4332,6 +4845,8 @@ export type McpAccessItem_Deserialize = {
 
 /**  What agents can do on one connection, as the core decides it. */
 export type McpAccessItem_Serialize = {
+	/**  Its folder (ADR-075): the repository's canonical root, none for a personal connection. */
+	folder: string | null,
 	id: string,
 	name: string,
 	engine: string,
@@ -4413,6 +4928,16 @@ export type McpDiffLineItem = {
 	/**  Lines left out, for a gap. */
 	skipped: number,
 };
+
+/**  Whose connections a group of the MCP page's Security tab holds (ADR-075). */
+export type McpFolderItem = 
+/**
+ *  An open repository folder: its canonical root, the path it was opened as, and whether
+ *  it is trusted.
+ */
+{ kind: "repository"; root: string; path: string; trusted: boolean } | 
+/**  The personal connections, which every MCP server serves. */
+{ kind: "personal" };
 
 export type McpInstallDoneItem = McpInstallDoneItem_Serialize | McpInstallDoneItem_Deserialize;
 
@@ -4801,6 +5326,28 @@ export type ObjectTargetItem_Serialize = { kind: "schema"; name: string } |
 /**  What a run does when a statement fails (ADR-035). */
 export type OnErrorItem = "stop" | "continue" | "ask";
 
+/**  One open folder. */
+export type OpenFolderItem = {
+	/**  The path as it was chosen. */
+	path: string,
+	/**  Its canonical root: what `close_folder` takes, and what a connection's folder is. */
+	root: string,
+	/**  It is (inside) a repository: it has a `.spelaion` folder. */
+	repository: boolean,
+	/**  The repository is trusted (ADR-022). */
+	trusted: boolean,
+	/**  Its configuration files with errors, with file:line:column. */
+	problems: string[],
+};
+
+/**
+ *  The folders the window holds open (ADR-075, SDB-500), in the order they were opened. The
+ *  page shows the last one (`WorkspaceInfo`) until it shows several.
+ */
+export type OpenFoldersItem = {
+	folders: OpenFolderItem[],
+};
+
 /**  The file behind a kept file tab. */
 export type OpenTabFileItem = OpenTabFileItem_Serialize | OpenTabFileItem_Deserialize;
 
@@ -4830,6 +5377,13 @@ export type OpenTabItem_Deserialize = {
 	title?: string | null,
 	text: string,
 	connection?: string | null,
+	/**  The other database of its connection it was on (ADR-074, SDB-505); `None` for its own. */
+	database?: string | null,
+	/**
+	 *  The folder of its connection, as the page holds it (ADR-075; none for a personal
+	 *  connection or none): the core keeps the tab under it (`tab_scope`).
+	 */
+	folder?: string | null,
 	pinned: boolean,
 	onError?: OnErrorItem | null,
 	timeoutSeconds?: number | null,
@@ -4842,6 +5396,13 @@ export type OpenTabItem_Serialize = {
 	title: string | null,
 	text: string,
 	connection: string | null,
+	/**  The other database of its connection it was on (ADR-074, SDB-505); `None` for its own. */
+	database: string | null,
+	/**
+	 *  The folder of its connection, as the page holds it (ADR-075; none for a personal
+	 *  connection or none): the core keeps the tab under it (`tab_scope`).
+	 */
+	folder: string | null,
 	pinned: boolean,
 	onError: OnErrorItem | null,
 	timeoutSeconds: number | null,
@@ -5883,7 +6444,9 @@ export type RestoreDoneItem = {
 export type RestoreFormatItem = "auto" | "plain" | "custom" | "directory" | "tar";
 
 /**  Why a restored tab is not exactly as it was kept. */
-export type RestoreNoteItem = { kind: "connectionMissing"; connection: string } | { kind: "fileMissing" } | { kind: "fileUnreadable"; message: string } | { kind: "fileChangedOnDisk" };
+export type RestoreNoteItem = { kind: "connectionMissing"; connection: string } | 
+/**  Its connection no longer opens the database it was on (ADR-074): it is on its own now. */
+{ kind: "databaseMissing"; database: string } | { kind: "fileMissing" } | { kind: "fileUnreadable"; message: string } | { kind: "fileChangedOnDisk" };
 
 export type RestoreOptionsItem = { kind: "postgres"; clean: boolean; noOwner: boolean; create: boolean } | { kind: "mysql"; 
 /**  Empty: the connection's. */
@@ -5911,30 +6474,45 @@ export type RestoredTabItem = RestoredTabItem_Serialize | RestoredTabItem_Deseri
 export type RestoredTabItem_Deserialize = {
 	tab: OpenTabItem_Deserialize,
 	notes: RestoreNoteItem[],
+	/**
+	 *  Its place in the window when it was kept, if it was kept with one: a folder opened
+	 *  again puts its tabs back there among the tabs on screen.
+	 */
+	position?: number | null,
 };
 
 export type RestoredTabItem_Serialize = {
 	tab: OpenTabItem_Serialize,
 	notes: RestoreNoteItem[],
+	/**
+	 *  Its place in the window when it was kept, if it was kept with one: a folder opened
+	 *  again puts its tabs back there among the tabs on screen.
+	 */
+	position: number | null,
 };
 
-/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+/**
+ *  The kept tabs of the window and of every open folder (ADR-075), checked by the core and in
+ *  the window's order. They come back disconnected.
+ */
 export type RestoredTabsItem = RestoredTabsItem_Serialize | RestoredTabsItem_Deserialize;
 
-/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+/**
+ *  The kept tabs of the window and of every open folder (ADR-075), checked by the core and in
+ *  the window's order. They come back disconnected.
+ */
 export type RestoredTabsItem_Deserialize = {
-	/**  Which folder they belong to: sent back with every `save_tabs`. */
-	scope: string,
 	tabs: RestoredTabItem_Deserialize[],
 	active?: number | null,
 	/**  The personal "reconnect at startup" setting: connect only, never run. */
 	reconnect: boolean,
 };
 
-/**  The open folder's kept tabs, checked by the core. They come back disconnected. */
+/**
+ *  The kept tabs of the window and of every open folder (ADR-075), checked by the core and in
+ *  the window's order. They come back disconnected.
+ */
 export type RestoredTabsItem_Serialize = {
-	/**  Which folder they belong to: sent back with every `save_tabs`. */
-	scope: string,
 	tabs: RestoredTabItem_Serialize[],
 	active: number | null,
 	/**  The personal "reconnect at startup" setting: connect only, never run. */
@@ -5981,6 +6559,14 @@ export type ResultTabItem_Serialize = {
 	/**  `name` is the one the user gave it (SDB-407). */
 	renamed: boolean,
 	pinned: boolean,
+};
+
+/**
+ *  The results window of the editor tab `tab` closed: the tab shows its results again. Sent
+ *  only to the window that owns the tab.
+ */
+export type ResultsWindowClosed = {
+	tab: string,
 };
 
 /**  A masked cell's value, revealed on the user's request (ADR-051). */
@@ -6165,6 +6751,50 @@ export type SaveFileOutcome = { kind: "saved"; path: string; name: string; hash:
 /**  The file's encoding cannot hold this character: save as UTF-8 instead? */
 { kind: "unrepresentable"; character: string; encoding: string };
 
+/**  A saved diagram with what it holds, checked by the core just now. */
+export type SavedDiagramDetailItem = SavedDiagramDetailItem_Serialize | SavedDiagramDetailItem_Deserialize;
+
+/**  A saved diagram with what it holds, checked by the core just now. */
+export type SavedDiagramDetailItem_Deserialize = {
+	saved: SavedDiagramItem_Deserialize,
+	scope: DiagramScopeItem_Deserialize,
+	options: DiagramOptionsItem,
+	arrangement: DiagramArrangementItem,
+};
+
+/**  A saved diagram with what it holds, checked by the core just now. */
+export type SavedDiagramDetailItem_Serialize = {
+	saved: SavedDiagramItem_Serialize,
+	scope: DiagramScopeItem_Serialize,
+	options: DiagramOptionsItem,
+	arrangement: DiagramArrangementItem,
+};
+
+/**  A saved diagram as listed (ADR-084). */
+export type SavedDiagramItem = SavedDiagramItem_Serialize | SavedDiagramItem_Deserialize;
+
+/**  A saved diagram as listed (ADR-084). */
+export type SavedDiagramItem_Deserialize = {
+	id: number,
+	/**  Its connection, by its folder and its id (ADR-075). */
+	connection: ConnectionKeyItem_Deserialize,
+	name: string,
+	updatedMs: number,
+	/**  Why it cannot be opened, when it cannot. */
+	unreadable?: string | null,
+};
+
+/**  A saved diagram as listed (ADR-084). */
+export type SavedDiagramItem_Serialize = {
+	id: number,
+	/**  Its connection, by its folder and its id (ADR-075). */
+	connection: ConnectionKeyItem_Serialize,
+	name: string,
+	updatedMs: number,
+	/**  Why it cannot be opened, when it cannot. */
+	unreadable: string | null,
+};
+
 /**  A column of a schema's relation: the catalog metadata search keeps (ADR-043). */
 export type SchemaColumnItem = {
 	table: string,
@@ -6322,6 +6952,11 @@ export type ScriptPreferencesItem = {
 	notifyAfterSeconds: number,
 	/**  Seconds before "Run anyway" is enabled in a risky statement's confirmation. */
 	confirmDelaySeconds: number,
+	/**
+	 *  Roll back only a failed statement in a transaction, with a savepoint per statement
+	 *  (ADR-086); off by default.
+	 */
+	statementSavepoints: boolean,
 };
 
 /**  Why a run stopped before going through every statement its mode let it run. */
@@ -6627,6 +7262,8 @@ export type SnippetItem_Deserialize = {
 	name: string,
 	statement: string,
 	connection: string,
+	/**  The identity of `connection` (ADR-075): opening the query uses that folder's. */
+	identity?: ConnectionKeyItem_Deserialize | null,
 	updatedMs: number,
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,
@@ -6639,6 +7276,8 @@ export type SnippetItem_Serialize = {
 	name: string,
 	statement: string,
 	connection: string,
+	/**  The identity of `connection` (ADR-075): opening the query uses that folder's. */
+	identity: ConnectionKeyItem_Serialize | null,
 	updatedMs: number,
 	/**  Saved outside any repository: visible from every workspace. */
 	personal: boolean,
@@ -7380,6 +8019,36 @@ export type VariableItem = {
 	name: string,
 	value: string,
 };
+
+/**
+ *  A window other than the main one was asked to close while its sessions are open (its title
+ *  bar, or quitting): its page looks for what closing would lose, asks, and calls
+ *  `close_window` or `window_stays_open`. Sent only to that window.
+ */
+export type WindowCloseRequested = Record<string, never>;
+
+/**  What the page of a window shows, as the registry says it (ADR-060: read, never guessed). */
+export type WindowContextItem = WindowContextItem_Serialize | WindowContextItem_Deserialize;
+
+/**  What the page of a window shows, as the registry says it (ADR-060: read, never guessed). */
+export type WindowContextItem_Deserialize = { kind: "main" } | 
+/**
+ *  `label` prefixes the window's session keys (`connection-2/tab-1`), so no two windows
+ *  ever name the same session.
+ */
+{ kind: "connection"; label: string; connection: ConnectionKeyItem_Deserialize } | 
+/**  The results of `owner`'s editor tab `tab` (its session key). */
+{ kind: "results"; label: string; owner: string; tab: string };
+
+/**  What the page of a window shows, as the registry says it (ADR-060: read, never guessed). */
+export type WindowContextItem_Serialize = { kind: "main" } | 
+/**
+ *  `label` prefixes the window's session keys (`connection-2/tab-1`), so no two windows
+ *  ever name the same session.
+ */
+{ kind: "connection"; label: string; connection: ConnectionKeyItem_Serialize } | 
+/**  The results of `owner`'s editor tab `tab` (its session key). */
+{ kind: "results"; label: string; owner: string; tab: string };
 
 /**  Why a window of rows could not be read (`fetch_window`, SDB-367). */
 export type WindowErrorItem = 

@@ -3,6 +3,7 @@
 //! It does not depend on Tauri: the desktop app, the CLI and the MCP server are thin
 //! adapters over this crate. Everything that has to be the same for all of them lives here.
 
+mod agent_folders;
 pub mod agent_state;
 mod app_log;
 pub mod audit;
@@ -15,6 +16,7 @@ mod column_stats;
 mod conn_test;
 mod copy_in;
 mod cursor;
+mod dashboard;
 mod data_search;
 pub mod diagnostics;
 mod display;
@@ -49,6 +51,7 @@ pub(crate) mod objects;
 mod observe;
 mod open;
 mod open_tabs;
+mod other_database;
 mod panics;
 mod params;
 mod pending;
@@ -90,6 +93,7 @@ mod table_stats;
 mod temporal;
 #[cfg(all(test, unix))]
 mod test_files;
+pub mod tiles;
 mod tls_warning;
 mod transaction;
 mod transpose;
@@ -98,6 +102,7 @@ mod value_view;
 mod variables;
 mod write;
 
+pub use agent_folders::{AgentFolder, ConnectionAgents, FolderAgents, agents_by_folder};
 pub use agent_state::{AgentFailure, FailureCode, access_code, all_agents_read_only};
 pub use app_log::{AppLog, MAX_LOG_BYTES};
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
@@ -124,6 +129,10 @@ pub use cursor::{
     RunPickError, RunTarget, from_cursor, neighbour_statement, outline, pick_statements,
     run_target, statement_at, statement_to_run,
 };
+pub use dashboard::{
+    DASHBOARD_INTERVAL, DASHBOARD_SAMPLES, DashboardPhase, DashboardSample, DashboardSampler,
+    DashboardState, start_dashboard,
+};
 pub use data_search::{
     ColumnMatch, DEFAULT_ROWS_PER_TABLE, DataSearchError, DataSearchEvent, DataSearchOptions,
     DataSearchRequest, DataSearchSummary, MAX_ROWS_PER_TABLE, MAX_SEARCH_HITS, MAX_SEARCH_TABLES,
@@ -145,9 +154,15 @@ pub use editor_snippets::{
     SnippetError, check_script_template, check_snippet,
 };
 pub use er::{
-    Cardinality, DiagramError, DiagramScope, ErColumn, ErColumns, ErEdge, ErKeyMark, ErLayout,
-    ErLayoutOptions, ErMetrics, ErModel, ErNode, ErPoint, ErRelation, ErRow, ErSide, ErTable,
-    MAX_DIAGRAM_TABLES, MAX_DIAGRAM_TEXT_BYTES, ReadProgress, TableName, dbml, layout as er_layout,
+    Cardinality, DiagramError, DiagramScope, ErArrangement, ErColor, ErColumn, ErColumns, ErEdge,
+    ErGoneNode, ErGroup, ErGroupFrame, ErKeyMark, ErLayout, ErLayoutOptions, ErMetrics, ErModel,
+    ErNode, ErNote, ErNoteBox, ErPlacement, ErPoint, ErRelation, ErRow, ErSide, ErTable,
+    MAX_COORDINATE as MAX_DIAGRAM_COORDINATE, MAX_DIAGRAM_NAME, MAX_DIAGRAM_TABLES,
+    MAX_DIAGRAM_TEXT_BYTES, MAX_GROUPS as MAX_DIAGRAM_GROUPS, MAX_NOTE_CHARS, MAX_NOTE_WIDTH,
+    MAX_NOTES as MAX_DIAGRAM_NOTES, MAX_PLACED_TABLES, MIN_NOTE_WIDTH, ReadProgress, SavedDiagram,
+    SavedDiagramContent, SavedDiagramError, SavedDiagramSummary, TableName, arrange as er_arrange,
+    check_arrangement as check_diagram_arrangement, check_diagram_name,
+    check_scope as check_diagram_scope, dbml, decode_diagram, encode_diagram, layout as er_layout,
     mermaid, read_model as read_er_model, save_diagram_text,
 };
 pub use export::{
@@ -221,7 +236,14 @@ pub use open::{
     Engines, Liveness, OpenConnection, OpenError, OpenOptions, Route, RouteOptions, TunnelPool,
     create_file_database, dialect_of, open_connection, open_route, test_tunnel,
 };
-pub use open_tabs::{RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs};
+pub use open_tabs::{
+    RestoreNote, RestoredTab, TAB_SAVE_DELAY, TabKeeper, restore_tabs, restore_window_tabs,
+    tab_scope, window_sets,
+};
+pub use other_database::{
+    Configuration, ConnectionDatabases, OtherDatabaseError, change_session_database,
+    connection_databases, database_owner, file_opens_database, open_other_database,
+};
 pub use panics::{INTERNAL_ERROR, Panicked, catch_panic, install_panic_log};
 pub use params::{ParamError, bind_params, script_params};
 pub use pending::{
@@ -275,8 +297,9 @@ pub use shortcuts::{MAX_SHORTCUT_LENGTH, MAX_SHORTCUT_OVERRIDES, ShortcutError, 
 pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};
 pub use spelaion_store::ShortcutOverride;
 pub use spelaion_store::{
-    AuditFilter, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry, HistoryFilter,
-    HistoryOutcome, HistoryPage, HistoryStatus, Snippet, SnippetFilter, SnippetFolder, ToolOutput,
+    AuditFilter, AuditFolder, AuditRecord, AuditSession, Decision as AuditDecision, HistoryEntry,
+    HistoryFilter, HistoryOutcome, HistoryPage, HistoryStatus, Snippet, SnippetFilter,
+    SnippetFolder, ToolOutput,
 };
 pub use spelaion_store::{
     BackupPreferences, Bookmark, BookmarkKind, DEFAULT_EDITOR_ZOOM, DEFAULT_INTERFACE_SIZE,
@@ -284,7 +307,7 @@ pub use spelaion_store::{
     FilterKind, FilteredTable, GridPreferences, INTERFACE_SIZES, MapPreferences, RecentFile,
     SIDE_PANEL_DEFAULT_WIDTH, SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, SavedFile, SavedTab,
     SavedTabs, ScriptErrorMode, ScriptPreferences, SidePanelPreferences, TILE_ATTRIBUTION_MAX,
-    TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_tile_server,
+    TILE_NAME_MAX, TILE_URL_MAX, TileServerError, check_attribution_link, check_tile_server,
 };
 pub use sql_file::{
     FileEncoding, FileError, FileFormat, LineEnding, MAX_FILE_BYTES, SaveCheck, SqlFile,
@@ -305,7 +328,7 @@ pub use tls_warning::{
 };
 pub use transaction::{
     CommitMode, IdleRollback, TransactionError, TransactionLifecycle, TransactionOutcome,
-    TransactionPhase, TransactionState, TransactionStatus,
+    TransactionPhase, TransactionState, TransactionStatus, statement_savepoints,
 };
 pub use transpose::{MAX_TRANSPOSED_ROWS, TransposeError, Transposed, transpose};
 pub use value_pick::{

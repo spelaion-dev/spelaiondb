@@ -5,6 +5,9 @@
 //! - A small schema with a composite key, a self-reference, a one-to-one key and a table with
 //!   no keys is read from each engine's catalog as a schema (with the explorer's table filter),
 //!   as chosen tables and around one focused table, and laid out.
+//! - A saved diagram (ADR-084) of that schema, with tables moved, a note and a colored group,
+//!   opens again the same after the store is opened again, over the catalog read again, with a
+//!   gone table and a new one shown as such.
 //! - A generated 200-table schema is read and laid out once, timed (the PR states the time).
 //! - The Mermaid and DBML texts of an awkward model and of the small schema are written to
 //!   `apps/desktop/scripts/fixtures/er`, where `scripts/er-text.test.mjs` parses them with
@@ -19,8 +22,10 @@ use std::time::Instant;
 
 use futures_util::StreamExt;
 use spelaion_core::{
-    Cardinality, CoreEvent, DiagramScope, ErColumns, ErLayout, ErLayoutOptions, ErMetrics, ErModel,
-    ResultStore, Session, TableName, dbml, er_layout, mermaid, read_er_model,
+    Cardinality, CoreEvent, DiagramScope, ErArrangement, ErColor, ErColumns, ErGroup, ErLayout,
+    ErLayoutOptions, ErMetrics, ErModel, ErNote, ErPlacement, QueryHistory, ResultStore,
+    SavedDiagramContent, SavedDiagramError, Session, TableName, dbml, er_arrange, er_layout,
+    mermaid, read_er_model,
 };
 use spelaion_driver_api::{
     ColumnInfo, ConnectParams, ConstraintInfo, ConstraintKind, Driver, ForeignKeyInfo, NameFilter,
@@ -298,6 +303,42 @@ async fn schemas_tables_and_focus_on_every_engine() {
             fixture("shop.dbml", &dbml(&model));
         }
 
+        // The schema's tables in one catalog call, where the engine (or its plugin's protocol)
+        // has one (SDB-220): each is exactly what describe_table says, and the diagram is the one
+        // the same tables make when each is described on its own.
+        match conn.describe_tables(schema).await {
+            Ok(Some(batched)) => {
+                for table in &batched {
+                    let one = conn
+                        .describe_table(schema, &table.object.name)
+                        .await
+                        .unwrap_or_else(|e| panic!("{label}: {e}"));
+                    assert_eq!(*table, one, "{label}: {}", table.object.name);
+                }
+                eprintln!("{label}: {} tables read in one catalog call", batched.len());
+            }
+            Ok(None) => eprintln!("{label}: no batched read, each table described on its own"),
+            Err(e) => panic!("{label}: {e}"),
+        }
+        let one_by_one = read_er_model(
+            conn.as_ref(),
+            &DiagramScope::Tables {
+                tables: model
+                    .tables
+                    .iter()
+                    .map(|t| TableName {
+                        schema: t.schema.clone(),
+                        name: t.name.clone(),
+                    })
+                    .collect(),
+            },
+            |_| {},
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(one_by_one.tables, model.tables, "{label}");
+        assert_eq!(one_by_one.relations, model.relations, "{label}");
+
         // Chosen tables: the key to a table left out is counted, not drawn.
         let chosen = |name: &str| TableName {
             schema: customer.schema.clone(),
@@ -357,6 +398,195 @@ async fn schemas_tables_and_focus_on_every_engine() {
         assert_eq!(missing.tables.len(), 1, "{label}");
         assert_eq!(missing.unreadable, 1, "{label}");
         assert!(missing.first_error.is_some(), "{label}");
+
+        a_saved_diagram_opens_again_the_same(label, &session, schema).await;
+    }
+}
+
+/// A saved diagram (ADR-084) of an engine's small schema (created by the test that calls it,
+/// so two tests never create the same tables at once): tables moved, a note and a colored
+/// group saved, the store closed and opened again (a restart), and the diagram opened again
+/// the same over the catalog read again, with a table that is gone and one that is new; the
+/// text exports still come from the model.
+async fn a_saved_diagram_opens_again_the_same(label: &str, session: &Session, schema: &str) {
+    {
+        let conn = session.connection();
+        let scope = DiagramScope::Schema {
+            schema: schema.into(),
+            filter: Some(NameFilter {
+                include: vec!["erd_*".into()],
+                exclude: vec![],
+            }),
+        };
+        let model = read_er_model(conn.as_ref(), &scope, |_| {})
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let first = er_layout(&model, &all_options(), &METRICS);
+        let key = |name: &str| {
+            let table = &model.tables[find(&model, name)];
+            TableName {
+                schema: table.schema.clone(),
+                name: table.name.clone(),
+            }
+        };
+        // Every table fixed where the automatic layout put it, but erd_alone (it will be new)
+        // and erd_customer (moved by hand); and a table that is not there (gone).
+        let mut positions: Vec<ErPlacement> = model
+            .tables
+            .iter()
+            .zip(&first.nodes)
+            .filter(|(t, _)| {
+                !t.name.eq_ignore_ascii_case("erd_alone")
+                    && !t.name.eq_ignore_ascii_case("erd_customer")
+            })
+            .map(|(t, n)| ErPlacement {
+                table: TableName {
+                    schema: t.schema.clone(),
+                    name: t.name.clone(),
+                },
+                x: n.x,
+                y: n.y,
+            })
+            .collect();
+        positions.push(ErPlacement {
+            table: key("erd_customer"),
+            x: -480.0,
+            y: 36.0,
+        });
+        let gone = TableName {
+            schema: key("erd_customer").schema,
+            name: "erd_dropped_meanwhile".into(),
+        };
+        positions.push(ErPlacement {
+            table: gone.clone(),
+            x: 0.0,
+            y: -200.0,
+        });
+        let content = SavedDiagramContent {
+            scope: scope.clone(),
+            options: ErLayoutOptions {
+                columns: ErColumns::Keys,
+                ..all_options()
+            },
+            arrangement: ErArrangement {
+                positions,
+                notes: vec![ErNote {
+                    x: 40.0,
+                    y: -320.0,
+                    width: 240.0,
+                    text: format!("Saved on {label}.\nCustomers come from the CRM."),
+                    color: ErColor::Amber,
+                }],
+                groups: vec![ErGroup {
+                    name: "Sales".into(),
+                    color: ErColor::Blue,
+                    tables: vec![key("erd_customer"), key("erd_order"), gone.clone()],
+                }],
+            },
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "spelaion-core-saved-diagram-{label}-{}.db",
+            std::process::id()
+        ));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let saved = {
+            let history = QueryHistory::open(path.clone()).unwrap();
+            let saved = history
+                .save_diagram(None, "/repo".into(), "shop".into(), " Sales ", &content)
+                .await
+                .unwrap_or_else(|e| panic!("{label}: {e}"));
+            assert_eq!(saved.summary.name, "Sales", "{label}");
+            // The same name on the same connection is another diagram's.
+            assert!(matches!(
+                history
+                    .save_diagram(None, "/repo".into(), "shop".into(), "Sales", &content)
+                    .await,
+                Err(SavedDiagramError::NameTaken(_))
+            ));
+            saved
+        };
+        // A restart: the store opened again.
+        let history = QueryHistory::open(path.clone()).unwrap();
+        let listed = history.saved_diagrams().await.unwrap();
+        assert_eq!(listed.len(), 1, "{label}");
+        assert_eq!(listed[0].unreadable, None, "{label}");
+        let reopened = history
+            .saved_diagram(saved.summary.id)
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(reopened.content, content, "{label}");
+
+        // Opened over the catalog read again.
+        let model = read_er_model(conn.as_ref(), &reopened.content.scope, |_| {})
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let layout = er_arrange(
+            &model,
+            &reopened.content.options,
+            &METRICS,
+            &reopened.content.arrangement,
+        );
+        let node = |name: &str| &layout.nodes[find(&model, name)];
+        assert_eq!(
+            (node("erd_customer").x, node("erd_customer").y),
+            (-480.0, 36.0),
+            "{label}"
+        );
+        assert!(!node("erd_customer").new, "{label}");
+        let order = node("erd_order");
+        let before = &first.nodes[find(&model, "erd_order")];
+        assert_eq!((order.x, order.y), (before.x, before.y), "{label}");
+        assert!(node("erd_alone").new, "{label}");
+        assert_eq!(layout.gone.len(), 1, "{label}");
+        assert_eq!(layout.gone[0].name, "erd_dropped_meanwhile", "{label}");
+        assert_eq!(
+            (layout.gone[0].x, layout.gone[0].y),
+            (0.0, -200.0),
+            "{label}"
+        );
+        assert_eq!(layout.notes.len(), 1, "{label}");
+        assert_eq!(layout.notes[0].color, ErColor::Amber, "{label}");
+        assert_eq!(
+            layout.notes[0].lines[0],
+            format!("Saved on {label}."),
+            "{label}"
+        );
+        assert_eq!(layout.groups.len(), 1, "{label}");
+        let frame = &layout.groups[0];
+        assert_eq!(
+            (frame.label.as_str(), frame.color),
+            ("Sales", ErColor::Blue)
+        );
+        assert!(frame.x < -480.0 && frame.y < -200.0, "{label}");
+        assert!(layout.x <= -480.0 && layout.y <= -320.0, "{label}");
+        assert_eq!(layout.edges.len(), model.relations.len(), "{label}");
+        // The text exports are the model's, as before.
+        assert!(mermaid(&model).contains("erDiagram"), "{label}");
+        assert!(
+            dbml(&model).to_lowercase().contains("erd_customer"),
+            "{label}"
+        );
+
+        // A document someone else wrote badly is listed as unreadable and opens nothing.
+        drop(history);
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute(
+                "update er_diagrams set document = replace(document, '\"amber\"', '\"pink\"')",
+                [],
+            )
+            .unwrap();
+        }
+        let history = QueryHistory::open(path.clone()).unwrap();
+        let listed = history.saved_diagrams().await.unwrap();
+        assert!(listed[0].unreadable.is_some(), "{label}");
+        assert!(matches!(
+            history.saved_diagram(saved.summary.id).await,
+            Err(SavedDiagramError::Unreadable(_))
+        ));
     }
 }
 
@@ -430,6 +660,30 @@ async fn a_200_table_schema_is_laid_out_once() {
     let read = started.elapsed();
     assert_eq!(model.tables.len(), 200);
     assert!(model.relations.len() > 200, "{}", model.relations.len());
+    // The same 200 tables described one by one, as before the batched read (SDB-220).
+    let started = Instant::now();
+    let one_by_one = read_er_model(
+        conn.as_ref(),
+        &DiagramScope::Tables {
+            tables: model
+                .tables
+                .iter()
+                .map(|t| TableName {
+                    schema: t.schema.clone(),
+                    name: t.name.clone(),
+                })
+                .collect(),
+        },
+        |_| {},
+    )
+    .await
+    .expect("reading the catalog");
+    let read_one_by_one = started.elapsed();
+    assert_eq!(one_by_one.tables, model.tables);
+    eprintln!(
+        "200 tables: read in {read:?} as a schema (one catalog call), \
+         {read_one_by_one:?} one table at a time"
+    );
 
     let started = Instant::now();
     let layout = er_layout(&model, &all_options(), &METRICS);

@@ -3,6 +3,7 @@
 // ever passes through here or the clipboard: the clipboard text has none.
 
 import { call, commands, type ConnectionItem } from "./api";
+import { type ConnectionKey, keyOf } from "./connectionKey";
 import { readClipboardText } from "./clipboardText";
 import { fieldList } from "./fieldNames";
 import i18n from "./i18n";
@@ -14,46 +15,47 @@ import { useApp, useDialogs } from "./store";
  * Asks what opening a connection's editor asks: trust for an untrusted repository, a review
  * for a repository connection that changed since it was trusted. False if the user refused.
  */
-export async function ensureEditorAccess(connectionId: string): Promise<boolean> {
-  let access = await call(commands.connectionEditorAccess(connectionId));
+export async function ensureEditorAccess(connection: ConnectionKey): Promise<boolean> {
+  let access = await call(commands.connectionEditorAccess(connection));
   if (access.kind === "untrusted") {
-    const shown = useApp.getState().workspace?.workspace ?? null;
-    if (!(await useDialogs.getState().askTrust(shown))) return false;
-    useApp.getState().setWorkspace(await call(commands.trustWorkspace(shown ?? "")));
-    access = await call(commands.connectionEditorAccess(connectionId));
+    // The connection's own folder (ADR-075).
+    if (!(await useDialogs.getState().askTrust(access.root))) return false;
+    useApp.getState().setWorkspace(await call(commands.trustWorkspace(access.root)));
+    access = await call(commands.connectionEditorAccess(connection));
   }
   if (access.kind === "changed") {
     const accepted = await useDialogs.getState().askChange({ item: access.item, isNew: access.new, fields: access.fields });
     if (!accepted) return false;
     await call(commands.acceptChange(access.root, access.item, access.new, access.fields));
-    access = await call(commands.connectionEditorAccess(connectionId));
+    access = await call(commands.connectionEditorAccess(connection));
   }
   return access.kind === "ready";
 }
 
 /** Shows a new connection in the explorer and opens its editor with a note. */
-async function showNew(id: string, notice: string) {
+async function showNew(connection: ConnectionKey, notice: string) {
   await refreshConnections();
   const app = useApp.getState();
-  app.revealInExplorer({ connectionId: id });
-  app.setConnectionDialog({ kind: "edit", id, notice });
+  app.revealInExplorer({ connection });
+  app.setConnectionDialog({ kind: "edit", connection, notice });
 }
 
 /** "Duplicate": the copy is made by the core, next to the original, and opened to edit. */
 export async function duplicateConnection(connection: ConnectionItem): Promise<void> {
-  if (!(await ensureEditorAccess(connection.id))) return;
-  const copy = await call(commands.duplicateConnection(connection.id));
+  if (!(await ensureEditorAccess(keyOf(connection)))) return;
+  const copy = await call(commands.duplicateConnection(keyOf(connection)));
   const notice = i18n.t(copy.passwordCopied ? "connections:copies.duplicatedWithPassword" : "connections:copies.duplicated", {
     name: connection.name,
     copy: copy.name,
   });
-  await showNew(copy.id, notice);
+  // The copy is next to the original: the same folder (ADR-030, ADR-075).
+  await showNew({ folder: connection.folder, id: copy.id }, notice);
 }
 
 /** Ctrl+C on a connection: its text without secrets goes to the clipboard. */
 export async function copyConnection(connection: ConnectionItem): Promise<string> {
-  if (!(await ensureEditorAccess(connection.id))) return "";
-  const copied = await call(commands.copyConnection(connection.id));
+  if (!(await ensureEditorAccess(keyOf(connection)))) return "";
+  const copied = await call(commands.copyConnection(keyOf(connection)));
   await navigator.clipboard.writeText(copied.text);
   return copied.leftOut.length > 0
     ? i18n.t("connections:copies.copiedWithout", { name: connection.name, fields: fieldList(copied.leftOut) })
@@ -67,7 +69,8 @@ export async function pasteConnection(text: string): Promise<void> {
     pasted.leftOut.length > 0
       ? i18n.t("connections:copies.pastedWithout", { name: pasted.name, fields: fieldList(pasted.leftOut) })
       : i18n.t("connections:copies.pasted", { name: pasted.name });
-  await showNew(pasted.id, notice);
+  // A paste is always a personal connection: it has no folder.
+  await showNew({ folder: null, id: pasted.id }, notice);
 }
 
 /** "Paste" from a menu: reads the clipboard (Ctrl+V gets the text from its paste event). */

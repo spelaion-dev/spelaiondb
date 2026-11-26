@@ -77,6 +77,7 @@ async fn open(engine: Engine, path: &Path, read_only: bool) -> OpenConnection {
         sqlite3: None,
         file_folder: None,
         databases: None,
+        other_databases: spelaion_config::OtherDatabases::None,
         local_port: LocalPort::Any,
         keepalive: None,
         statement_timeout: Some(Duration::from_secs(5)),
@@ -90,7 +91,7 @@ async fn open(engine: Engine, path: &Path, read_only: bool) -> OpenConnection {
         OpenOptions {
             tunnels: Arc::new(TunnelPool::new()),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: std::env::temp_dir().join("unused-plan-known-hosts"),
             },
@@ -697,7 +698,7 @@ async fn open_remote(addr: &str, read_only: bool) -> (OpenConnection, PathBuf) {
         OpenOptions {
             tunnels: Arc::new(TunnelPool::new()),
             known_hosts: KnownHosts {
-                team_file: None,
+                team_files: Vec::new(),
                 user_file: None,
                 app_file: base.join("user/known_hosts"),
             },

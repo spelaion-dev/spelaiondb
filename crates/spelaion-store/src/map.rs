@@ -15,6 +15,9 @@ pub struct MapPreferences {
     pub tile_url: String,
     /// The credit the server asks for, shown on the map.
     pub tile_attribution: String,
+    /// Where the credit links to (an `https://` page, such as OpenStreetMap's copyright page);
+    /// empty for no link (ADR-085).
+    pub tile_attribution_url: String,
 }
 
 impl MapPreferences {
@@ -22,7 +25,8 @@ impl MapPreferences {
     pub fn validate(&self) -> Result<(), TileServerError> {
         let none = self.tile_name.trim().is_empty()
             && self.tile_url.is_empty()
-            && self.tile_attribution.is_empty();
+            && self.tile_attribution.is_empty()
+            && self.tile_attribution_url.is_empty();
         if none {
             return if self.tiles {
                 Err(TileServerError::Missing)
@@ -30,7 +34,8 @@ impl MapPreferences {
                 Ok(())
             };
         }
-        check_tile_server(&self.tile_name, &self.tile_url, &self.tile_attribution)
+        check_tile_server(&self.tile_name, &self.tile_url, &self.tile_attribution)?;
+        check_attribution_link(&self.tile_attribution_url)
     }
 }
 
@@ -44,6 +49,9 @@ impl Store {
             tile_url: self.personal_setting("map.tile_url")?.unwrap_or_default(),
             tile_attribution: self
                 .personal_setting("map.tile_attribution")?
+                .unwrap_or_default(),
+            tile_attribution_url: self
+                .personal_setting("map.tile_attribution_url")?
                 .unwrap_or_default(),
         };
         Ok(if preferences.validate().is_ok() {
@@ -62,6 +70,10 @@ impl Store {
         self.set_personal_setting("map.tile_name", preferences.tile_name.trim())?;
         self.set_personal_setting("map.tile_url", &preferences.tile_url)?;
         self.set_personal_setting("map.tile_attribution", &preferences.tile_attribution)?;
+        self.set_personal_setting(
+            "map.tile_attribution_url",
+            &preferences.tile_attribution_url,
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -88,13 +100,17 @@ pub enum TileServerError {
     Attribution,
     #[error("tiles need a tile server: give its name and address first")]
     Missing,
+    #[error(
+        "the attribution's link must be an https:// address of at most {TILE_URL_MAX} characters, with no spaces or quotes"
+    )]
+    AttributionLink,
 }
 
 /// Checks a tile server before it is saved: a name, an `https://` address (or `http://` to
 /// this computer, for a tile server of one's own) with `{z}`, `{x}` and `{y}`, and an
-/// attribution on one line. The address is only ever used as an image's address, and the
-/// window's Content Security Policy allows exactly these (SDB-127, `tauri.conf.json`'s
-/// `img-src`): `http://[::1]` is not one, since a policy cannot name an IPv6 address.
+/// attribution on one line. The core alone fetches its tiles (ADR-085), through a transport
+/// that allows exactly these schemes; `http://[::1]` stays out, as it was when the web view
+/// fetched them and its policy could not name an IPv6 address (SDB-127).
 pub fn check_tile_server(name: &str, url: &str, attribution: &str) -> Result<(), TileServerError> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > TILE_NAME_MAX || name.chars().any(char::is_control)
@@ -148,6 +164,27 @@ pub fn check_tile_server(name: &str, url: &str, attribution: &str) -> Result<(),
         || attribution.chars().any(char::is_control)
     {
         return Err(TileServerError::Attribution);
+    }
+    Ok(())
+}
+
+/// Checks the attribution's link: none, or an `https://` address with a host and no user name,
+/// spaces, quotes or control characters. It is only ever opened in the system's browser, on a
+/// click, from the stored setting.
+pub fn check_attribution_link(url: &str) -> Result<(), TileServerError> {
+    if url.is_empty() {
+        return Ok(());
+    }
+    let bad_char = url.chars().any(|c| {
+        c.is_control() || c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '\\' | '`')
+    });
+    let host = url
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        .and_then(|_| url[8..].split(['/', '?', '#']).next())
+        .unwrap_or("");
+    if bad_char || url.chars().count() > TILE_URL_MAX || host.is_empty() || host.contains('@') {
+        return Err(TileServerError::AttributionLink);
     }
     Ok(())
 }
@@ -235,13 +272,32 @@ mod tests {
             tile_name: " Our tiles ".into(),
             tile_url: "https://tiles.example.com/{z}/{x}/{y}.png".into(),
             tile_attribution: "© Example".into(),
+            tile_attribution_url: "https://tiles.example.com/copyright".into(),
         };
         store.set_map_preferences(&server).unwrap();
         drop(store);
         let store = Store::open(&path).unwrap();
         let read = store.get_map_preferences().unwrap();
         assert_eq!(read.tile_name, "Our tiles");
+        assert_eq!(
+            read.tile_attribution_url,
+            "https://tiles.example.com/copyright"
+        );
         assert!(read.tiles);
+        // The attribution's link is an https:// page or nothing.
+        for link in [
+            "http://x.example.com/c",
+            "javascript:alert(1)",
+            "https://",
+            "https://a b",
+        ] {
+            let refused = MapPreferences {
+                tile_attribution_url: link.into(),
+                ..read.clone()
+            };
+            assert!(store.set_map_preferences(&refused).is_err(), "{link}");
+        }
+        assert_eq!(check_attribution_link(""), Ok(()));
         // Turned off, the server is kept.
         let off = MapPreferences {
             tiles: false,

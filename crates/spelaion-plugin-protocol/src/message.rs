@@ -60,6 +60,8 @@ pub mod method {
     pub const OBJECT_DEPENDENCIES: &str = "object_dependencies";
     // 1.3 (ADR-082).
     pub const SERVER_OBJECT_DEFINITION: &str = "server_object_definition";
+    // 1.4 (SDB-220).
+    pub const DESCRIBE_TABLES: &str = "describe_tables";
 
     // Notifications from the plugin.
     pub const SESSION_CLOSED: &str = "session.closed";

@@ -1,7 +1,10 @@
 // "Open object by name" (Ctrl+Shift+D, DBeaver's Open Database Object): searches the
 // connections connected in the explorer and opens what is chosen, showing it in the tree.
 
+import { useConnectionName } from "../folders";
 import { useEffect, useRef, useState } from "react";
+import { explorerSession } from "../windowContext";
+import { type ConnectionKey, connectionOfTag, connectionTag, holdsConnection, keyOf, listedConnection, tabConnection } from "../connectionKey";
 import { useTranslation } from "react-i18next";
 import { call, commands, type FoundObjectItem } from "../api";
 import { connectTabFromExplorer, explorerDatabase } from "../connect";
@@ -15,12 +18,13 @@ function errorText(e: unknown): string {
 }
 
 /** Opens what was found: a table or view in a table data tab, anything else as its DDL. */
-export async function openFound(connectionId: string, found: FoundObjectItem) {
-  const session = `meta:${connectionId}`;
+export async function openFound(connection: ConnectionKey, found: FoundObjectItem) {
+  const session = explorerSession(connection);
   const app = useApp.getState();
   const { schema, name } = found.object;
-  const database = explorerDatabase(connectionId, schema);
-  const sql = app.connections.find((c) => c.id === connectionId)?.sql ?? true;
+  const database = explorerDatabase(connection, schema);
+  const sql = listedConnection(app.connections, connection)?.sql ?? true;
+  const connectionId = connection;
   if (found.kind === "relation" && (found.object.kind === "collection" || !sql)) {
     // An engine whose language is not SQL (ADR-056): the core's statement for it, run in a tab.
     // Its tables too (CQL's): the table data tab writes SQL.
@@ -36,18 +40,20 @@ export async function openFound(connectionId: string, found: FoundObjectItem) {
     const sql = await call(commands.objectDefinition(session, found.object));
     connectTabFromExplorer(app.addTab(connectionId, sql), session, database);
   }
-  app.revealInExplorer({ connectionId, schema, name });
+  app.revealInExplorer({ connection, schema, name });
 }
 
-export function OpenObjectDialog({ initialConnection, onClose }: { initialConnection: string | null; onClose(): void }) {
+export function OpenObjectDialog({ initialConnection, onClose }: { initialConnection: ConnectionKey | null; onClose(): void }) {
   const { t } = useTranslation("shell");
+  const shownName = useConnectionName();
   const connections = useApp((s) => s.connections);
   const connected = useApp((s) => s.explorerConnected);
-  const activeConnection = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab)?.connectionId ?? null);
-  const choices = connections.filter((c) => connected.includes(c.id));
-  const [connectionId, setConnectionId] = useState(() => {
-    for (const id of [initialConnection, activeConnection]) if (id && connected.includes(id)) return id;
-    return choices[0]?.id ?? "";
+  const activeTab = useApp((s) => s.tabs.find((tab) => tab.id === s.activeTab));
+  const choices = connections.filter((c) => holdsConnection(connected, keyOf(c)));
+  const [connection, setConnection] = useState<ConnectionKey | null>(() => {
+    const active = activeTab ? tabConnection(activeTab) : null;
+    for (const key of [initialConnection, active]) if (key && holdsConnection(connected, key)) return key;
+    return choices[0] ? keyOf(choices[0]) : null;
   });
   const [text, setText] = useState("");
   const [found, setFound] = useState<FoundObjectItem[]>([]);
@@ -58,7 +64,7 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
 
   // Searched as it is typed; an answer to older text is ignored.
   useEffect(() => {
-    if (!connectionId || text.trim() === "") {
+    if (!connection || text.trim() === "") {
       setFound([]);
       setSearching(false);
       return;
@@ -69,10 +75,10 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
       void (async () => {
         try {
           // The tree's own view: its filter and whether it shows system schemas (ADR-025).
-          const filter = await call(commands.getExplorerFilter(connectionId));
+          const filter = await call(commands.getExplorerFilter(connection));
           const showSystem = usePreferences.getState().explorer.showSystem;
           const answer = await call(
-            commands.searchObjects(`meta:${connectionId}`, text, filter.schemas, filter.objects, showSystem),
+            commands.searchObjects(explorerSession(connection), text, filter.schemas, filter.objects, showSystem),
           );
           if (!current) return;
           setFound(answer);
@@ -89,15 +95,15 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
       current = false;
       window.clearTimeout(timer);
     };
-  }, [connectionId, text]);
+  }, [connection, text]);
 
   useEffect(() => {
     list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
   function choose(item: FoundObjectItem | undefined) {
-    if (!item) return;
-    openFound(connectionId, item).then(onClose, (e: unknown) => setError(errorText(e)));
+    if (!item || !connection) return;
+    openFound(connection, item).then(onClose, (e: unknown) => setError(errorText(e)));
   }
 
   const kindLabel = (item: FoundObjectItem) => t(`kinds.${item.object.kind}`);
@@ -149,12 +155,12 @@ export function OpenObjectDialog({ initialConnection, onClose }: { initialConnec
               {choices.length > 1 && (
                 <select
                   aria-label={t("openByName.connection")}
-                  value={connectionId}
-                  onChange={(e) => setConnectionId(e.target.value)}
+                  value={connection ? connectionTag(connection) : ""}
+                  onChange={(e) => setConnection(connectionOfTag(e.target.value))}
                 >
                   {choices.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
+                    <option key={connectionTag(keyOf(c))} value={connectionTag(keyOf(c))}>
+                      {shownName(c)}
                     </option>
                   ))}
                 </select>

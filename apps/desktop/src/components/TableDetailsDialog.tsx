@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { call, commands, type DependenciesItem, type NewIndexKindItem, type ObjectActionsItem, type ObjectPropertiesItem, type ObjectTargetItem, type PartitioningItem, type SchemaObjectItem, type TableDetails, type TableKeyItem } from "../api";
-import { connectTabFromExplorer, explorerDatabase, EXPLORER_REFRESH_EVENT, openSession, openTableData } from "../connect";
+import { connectTabFromExplorer, explorerDatabase, openTabSession, openTableData, refreshExplorer } from "../connect";
+import { tabConnection, tabConnectionOf } from "../connectionKey";
 import { useApp, type Tab } from "../store";
 import { CONNECTING, DISCONNECTED, connectFailure, connectedWith, lostSession, statusName } from "../tabState";
 import { ObjectChangeDialog } from "./ObjectChangeDialog";
@@ -82,7 +83,7 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
     setDetails(null);
     useApp.getState().setConnection(tab.id, CONNECTING);
     try {
-      const session = await openSession(tab.id, tab.connectionId);
+      const session = await openTabSession(tab.id, tabConnectionOf(tab.connectionId, tab.connectionFolder));
       useApp.getState().setConnection(tab.id, session === null ? DISCONNECTED : connectedWith(session));
     } catch (e) {
       useApp.getState().setConnection(tab.id, DISCONNECTED);
@@ -92,8 +93,8 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
 
   function openSql(sql: string) {
     if (!tab.connectionId) return;
-    const id = useApp.getState().addTab(tab.connectionId, sql);
-    connectTabFromExplorer(id, tab.id, explorerDatabase(tab.connectionId, schema));
+    const id = useApp.getState().addTab(tabConnection(tab), sql);
+    connectTabFromExplorer(id, tab.id, explorerDatabase(tabConnectionOf(tab.connectionId, tab.connectionFolder), schema));
   }
 
   async function newIndex(indexKind: NewIndexKindItem) {
@@ -225,7 +226,7 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
                   {row.cells.map((cell, column) => <td key={column} title={cell}>{cell}</td>)}
                   <td><div className="table-details-actions table-row-actions">
                     {(row.definition || row.trigger) && <button type="button" className="ghost" onClick={() => void openDefinition(row)}>{t("openDefinition")}</button>}
-                    {row.data && tab.connectionId && <button type="button" className="ghost" onClick={() => tab.connectionId && row.data && openTableData(tab.connectionId, tab.id, row.data.schema, row.data.table)}>{t("tableDetails.openData")}</button>}
+                    {row.data && tab.connectionId && <button type="button" className="ghost" onClick={() => { const connection = tabConnection(tab); if (connection && row.data) openTableData(connection, tab.id, row.data.schema, row.data.table); }}>{t("tableDetails.openData")}</button>}
                     {row.column && row.target && <button type="button" className="ghost" onClick={() => setChange({ target: row.target!, name: row.column!, rename: true })}>{t("objectChange.renameMenu")}</button>}
                     {row.target && <button type="button" className="ghost table-action-drop" onClick={() => setChange({ target: row.target!, name: row.cells[0] ?? "", rename: false })}>{t("objectChange.dropMenu")}</button>}
                     {!row.target && row.rebuildDrop && <button type="button" className="ghost table-action-drop" onClick={() => setEditing({ drop: { constraint: row.rebuildDrop!, label: row.cells[0] ?? "" } })}>{t("objectChange.dropMenu")}</button>}
@@ -237,17 +238,17 @@ export function TableDetailsView({ tab }: { tab: Tab }) {
         </>
       )}
       {change && tab.connectionId && <ObjectChangeDialog
-        session={tab.id} connectionId={tab.connectionId} schema={schema}
+        session={tab.id} identity={tabConnectionOf(tab.connectionId, tab.connectionFolder)} schema={schema}
         title={change.rename ? t("objectChange.renameColumnTitle", { name: change.name, table }) : t("objectChange.dropTitle", { name: change.name })}
         confirmLabel={t(change.rename ? "objectChange.rename" : "objectChange.drop")} danger={!change.rename}
         rename={change.rename ? { current: change.name } : undefined}
         change={({ newName, cascade }) => change.rename ? { action: "rename", target: change.target, newName } : { action: "drop", target: change.target, cascade }}
-        onClose={() => setChange(null)} onDone={() => { setChange(null); refresh(); window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail: tab.connectionId })); }}
+        onClose={() => setChange(null)} onDone={() => { setChange(null); refresh(); if (tab.connectionId) refreshExplorer(tabConnectionOf(tab.connectionId, tab.connectionFolder)); }}
       />}
-      {editing && tab.connectionId && <StructureDialog session={tab.id} connectionId={tab.connectionId} schema={schema} table={table}
+      {editing && tab.connectionId && <StructureDialog session={tab.id} identity={tabConnectionOf(tab.connectionId, tab.connectionFolder)} schema={schema} table={table}
         columns={editing.columns} drop={editing.drop} onClose={() => setEditing(null)}
-        onDone={() => { setEditing(null); refresh(); window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail: tab.connectionId })); }} />}
-      {creating && details && actions && tab.connectionId && <NewTableElementDialog session={tab.id} connectionId={tab.connectionId} schema={schema} table={table} kind={kind}
+        onDone={() => { setEditing(null); refresh(); if (tab.connectionId) refreshExplorer(tabConnectionOf(tab.connectionId, tab.connectionFolder)); }} />}
+      {creating && details && actions && tab.connectionId && <NewTableElementDialog session={tab.id} identity={tabConnectionOf(tab.connectionId, tab.connectionFolder)} schema={schema} table={table} kind={kind}
         details={details} actions={actions} onClose={() => setCreating(false)} onSql={(sql) => { setCreating(false); openSql(sql); }} />}
     </section>
   );

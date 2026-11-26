@@ -185,6 +185,7 @@ select 'after the error'";
             ScriptOptions {
                 on_error: spelaion_core::OnError::Continue,
                 statement_timeout: None,
+                statement_savepoints: false,
             },
         )
         .collect()

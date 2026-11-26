@@ -304,7 +304,10 @@ impl ConnectionDraft {
         // The engine's own settings (SDB-396): each only where its engine has it.
         let pooler_kept = to == Engine::Postgres;
         let cleartext_kept = matches!(to, Engine::Mysql | Engine::Mariadb);
-        let databases_kept = to.chooses_databases();
+        // `databases` means what is shown on MySQL, MariaDB and SQL Server and what is opened
+        // on PostgreSQL (ADR-074): kept only where it means the same.
+        let databases_kept = (self.engine.chooses_databases() && to.chooses_databases())
+            || (self.engine.opens_other_databases() && to.opens_other_databases());
         if pooler_kept {
             report.keep_if("pooler", self.pooler.is_some());
         } else {
@@ -322,6 +325,12 @@ impl ConnectionDraft {
         } else {
             report.drop_if("databases", !self.databases.is_empty());
             next.databases.clear();
+        }
+        if to.opens_other_databases() {
+            report.keep_if("all_databases", self.all_databases);
+        } else {
+            report.drop_if("all_databases", self.all_databases);
+            next.all_databases = false;
         }
         (next, report)
     }

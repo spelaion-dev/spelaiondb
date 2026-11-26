@@ -519,6 +519,19 @@ async fn the_catalog_and_the_session_calls_answer_as_the_driver_does() {
     // The trait's default, computed in the plugin from the driver's own answers.
     let columns = within(c.list_columns("main")).await;
     assert!(columns.is_err(), "the view has no description: {columns:?}");
+    // Every table of a schema in one request (1.4, SDB-220), as `describe_table` describes each;
+    // the driver's failure in its own words.
+    assert_eq!(
+        within(c.describe_tables("main")).await.unwrap(),
+        Some(vec![table.clone()])
+    );
+    assert_eq!(
+        within(c.describe_tables("sys"))
+            .await
+            .unwrap_err()
+            .to_string(),
+        "cannot read the tables of sys"
+    );
 
     // What a driver does not support says so with the driver's own words.
     let refused = within(c.relation_definition("main", "people"))
@@ -702,6 +715,11 @@ async fn a_plugin_of_version_1_0_is_never_sent_a_request_or_settings() {
         within(connection.object_dependencies("main", "people"))
             .await
             .unwrap(),
+        None
+    );
+    // Nor 1.4's batched tables (SDB-220): the core describes each table instead.
+    assert_eq!(
+        within(connection.describe_tables("main")).await.unwrap(),
         None
     );
     // Nor 1.3's definitions of server objects (ADR-082): its engine has none.

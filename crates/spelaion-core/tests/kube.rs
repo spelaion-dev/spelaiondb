@@ -229,7 +229,7 @@ async fn connections_reach_a_database_inside_the_cluster() {
             OpenOptions {
                 tunnels: pool.clone(),
                 known_hosts: KnownHosts {
-                    team_file: None,
+                    team_files: Vec::new(),
                     user_file: None,
                     app_file: user.join("known_hosts"),
                 },
@@ -497,7 +497,7 @@ async fn connections_share_a_kubernetes_network_profile() {
                 OpenOptions {
                     tunnels: pool,
                     known_hosts: KnownHosts {
-                        team_file: None,
+                        team_files: Vec::new(),
                         user_file: None,
                         app_file,
                     },

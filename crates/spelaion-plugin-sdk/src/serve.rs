@@ -811,6 +811,14 @@ async fn on_session(
                 .map_err(driver_error)?;
             json!({ "columns": columns })
         }
+        // 1.4 (SDB-220): a core that chose an older version never sends it.
+        method::DESCRIBE_TABLES => {
+            let tables = connection
+                .describe_tables(needs(&request.schema, "schema")?)
+                .await
+                .map_err(driver_error)?;
+            json!({ "tables": tables })
+        }
         method::LIST_SCHEMA_OBJECTS => {
             let schema = needs(&request.schema, "schema")?;
             let objects = match &request.filter {

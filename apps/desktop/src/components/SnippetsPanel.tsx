@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { call, commands, type SnippetItem } from "../api";
 import type { SnippetFolderItem } from "../bindings";
+import { keyOf, listedConnection } from "../connectionKey";
 import { useApp } from "../store";
 import { commandShortcut } from "../shortcuts";
 import { ConfirmDelete } from "./ConfirmDelete";
@@ -41,7 +42,7 @@ export function SnippetsPanel() {
       .finally(() => { if (current === generation.current) setLoading(false); });
     return () => { generation.current += 1; };
   }, [query, folder, offset, revision, workspace, refresh]);
-  function open(item: SnippetItem) { const app = useApp.getState(); const id = app.addTab(connections.find((connection) => connection.id === item.connection)?.id ?? null, item.statement); app.updateTab(id, { snippetName: item.name }); close(); }
+  function open(item: SnippetItem) { const app = useApp.getState(); const listed = item.identity ? listedConnection(connections, item.identity) : undefined; const id = app.addTab(listed ? keyOf(listed) : null, item.statement); app.updateTab(id, { snippetName: item.name }); close(); }
   async function move(item: SnippetItem, folderId: string) {
     setMoving(item.id); setError(null);
     try { await call(commands.moveSnippet(item.id, folderId ? Number(folderId) : null)); setRefresh((value) => value + 1); }
@@ -64,7 +65,7 @@ export function SnippetsPanel() {
         {!busy && !error && items.length === 0 && <div className="empty">{t(query || folder !== "all" ? "snippets.noMatches" : "snippets.empty", { shortcut: commandShortcut("file.save") })}</div>}
         {items.map((item) => <article className="history-entry snippet-entry" key={item.id}>
           <div className="history-entry-heading"><strong className="snippet-name">{item.name}</strong>{item.personal && <span className="tag">{t("snippets.personal")}</span>}</div>
-          <div className="history-meta muted small"><span>{connections.find((connection) => connection.id === item.connection)?.name ?? (item.connection || t("snippets.noConnection"))}</span><span>{folders.find((choice) => choice.id === item.folderId)?.name ?? t("snippets.unfiled")}</span></div>
+          <div className="history-meta muted small"><span>{(item.identity ? listedConnection(connections, item.identity)?.name : undefined) ?? (item.connection || t("snippets.noConnection"))}</span><span>{folders.find((choice) => choice.id === item.folderId)?.name ?? t("snippets.unfiled")}</span></div>
           <pre className="history-sql">{item.statement}</pre><div className="library-row-actions"><button onClick={() => open(item)}>{t("snippets.open")}</button><details className="library-organize"><summary>{t("snippets.organize")}</summary><label>{t("snippets.moveTo")}<select aria-label={t("snippets.moveQuery", { name: item.name })} value={item.folderId ?? ""} disabled={moving !== null || busy} onChange={(event) => void move(item, event.target.value)}><option value="">{t("snippets.unfiled")}</option>{folders.filter((choice) => choice.personal === item.personal).map((choice) => <option key={choice.id} value={choice.id}>{choice.name}</option>)}</select></label><button className="ghost" onClick={() => setDeleting(item)}>{t("snippets.delete")}</button></details></div>
         </article>)}
         {busy && <div className="empty small" role="status">{t("snippets.loading")}</div>}

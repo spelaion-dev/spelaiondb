@@ -1,6 +1,6 @@
 # The plugin protocol
 
-**Version 1.3. Experimental until SpelaionDB 1.0: it may change in any 0.x release.**
+**Version 1.4. Experimental until SpelaionDB 1.0: it may change in any 0.x release.**
 
 An engine plugin is a program the core starts and talks to over the program's standard input
 and output (ADR-041). It is the wire to one or more engines: it connects, runs statements,
@@ -94,12 +94,15 @@ What each minor version added:
 | 1.1 | Requests for engines whose language is not SQL (`run` kind `request`), `connect`'s `options`, and the object kinds `collection`, `node_label` and `relationship_type` (ADR-056) |
 | 1.2 | A relation's properties, partitions and dependencies: `object_properties`, `table_partitions` and `object_dependencies` (SDB-393) |
 | 1.3 | The schema object kinds `sink`, `connection` and `secret`, the server object kinds `cluster` and `cluster_replica`, and `server_object_definition` (ADR-082); columns of bytes in `insert_rows` (nullable `LargeBinary`) and the `insert_bytes` capability (SDB-464), which a plugin built on 1.3's first SDK (`plugin-sdk-v0.4.0`) does not say |
+| 1.4 | What SpelaionDB 0.17 adds (one version per release; later additions of 0.17 join this row): `describe_tables`, every table of a schema described in one request (SDB-220) |
 
 The core never sends what a version added to a plugin that chose an older one: a request, or
 a `connect` with `options`, is refused in the core with a message that names both versions;
 1.2's requests are not sent, and the engine tells none of them (no properties, no
 partitions, dependencies it cannot tell), as a compiled-in driver without them would.
 1.3's `server_object_definition` is not sent either, and its engine has no such definitions.
+1.4's `describe_tables` is not sent: the core describes each table with `describe_table`, as
+for an engine that has no batched read.
 In the other direction, a plugin that answered an older version than it speaks leaves what
 its version did not have out of its answers: an object of a kind 1.3 added is not in a list
 sent to a core that chose 1.2, which would fail to read the whole list for it.
@@ -282,11 +285,17 @@ name returns, as JSON with the field names of `spelaion-driver-api`.
 | `table_partitions` (1.2) | `schema`, `name` | `{"partitioning": Partitioning \| null}` |
 | `object_dependencies` (1.2) | `schema`, `name` | `{"dependencies": Dependencies \| null}` |
 | `server_object_definition` (1.3) | `server_object` | `{"sql": "…"}` |
+| `describe_tables` (1.4) | `schema` | `{"tables": [TableInfo] \| null}` |
 
 `filter` is a `NameFilter` (`{"include": ["…"], "exclude": ["…"]}`); with it the result is
 narrowed as `list_schemas_matching`, `list_objects_matching` and
 `list_schema_objects_matching` do. A plugin that does not support a request answers with the
 error its driver gives (`other`), never with silence.
+
+`describe_tables` answers every table of the schema (tables, partitioned tables and foreign
+tables, as `list_objects` lists them), each exactly as `describe_table` describes it, ordered by
+name, read in a few catalog queries rather than several per table; `null` when the engine has no
+such read, and the core then describes each table on its own.
 
 `table_partitions` answers `null` for a table that is not partitioned; `object_dependencies`
 answers `null` when the engine cannot tell what a relation uses and what uses it (never an
