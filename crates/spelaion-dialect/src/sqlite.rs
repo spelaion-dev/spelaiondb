@@ -1,5 +1,6 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::scanner::{Region, RegionKind};
 use crate::{is_white_space_at, trimmed};
 
 /// SQLite dialect.
@@ -15,11 +16,7 @@ impl Dialect for SqliteDialect {
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, |script, i| {
-            match skip_quote_or_comment(script, i)? {
-                Skipped::Quoted(end) | Skipped::Comment(end) => Some(end),
-            }
-        })
+        code_ranges(script)
     }
 
     fn quote_identifier(&self, ident: &str) -> String {
@@ -100,74 +97,173 @@ const RESERVED: &[&str] = &[
     "where",
 ];
 
-/// Splits respecting quotes (`'…'`, `"…"`, `` `…` ``, `[…]`), comments and the
-/// `BEGIN … END` body of `CREATE TRIGGER`, which contains `;` (and may have `CASE … END`).
-fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut has_code = false;
-    // First words of the statement, to detect CREATE [TEMP] TRIGGER.
-    let mut words: Vec<String> = Vec::new();
-    let mut depth = 0i32;
-    let mut i = 0;
+/// SQLite's lexical scanner (ADR-065): the script as regions. Quotes (`'…'`, `"…"`, `` `…` ``,
+/// `[…]`) and comments (`--…`, `/*…*/`) are read by [`skip_quote_or_comment`], the one reading of
+/// them; a statement ends at a `;` outside them, except inside the `BEGIN … END` body of a
+/// `CREATE [TEMP] TRIGGER` (which may hold `CASE … END` too), whose depth the scanner keeps from
+/// the statement's first words. The splitter and `code_ranges` read it; it holds no more than
+/// the statement's first words and that depth.
+struct SqliteScanner<'a> {
+    script: &'a str,
+    /// Where the next region starts.
+    i: usize,
+    /// Where the current statement starts.
+    start: usize,
+    /// Whether the current statement holds code yet: a quote or any byte that is not white
+    /// space. Comments do not count.
+    has_code: bool,
+    /// The statement's first words, lower case, to recognise `CREATE [TEMP] TRIGGER`.
+    words: Vec<String>,
+    /// `BEGIN`/`CASE` minus `END` inside a trigger: a `;` ends the statement only at zero or
+    /// below.
+    depth: i32,
+    /// The end of the script was reached.
+    ended: bool,
+}
 
-    while i < b.len() {
-        match skip_quote_or_comment(script, i) {
-            Some(Skipped::Quoted(end)) => {
-                i = end;
-                has_code = true;
-                continue;
-            }
-            Some(Skipped::Comment(end)) => {
-                i = end;
-                continue;
-            }
-            None => {}
+impl<'a> SqliteScanner<'a> {
+    fn new(script: &'a str) -> Self {
+        Self {
+            script,
+            i: 0,
+            start: 0,
+            has_code: false,
+            words: Vec::new(),
+            depth: 0,
+            ended: false,
         }
-        let c = b[i];
-        match c {
-            b';' if depth <= 0 => {
-                if has_code {
-                    spans.extend(trimmed(script, start, i));
-                }
-                i += 1;
-                start = i;
-                has_code = false;
-                words.clear();
-                depth = 0;
+    }
+
+    /// Reads one word of code (letters, digits and `_`, from a letter or `_`) at the position.
+    fn word(&mut self) {
+        let b = self.script.as_bytes();
+        let i = self.i;
+        let end = b[i..]
+            .iter()
+            .position(|x| !(x.is_ascii_alphanumeric() || *x == b'_'))
+            .map_or(b.len(), |p| i + p);
+        let word = self.script[i..end].to_ascii_lowercase();
+        if is_trigger(&self.words) {
+            match word.as_str() {
+                "begin" | "case" => self.depth += 1,
+                "end" => self.depth -= 1,
+                _ => {}
             }
-            _ if c.is_ascii_alphabetic() || c == b'_' => {
-                let end = b[i..]
-                    .iter()
-                    .position(|x| !(x.is_ascii_alphanumeric() || *x == b'_'))
-                    .map_or(b.len(), |p| i + p);
-                let word = script[i..end].to_ascii_lowercase();
-                if is_trigger(&words) {
-                    match word.as_str() {
-                        "begin" | "case" => depth += 1,
-                        "end" => depth -= 1,
-                        _ => {}
+        }
+        if self.words.len() < 4 {
+            self.words.push(word);
+        }
+        self.has_code = true;
+        self.i = end;
+    }
+}
+
+impl Iterator for SqliteScanner<'_> {
+    type Item = Region;
+
+    fn next(&mut self) -> Option<Region> {
+        let script = self.script;
+        let b = script.as_bytes();
+        let len = b.len();
+        let code = self.i;
+        while self.i < len {
+            let i = self.i;
+            if let Some(skipped) = skip_quote_or_comment(script, i) {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                let kind = match skipped {
+                    Skipped::Quoted(_) => {
+                        self.has_code = true;
+                        if b[i] == b'\'' {
+                            RegionKind::String
+                        } else {
+                            RegionKind::QuotedName
+                        }
                     }
-                }
-                if words.len() < 4 {
-                    words.push(word);
-                }
-                has_code = true;
-                i = end;
+                    Skipped::Comment(_) => RegionKind::Comment,
+                };
+                let (Skipped::Quoted(end) | Skipped::Comment(end)) = skipped;
+                self.i = end;
+                return Some(Region {
+                    kind,
+                    range: i..end,
+                });
             }
-            _ => {
-                if !is_white_space_at(script, i) {
-                    has_code = true;
+            match b[i] {
+                b';' if self.depth <= 0 => {
+                    if code < i {
+                        return Some(Region {
+                            kind: RegionKind::Code,
+                            range: code..i,
+                        });
+                    }
+                    let statement = trimmed(script, self.start, i).filter(|_| self.has_code);
+                    self.i = i + 1;
+                    self.start = i + 1;
+                    self.has_code = false;
+                    self.words.clear();
+                    self.depth = 0;
+                    return Some(Region {
+                        kind: RegionKind::StatementEnd { statement },
+                        range: i..i + 1,
+                    });
                 }
-                i += 1;
+                c if c.is_ascii_alphabetic() || c == b'_' => self.word(),
+                _ => {
+                    if !is_white_space_at(script, i) {
+                        self.has_code = true;
+                    }
+                    self.i += 1;
+                }
             }
         }
+        if code < len {
+            return Some(Region {
+                kind: RegionKind::Code,
+                range: code..len,
+            });
+        }
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        // The end of the script ends the last statement.
+        let statement = trimmed(script, self.start, len).filter(|_| self.has_code)?;
+        Some(Region {
+            kind: RegionKind::StatementEnd {
+                statement: Some(statement),
+            },
+            range: len..len,
+        })
     }
-    if has_code {
-        spans.extend(trimmed(script, start, b.len()));
+}
+
+/// The statements of `script`, read by the scanner.
+fn split(script: &str) -> Vec<StatementSpan> {
+    SqliteScanner::new(script)
+        .filter_map(|region| region.kind.statement())
+        .collect()
+}
+
+/// What lies outside strings, names and comments, read by the scanner.
+fn code_ranges(script: &str) -> Vec<std::ops::Range<usize>> {
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    for region in SqliteScanner::new(script) {
+        if !region.kind.is_code() || region.range.is_empty() {
+            continue;
+        }
+        match ranges.last_mut() {
+            Some(last) if last.end >= region.range.start => {
+                last.end = last.end.max(region.range.end);
+            }
+            _ => ranges.push(region.range),
+        }
     }
-    spans
+    ranges
 }
 
 /// A quoted string or identifier, or a comment, with the offset just past it (the end of the
@@ -179,7 +275,7 @@ pub enum Skipped {
     Comment(usize),
 }
 
-/// What starts at byte `i` of `script`, read as the splitter reads it.
+/// What starts at byte `i` of `script`: the scanner's one reading of quotes and comments.
 pub fn skip_quote_or_comment(script: &str, i: usize) -> Option<Skipped> {
     let b = script.as_bytes();
     match *b.get(i)? {
