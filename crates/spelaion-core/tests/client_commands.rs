@@ -93,3 +93,58 @@ async fn an_at_sign_in_sql_still_runs() {
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(finished, 2);
 }
+
+/// What a resolved run yields, in order: `echo:<text>`, `start:<index>` and `end`.
+async fn items(session: &Session, script: &str) -> Vec<String> {
+    let resolved = spelaion_core::resolve_script(
+        session.dialect().as_ref(),
+        script,
+        &std::collections::HashMap::new(),
+    )
+    .expect("resolved");
+    let mut out = Vec::new();
+    let mut run = spelaion_core::with_echoes(session.run_script(&resolved.text), resolved.echoes);
+    while let Some(item) = run.next().await {
+        match item {
+            spelaion_core::RunItem::Echo(text) => out.push(format!("echo:{text}")),
+            spelaion_core::RunItem::Event(CoreEvent::StatementStarted { index, .. }) => {
+                out.push(format!("start:{index}"))
+            }
+            spelaion_core::RunItem::Event(CoreEvent::ScriptFinished { .. }) => {
+                out.push("end".into())
+            }
+            spelaion_core::RunItem::Event(_) => {}
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn echoes_come_when_the_run_reaches_them() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let session = session().await;
+    assert_eq!(
+        items(
+            &session,
+            "@echo first\nselect 1;\n@echo between\nselect 2;\n@echo last"
+        )
+        .await,
+        [
+            "echo:first",
+            "start:0",
+            "echo:between",
+            "start:1",
+            "echo:last",
+            "end"
+        ]
+    );
+    // A run that stops at a failed statement never reaches what comes after it.
+    assert_eq!(
+        items(
+            &session,
+            "select 1;\n@echo before\nselect nope from no_such_table;\n@echo never\nselect 3"
+        )
+        .await,
+        ["start:0", "echo:before", "start:1", "end"]
+    );
+}

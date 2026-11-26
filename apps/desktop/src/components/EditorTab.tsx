@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import { startJob, type Job } from "../jobs";
+import type { ResolvedScriptItem, ScriptEchoItem } from "../bindings";
 import type { ExplorerDatabaseItem_Serialize as ExplorerDatabaseItem, KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
@@ -190,17 +191,19 @@ export function EditorTab({ tab }: { tab: Tab }) {
    *  (SDB-383), before the parameters, the guard and the run read it. A variable without a
    *  value is asked for and kept for this tab. `null` when the user cancels; throws what the
    *  core refuses (a value that would change how the statement is split or read). */
-  async function withVariables(text: string): Promise<string | null> {
+  async function withVariables(text: string): Promise<ResolvedScriptItem | null> {
     let values = tabNow()?.variables ?? {};
     const used = await call(commands.scriptVariables(tab.id, text, values));
-    if (used.names.length === 0) return text;
     if (used.missing.length > 0) {
       const asked = await useDialogs.getState().askParams(used.missing, {}, true);
       if (!asked) return null;
       values = { ...values, ...asked };
       updateTab(tab.id, { variables: values });
     }
-    return call(commands.substituteVariables(tab.id, text, values));
+    // The core resolves the script's `@set`, `@unset` and `@echo` lines too (ADR-078): what it
+    // returns is what runs and what the guard reads. A script's `@set` never changes the tab's
+    // values.
+    return call(commands.resolveScript(tab.id, text, values));
   }
 
   /** `text` with its `:name` parameters written in as literals by the core. Each parameter's
@@ -1433,12 +1436,14 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // `${name}` variables first, written in as they are, then `:name` placeholders, written
     // in as literals: the core does both, and everything after reads the text that runs.
     let text: string;
+    let echoes: ScriptEchoItem[];
     try {
       const written = await withVariables(request.text);
       if (written === null) return;
-      const bound = await withParams(written);
+      const bound = await withParams(written.text);
       if (bound === null) return;
       text = bound;
+      echoes = written.echoes;
     } catch (e) {
       const detail = message(e);
       updateTab(tab.id, { run: failedRun(detail, { key: "messages.runFailed", values: { detail } }) });
@@ -1475,7 +1480,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
       handle(event, sent, started.startedAt, queryPage, failures, started.run);
       if (event.kind === "scriptFinished") finishEvent?.();
     };
-    const options = runOptionsOf(tab);
+    // The script's `@echo` lines, shown when the run reaches each (ADR-078).
+    const options = { ...runOptionsOf(tab), echoes };
     try {
       if (tab.table) await call(commands.runScript(tab.id, sent.text, confirmed, options, placement, channel));
       else await call(commands.runQueryPage(tab.id, sent.text, pageSize, sort, confirmed, options, placement, channel));
@@ -1526,7 +1532,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       if (!request?.text.trim()) return;
       const written = await withVariables(request.text);
       if (written === null) return;
-      const text = await withParams(written);
+      const text = await withParams(written.text);
       if (text === null) return;
       const analyze = analyzePlan && support.analyze;
       let options = { analyze, buffers: analyze && planBuffers && support.buffers, analyzeConfirmed: false, confirmed: false, timeoutSeconds: runOptionsOf(tab).timeoutSeconds };
@@ -1593,6 +1599,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
         break;
       case "notice":
         updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: `${event.severity}: ${event.message}` }] }));
+        break;
+      case "echo":
+        // A script's `@echo` line: its own text, as written (ADR-078).
+        updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "info", text: event.text }] }));
         break;
       case "historyWarning":
         updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: event.message, translation: { key: "messages.historySaveFailed", values: { detail: event.message } } }] }));
