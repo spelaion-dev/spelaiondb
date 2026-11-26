@@ -6750,11 +6750,39 @@ pub struct AuditEventItem {
     /// The connection's folder (ADR-075); none for a personal connection, and for entries
     /// written before 0.17.
     pub folder: Option<String>,
+    /// The database the statement ran in (SDB-32), where the engine has one to tell apart from
+    /// the connection; none otherwise, and for entries written before 0.18.
+    pub database: Option<String>,
+    /// What kind of call it was, from its tool (SDB-32): read, write or catalog.
+    pub action: AuditActionItem,
+}
+
+/// What kind of call an MCP entry records (SDB-32), as the core reads it from the tool.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AuditActionItem {
+    Read,
+    Write,
+    Catalog,
+    Unknown,
+}
+
+impl From<spelaion_core::audit::AuditAction> for AuditActionItem {
+    fn from(action: spelaion_core::audit::AuditAction) -> Self {
+        use spelaion_core::audit::AuditAction;
+        match action {
+            AuditAction::Read => AuditActionItem::Read,
+            AuditAction::Write => AuditActionItem::Write,
+            AuditAction::Catalog => AuditActionItem::Catalog,
+            AuditAction::Unknown => AuditActionItem::Unknown,
+        }
+    }
 }
 
 impl From<spelaion_core::AuditRecord> for AuditEventItem {
     fn from(record: spelaion_core::AuditRecord) -> Self {
         let e = spelaion_core::audit::redacted(&record.entry);
+        let action = spelaion_core::audit::action(e.tool.as_deref()).into();
         Self {
             id: record.id,
             at_ms: e.at_ms,
@@ -6768,6 +6796,8 @@ impl From<spelaion_core::AuditRecord> for AuditEventItem {
             duration_ms: e.duration_ms,
             detail: e.detail,
             folder: e.folder,
+            database: e.database,
+            action,
         }
     }
 }

@@ -104,7 +104,11 @@
     "folder": "Folder",
     "allFolders": "All folders",
     "noFolder": "No folder",
-    "noFolderHint": "A personal connection, or a call recorded before folders were"
+    "noFolderHint": "A personal connection, or a call recorded before folders were",
+    "database": "Database",
+    "noDatabaseHint": "The engine has no database to tell apart from the connection, or the call was recorded before 0.18",
+    "openInEditor": "Open in editor",
+    "action": { "read": "Read", "write": "Write", "catalog": "Catalog", "unknown": "Other" }
   },
   "security": {
     "output": {

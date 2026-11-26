@@ -38,6 +38,13 @@ connections. The Activity tab shows each call's folder and filters by it; the CS
 exports carry it in a `folder` column. Calls on personal connections, and calls recorded
 before 0.17, have no folder.
 
+Each call shows what kind it was (Read, Write or Catalog) beside how it ended, so a refused
+write is easy to spot, and the database its statement ran in where the engine has one apart
+from the connection (MySQL, MariaDB, SQL Server and DuckDB: the database the session was in;
+PostgreSQL: the connection's database); the exports carry it in a `database` column. **Open in
+editor** puts a call's statement, with its secrets masked, in a new editor tab on its
+connection. Nothing runs until you run it.
+
 ## Why a call was refused or failed
 
 When a tool call is refused or fails, the agent gets the same sentence as before and, in the

@@ -11847,6 +11847,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const events = mcp.getByRole("table", { name: "Events" });
   await events.getByRole("row").filter({ hasText: "select count(*) as n from product" }).getByText("OK").waitFor();
   await events.getByRole("row").filter({ hasText: "insert into product" }).getByText("Refused").waitFor();
+  // A refused write reads as one at a glance (SDB-32): the kind of call beside how it ended.
+  await events.getByRole("row").filter({ hasText: "insert into product" }).getByText("Write", { exact: true }).waitFor();
+  await events.getByRole("row").filter({ hasText: "select count(*) as n from product" }).getByText("Read", { exact: true }).waitFor();
   await events.getByText("alter user bob password '***'").waitFor();
   assert.ok(!(await mcp.innerText()).includes("hunter2"), "a password never shows");
   await shot("mcp-activity");
@@ -11866,7 +11869,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mcp.getByRole("button", { name: "Export CSV" }).click();
   await mcp.getByText("4 events exported to", { exact: false }).waitFor();
   const activityCsv = readFileSync(csvPath, "utf8");
-  assert.ok(activityCsv.startsWith("time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder\n"), activityCsv);
+  assert.ok(activityCsv.startsWith("time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder,database\n"), activityCsv);
   assert.ok(activityCsv.includes(",smoke-agent,shop,execute_write,alter user bob password '***',refused,"), activityCsv);
   assert.ok(!activityCsv.includes("hunter2"), activityCsv);
   const jsonPath = join(userDir, "activity.json");
@@ -11875,6 +11878,23 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mcp.getByText(`4 events exported to ${jsonPath}`, { exact: false }).waitFor();
   assert.equal(JSON.parse(readFileSync(jsonPath, "utf8")).length, 4);
   await page.evaluate(() => { delete window.__spelaionSavePath; });
+  // A logged statement opens in a new editor tab on its connection, never run (SDB-32).
+  {
+    const tabsBefore = await page.locator(".tabbar .tab").count();
+    await events.getByRole("row").filter({ hasText: "select count(*) as n from product" }).getByRole("button", { name: "Open in editor" }).click();
+    await mcp.waitFor({ state: "detached" });
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n + 1, tabsBefore);
+    await page.waitForFunction(
+      (expected) => [...document.querySelectorAll(".tab-panel:not([hidden]) .cm-content .cm-line")].map((line) => line.textContent).join("\n") === expected,
+      "select count(*) as n from product",
+    );
+    const opened = page.locator(".tab-panel:not([hidden])");
+    assert.equal(await opened.locator(".result-tabs button", { hasText: /^Result/ }).count(), 0, "opened, not run");
+    await shot("mcp-open-in-editor");
+    await page.getByRole("button", { name: "MCP server", exact: true }).click();
+    await mcp.getByRole("tab", { name: "Activity" }).click();
+    await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
+  }
   // Sessions: the agent's process, opening into its calls.
   await mcp.getByRole("tab", { name: "Sessions" }).click();
   const sessions = mcp.getByRole("table", { name: "Sessions" });

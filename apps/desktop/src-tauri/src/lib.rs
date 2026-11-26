@@ -3245,12 +3245,8 @@ pub(crate) async fn start_script(
             connection: open.resolved.id.to_string(),
             database: (!open.resolved.params.database.is_empty())
                 .then(|| open.resolved.params.database.clone()),
-            switchable_database: matches!(
+            switchable_database: spelaion_core::statement_database::switches_database(
                 open.resolved.engine,
-                spelaion_config::Engine::Mysql
-                    | spelaion_config::Engine::Mariadb
-                    | spelaion_config::Engine::Sqlserver
-                    | spelaion_config::Engine::Duckdb
             ),
         },
         original,
