@@ -47,6 +47,7 @@ mod load_rows;
 mod locks;
 pub mod masking;
 mod mongodb_srv;
+pub mod notebook;
 pub(crate) mod objects;
 mod observe;
 mod open;
@@ -264,7 +265,7 @@ pub use references::{
 };
 pub use result_tabs::{
     DEFAULT_RESULT_TABS, MAX_RESULT_NAME, MAX_RESULT_TABS, Placed, Placement, ResultTab,
-    ResultTabs, ResultTabsError, RunResults, statement_title,
+    ResultTabs, ResultTabsError, RunResults, cell_results_key, statement_title,
 };
 pub use results::{
     PartialReason, ResultEnd, ResultFreed, ResultId, ResultSource, ResultStore, ResultTable,

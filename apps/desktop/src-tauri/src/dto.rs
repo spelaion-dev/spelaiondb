@@ -7197,6 +7197,7 @@ impl From<OpenTabItem> for spelaion_core::SavedTab {
             }),
             // Its place in the window is the core's to give (`window_sets`).
             window_position: None,
+            notebook: false,
         }
     }
 }
