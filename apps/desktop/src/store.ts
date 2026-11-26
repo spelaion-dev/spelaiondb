@@ -392,9 +392,12 @@ export type GridCommand =
   | { kind: "copyUpdates" }
   | { kind: "exportSelection" };
 
-/** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
-export type SidebarSection = "connections" | "processes" | "search" | "mcp" | null;
-/** A panel that shares the side column (the MCP page fills the window instead). */
+/** The panel next to the activity bar: the explorer, the process monitor, the MCP page, the
+ *  Tasks view (ADR-089) or none. */
+export type SidebarSection = "connections" | "processes" | "search" | "mcp" | "tasks" | null;
+/** A page that fills the window: it has no side column. */
+export const isPage = (section: SidebarSection): section is "mcp" | "tasks" => section === "mcp" || section === "tasks";
+/** A panel that shares the side column (the MCP page and the Tasks view fill the window instead). */
 export type SidePanel = "connections" | "processes" | "search";
 
 export const isSidePanel = (section: SidebarSection): section is SidePanel =>

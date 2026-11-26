@@ -461,6 +461,81 @@ impl TaskDocument {
         Ok(())
     }
 
+    /// The file or folder the task writes to or reads from: an export's or a dump's folder,
+    /// the file an import, a restore or a file run reads, a DuckDB export folder.
+    pub fn path(&self) -> Option<&Path> {
+        Some(match &self.request {
+            TaskRequest::Export(export) => &export.folder,
+            TaskRequest::Import(import) => &import.file,
+            TaskRequest::Dump(dump) => &dump.folder,
+            TaskRequest::Restore(restore) => &restore.input,
+            TaskRequest::EmbeddedDump(dump) => &dump.folder,
+            TaskRequest::DuckdbImport(import) => &import.folder,
+            TaskRequest::RunFile(run) => &run.file,
+        })
+    }
+
+    /// A query export's query.
+    pub fn query(&self) -> Option<&str> {
+        match &self.request {
+            TaskRequest::Export(ExportTask {
+                source: ExportSource::Query { sql },
+                ..
+            }) => Some(sql),
+            TaskRequest::Export(_)
+            | TaskRequest::Import(_)
+            | TaskRequest::Dump(_)
+            | TaskRequest::Restore(_)
+            | TaskRequest::EmbeddedDump(_)
+            | TaskRequest::DuckdbImport(_)
+            | TaskRequest::RunFile(_) => None,
+        }
+    }
+
+    /// The document with what the Tasks view's Edit changes (ADR-089 point 10): its connection,
+    /// its path ([`TaskDocument::path`]) and a query export's query, checked again. A query
+    /// given to a task that has none is refused, so an edit never changes what a task is.
+    pub fn edited(
+        &self,
+        connection: TaskConnection,
+        path: Option<PathBuf>,
+        sql: Option<String>,
+    ) -> Result<Self, TaskError> {
+        let mut edited = self.clone();
+        edited.connection = connection;
+        if let Some(path) = path {
+            let slot = match &mut edited.request {
+                TaskRequest::Export(export) => &mut export.folder,
+                TaskRequest::Import(import) => &mut import.file,
+                TaskRequest::Dump(dump) => &mut dump.folder,
+                TaskRequest::Restore(restore) => &mut restore.input,
+                TaskRequest::EmbeddedDump(dump) => &mut dump.folder,
+                TaskRequest::DuckdbImport(import) => &mut import.folder,
+                TaskRequest::RunFile(run) => &mut run.file,
+            };
+            *slot = path;
+        }
+        if let Some(text) = sql {
+            match &mut edited.request {
+                TaskRequest::Export(ExportTask {
+                    source: ExportSource::Query { sql },
+                    ..
+                }) => *sql = text,
+                TaskRequest::Export(_)
+                | TaskRequest::Import(_)
+                | TaskRequest::Dump(_)
+                | TaskRequest::Restore(_)
+                | TaskRequest::EmbeddedDump(_)
+                | TaskRequest::DuckdbImport(_)
+                | TaskRequest::RunFile(_) => {
+                    return Err(invalid("only a query export has a query to edit"));
+                }
+            }
+        }
+        edited.check()?;
+        Ok(edited)
+    }
+
     /// The document as the store keeps it.
     pub fn to_json(&self) -> Result<String, TaskError> {
         serde_json::to_string(self).map_err(|e| invalid(format!("the task cannot be saved: {e}")))

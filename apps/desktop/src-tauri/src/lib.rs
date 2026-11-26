@@ -29,6 +29,7 @@ mod schema_compare;
 mod settings_transfer;
 mod startup;
 mod table_copy;
+mod tasks;
 mod tiles;
 mod update;
 mod update_state;
@@ -3616,7 +3617,7 @@ async fn set_session_read_only(
 const MAX_COPY_ROWS: u32 = 100_000;
 
 /// Name used in `INSERT` statements when the source table is unknown.
-const INSERT_TABLE: &str = "table_name";
+pub(crate) const INSERT_TABLE: &str = "table_name";
 
 fn export_format(format: TextFormat) -> ExportFormat {
     match format {
@@ -3922,7 +3923,7 @@ async fn export_rerun_check(
 }
 
 /// A streaming export's file options, for the core.
-fn stream_export(options: &ExportFileOptions, table: &str) -> CmdResult<StreamExport> {
+pub(crate) fn stream_export(options: &ExportFileOptions, table: &str) -> CmdResult<StreamExport> {
     Ok(StreamExport {
         format: match options.format {
             TextFormat::SqlInsert => ExportFormat::SqlInsert {
@@ -6843,6 +6844,14 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             backup::run_duckdb_import,
             backup::plan_sql_file,
             backup::run_sql_file,
+            tasks::tasks,
+            tasks::task_runs,
+            tasks::task_run_log,
+            tasks::save_task,
+            tasks::edit_task,
+            tasks::duplicate_task,
+            tasks::delete_task,
+            tasks::run_task,
             get_language,
             set_language,
             get_theme,

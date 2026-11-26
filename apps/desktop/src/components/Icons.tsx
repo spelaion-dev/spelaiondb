@@ -36,6 +36,7 @@ import {
   Link,
   Link2,
   List,
+  ListChecks,
   ListVideo,
   LoaderCircle,
   type LucideIcon,
@@ -121,6 +122,8 @@ const ICONS = {
   search: Search,
   history: History,
   saved: Bookmark,
+  // The Tasks view (ADR-089).
+  tasks: ListChecks,
   mcp: Cpu,
   settings: Settings,
   // A tab's kind: a query, a SQL file, table data, a table's details, an ER diagram, a notebook.

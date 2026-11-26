@@ -668,7 +668,7 @@ try {
   step("connections sidebar: drag, keyboard resizing, limits and reset");
   const sidebar = page.locator(".sidebar");
   const activities = page.getByRole("navigation", { name: "Activity bar" });
-  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Processes", "Search", "Query history", "Saved queries", "MCP server", "Settings"]);
+  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Processes", "Search", "Query history", "Saved queries", "Tasks", "MCP server", "Settings"]);
   for (const button of await activities.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   const connectionsActivity = activities.getByRole("button", { name: "Connections" });
   assert.equal(await connectionsActivity.getAttribute("aria-pressed"), "true");
@@ -1389,6 +1389,78 @@ try {
     const tsv = readFileSync(exportPath("selection.tsv"), "utf8").replace(/^\ufeff/, "").trimEnd().split("\n");
     assert.equal(tsv[0], "country\torders");
     assert.equal(tsv.length, 3);
+  }
+
+  step("saved tasks: a streaming export saved as a task runs again from Tasks and from the command line, and its history shows both (SDB-33)");
+  {
+    // A task's files go to a folder it names, a new file each run (ADR-089).
+    const taskOut = join(userDir, "task-out");
+    mkdirSync(taskOut, { recursive: true });
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), taskOut);
+    await openResultExport();
+    const dialog = page.getByRole("dialog", { name: "Export result" });
+    await dialog.waitFor();
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("csv");
+    // Only an export that runs again can be saved: the loaded rows are this result only.
+    await dialog.getByRole("radio", { name: /^The rows loaded/ }).check();
+    assert.ok(await dialog.getByRole("button", { name: "Save as task…" }).isDisabled());
+    await dialog.getByRole("radio", { name: "Every row: run the query again" }).check();
+    await dialog.getByRole("button", { name: "Save as task…" }).click();
+    const save = page.getByRole("dialog", { name: "Save as task" });
+    await save.waitFor();
+    await save.getByRole("textbox", { name: "Name" }).fill("Smoke orders");
+    await save.getByRole("textbox", { name: "Folder" }).fill("Smoke");
+    await save.getByRole("button", { name: "Choose…" }).click();
+    assert.equal(await save.getByRole("textbox", { name: "Save files to" }).inputValue(), taskOut);
+    await save.getByRole("button", { name: "Save task" }).click();
+    await save.getByText("Saved as task “Smoke orders”.").waitFor();
+    await shot("03d-task-saved");
+    await save.getByRole("button", { name: "Done" }).click();
+    await save.waitFor({ state: "detached" });
+    await dialog.getByRole("button", { name: "Close" }).last().click();
+    await dialog.waitFor({ state: "detached" });
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+
+    // Run from the Tasks view: nothing asks on a SQLite connection without a type.
+    const tasksButton = page.locator('.activity-bar [data-command="view.tasks"]');
+    await tasksButton.click();
+    const tasksPage = page.locator(".tasks-page");
+    await tasksPage.locator(".tasks-folder-name", { hasText: "Smoke" }).waitFor();
+    await tasksPage.locator('[data-task="Smoke orders"]').click();
+    await tasksPage.getByRole("button", { name: "Run", exact: true }).click();
+    await tasksPage.locator(".tasks-result", { hasText: /^Done: 6 rows/ }).waitFor();
+    await tasksPage.locator('.tasks-run[data-origin="app"][data-state="succeeded"]').waitFor();
+    await shot("03d-task-run");
+    const firstFiles = readdirSync(taskOut).filter((f) => f.endsWith(".csv"));
+    assert.equal(firstFiles.length, 1);
+    const firstFile = readFileSync(join(taskOut, firstFiles[0]), "utf8");
+    assert.equal(firstFile.replace(/^\ufeff/, "").trimEnd().split(/\r?\n/).length, 7);
+
+    // The same task from the command line, as a scheduler would run it: a second file, never
+    // over the first, with the same rows.
+    const cli = process.env.SPELAION_E2E_CLI ?? join(root, "target/release/spelaiondb" + (process.platform === "win32" ? ".exe" : ""));
+    const printed = execFileSync(cli, ["task", "run", "smoke ORDERS"], { env: { ...process.env, SPELAION_USER_DIR: userDir }, encoding: "utf8" });
+    assert.match(printed, /^6 rows/);
+    const files = readdirSync(taskOut).filter((f) => f.endsWith(".csv"));
+    assert.equal(files.length, 2);
+    for (const file of files) assert.equal(readFileSync(join(taskOut, file), "utf8"), firstFile);
+
+    // Its history shows both runs, the newest first: reopening the view reads them again.
+    await tasksButton.click();
+    await tasksPage.waitFor({ state: "detached" });
+    await tasksButton.click();
+    await tasksPage.locator('[data-task="Smoke orders"]').click();
+    const runs = tasksPage.locator(".tasks-run");
+    await runs.nth(1).waitFor();
+    assert.equal(await runs.count(), 2);
+    assert.equal(await runs.nth(0).getAttribute("data-origin"), "cli");
+    assert.equal(await runs.nth(1).getAttribute("data-origin"), "app");
+    await runs.nth(0).getByText("From the command line").waitFor();
+    await runs.nth(0).getByRole("button", { name: "Show log" }).click();
+    await runs.nth(0).locator(".tasks-log", { hasText: "started from the command line" }).waitFor();
+    await shot("03d-task-history");
+    await tasksButton.click();
+    await tasksPage.waitFor({ state: "detached" });
   }
 
   step("cell viewer: pretty JSON, hex dump of bytes, full text");

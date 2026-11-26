@@ -175,6 +175,7 @@ export const COMMANDS = [
   { id: "view.search", category: "view", label: "shell:search.title", shortcut: "Ctrl+H", scope: "global", menus: ["activity"] },
   { id: "view.history", category: "view", label: "shell:queryHistory", menus: ["activity"] },
   { id: "view.savedQueries", category: "view", label: "shell:savedQueries", menus: ["activity"] },
+  { id: "view.tasks", category: "view", label: "shell:tasks.title", menus: ["activity"] },
   { id: "view.mcp", category: "view", label: "shell:mcpServer", menus: ["activity"] },
   { id: "view.settings", category: "view", label: "settings:title", shortcut: "Ctrl+,", scope: "global", menus: ["activity"] },
   { id: "view.plugins", category: "view", label: "settings:plugins.title" },

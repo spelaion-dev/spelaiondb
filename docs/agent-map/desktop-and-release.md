@@ -177,6 +177,18 @@
   before the ticket arrives; `useJobPhase` and `searchRun.ts` keep the `Job`) and stops any job
   with `cancelJob(id, kind)`. A new job is one `jobs::start` call, held until it ends; no map
   to add or remove from.
+  Saved tasks (ADR-089, SDB-33): `src-tauri/src/tasks.rs` only converts. `save_task` turns a
+  dialog's request item (the same `ExportFileOptions`, `ImportRequestItem`, `BackupRequestItem`,
+  `RestoreRequestItem`, `EmbeddedBackupItem` or file path it runs with) into the core's
+  `TaskDocument` on the session's connection key (and, for a personal connection, the open
+  folders' roots), with the session's resolved connection and typed password as the judges of
+  `check_secrets`; a name another task has comes back as `nameTaken` and is replaced only with
+  its id. `run_task` is a `Task` job over `spelaion_core::task::run_task` with
+  `Questions::Ask`: a password or a yes comes back as the outcome, nothing recorded, and the
+  page starts it again with the answer (`password` lives for that run only). The page is
+  `TasksPage.tsx` (a page like the MCP page: `isPage` in `store.ts`), the dialogs' button is
+  `SaveTaskDialog.tsx` (`useSaveTask`); the Windows smoke test's "saved tasks" step saves an
+  export, runs it from the view and from `spelaiondb task run`, and reads both runs back.
 - Split view (SDB-30): the editor area's layout is `useApp`'s `layout`, a `SplitLayout` union
   (`src/splitView.ts`: one tab, or two in panes `first` / `second`, side by side or one above the
   other, with the first pane's share), changed only through its transitions (`split`, `show`,

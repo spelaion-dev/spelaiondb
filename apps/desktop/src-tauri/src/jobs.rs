@@ -45,6 +45,8 @@ pub enum JobKind {
     PluginInstall,
     /// A schema comparison's reads (ADR-070).
     SchemaCompare,
+    /// A saved task's run (ADR-089).
+    Task,
 }
 
 /// What the page holds of a running job: its id and kind, to give back to `cancel_job`.

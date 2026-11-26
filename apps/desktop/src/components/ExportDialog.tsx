@@ -17,6 +17,8 @@ import { type ConnectionKey, listedConnection } from "../connectionKey";
 import { ended, partialText } from "../resultEnd";
 import { startJob } from "../jobs";
 import { useJobPhase } from "../useDialogState";
+import { useSaveTask } from "./SaveTaskDialog";
+import type { TaskRequestItem } from "../bindings";
 
 /** What the dialog exports. */
 export type ExportRequest =
@@ -79,6 +81,7 @@ export function ExportDialog() {
 
 function ExportForm({ request }: { request: ExportRequest }) {
   const { t, i18n } = useTranslation("editor");
+  const { t: ts } = useTranslation("shell");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const close = useExport((s) => s.close);
   const connections = useApp((s) => s.connections);
@@ -218,6 +221,26 @@ function ExportForm({ request }: { request: ExportRequest }) {
       : request.kind === "result" && request.table
         ? { schema: request.table.schema, name: request.table.name }
         : null;
+
+  /** What "Save as task…" saves: only an export that runs again, whose every row a later run
+   *  reads as this one would (ADR-089); the loaded rows and a selection are this result only. */
+  const taskRequest = (folder: string): TaskRequestItem | null => {
+    if (request.kind === "tables") return { kind: "exportTables", tables: request.tables, folder, names, options: options() };
+    if (request.kind !== "result" || scope !== "all" || allRefused) return null;
+    if (request.table) return { kind: "exportTable", table: request.table, folder, names, options: options() };
+    return request.sql ? { kind: "exportQuery", sql: request.sql, folder, names, options: options() } : null;
+  };
+
+  function saveAsTask() {
+    const first = taskRequest("");
+    if (!first) return;
+    useSaveTask.getState().open({
+      session: request.session,
+      name: namedTable?.name ?? ts("tasks.defaultExportName"),
+      needsFolder: true,
+      request: (folder) => taskRequest(folder) ?? first,
+    });
+  }
 
   function bytes(n: number): string {
     if (n < 1024) return `${numbers.format(n)} B`;
@@ -553,6 +576,13 @@ function ExportForm({ request }: { request: ExportRequest }) {
             </details>
             <div className="modal-actions">
               <button onClick={close}>{t("export.close")}</button>
+              <button
+                disabled={taskRequest("") === null || (format === "csv" && chosenDelimiter.length !== 1)}
+                title={taskRequest("") === null ? ts("tasks.saveExportOnlyAll") : undefined}
+                onClick={saveAsTask}
+              >
+                {ts("tasks.saveAs")}
+              </button>
               <button className="primary" disabled={format === "csv" && chosenDelimiter.length !== 1} onClick={() => void start()}>
                 {t("export.start")}
               </button>
