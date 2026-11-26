@@ -105,7 +105,9 @@ mod write;
 
 pub use agent_folders::{AgentFolder, ConnectionAgents, FolderAgents, agents_by_folder};
 pub use agent_state::{AgentFailure, FailureCode, access_code, all_agents_read_only};
-pub use app_log::{AppLog, MAX_LOG_BYTES};
+pub use app_log::{
+    AppLog, LogEntry, LogLevel, LogPage, MAX_LOG_BYTES, MAX_LOG_ENTRIES, scrub as scrub_log,
+};
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use chart::{
     ChartAggregate, ChartData, ChartError, ChartImageFormat, ChartKind, ChartLabel, ChartReduction,

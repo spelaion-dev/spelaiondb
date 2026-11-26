@@ -522,6 +522,14 @@
   (`<personal folder>/logs/spelaion.log`). "Start with a new local store" is
   `spelaion-store::set_aside`: the store and its `-wal`/`-shm` renamed to
   `state.db.broken-<date>`, never deleted or overwritten.
+  The app log (SDB-31) has a level per entry (`LogLevel`: error, warning, info; an entry written
+  before levels reads as an error) and is what Settings › Logs shows: `AppLog::read` (both files,
+  newest first, filtered by level) and `AppLog::export`. Every entry is scrubbed when written and
+  again when read (`app_log::scrub`: `audit::redact_secrets`, then an unquoted value after
+  `password=`, `pwd:`, `token=`…), so a password an error message carried never reaches the file,
+  the viewer or an export. Callers still never pass SQL, data or secrets: the scrub is a second
+  line. The desktop writes the start (version and system), and each connection that opens, has
+  its login refused or fails, by id.
   `save_name.rs` keeps a save dialog's file name in step with the chosen file type (Linux's
   GTK dialogs, `apps/desktop/src-tauri/src/file_dialog.rs`).
   `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a

@@ -1104,6 +1104,78 @@ impl From<spelaion_core::SettingsSummary> for SettingsSummaryItem {
     }
 }
 
+/// How much a log entry matters (SDB-31); as a filter, the least important level shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum LogLevelItem {
+    Error,
+    Warning,
+    Info,
+}
+
+impl From<LogLevelItem> for spelaion_core::LogLevel {
+    fn from(level: LogLevelItem) -> Self {
+        match level {
+            LogLevelItem::Error => spelaion_core::LogLevel::Error,
+            LogLevelItem::Warning => spelaion_core::LogLevel::Warning,
+            LogLevelItem::Info => spelaion_core::LogLevel::Info,
+        }
+    }
+}
+
+impl From<spelaion_core::LogLevel> for LogLevelItem {
+    fn from(level: spelaion_core::LogLevel) -> Self {
+        match level {
+            spelaion_core::LogLevel::Error => LogLevelItem::Error,
+            spelaion_core::LogLevel::Warning => LogLevelItem::Warning,
+            spelaion_core::LogLevel::Info => LogLevelItem::Info,
+        }
+    }
+}
+
+/// One entry of the app log, scrubbed by the core.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntryItem {
+    /// When it was written (UTC, ISO 8601); empty for a line the log did not write.
+    pub time: String,
+    pub level: LogLevelItem,
+    pub message: String,
+}
+
+/// What Settings › Logs shows: the entries a filter keeps, newest first, how many of each
+/// level the log has, and where its file is.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LogPageItem {
+    pub path: String,
+    pub entries: Vec<LogEntryItem>,
+    pub errors: u32,
+    pub warnings: u32,
+    pub infos: u32,
+}
+
+impl LogPageItem {
+    pub fn new(path: &std::path::Path, page: spelaion_core::LogPage) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            path: path.display().to_string(),
+            entries: page
+                .entries
+                .into_iter()
+                .map(|entry| LogEntryItem {
+                    time: entry.time,
+                    level: entry.level.into(),
+                    message: entry.message,
+                })
+                .collect(),
+            errors: count(page.errors),
+            warnings: count(page.warnings),
+            infos: count(page.infos),
+        }
+    }
+}
+
 /// One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
 /// app's registry and the keys it now has, as the registry writes them, or none.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
