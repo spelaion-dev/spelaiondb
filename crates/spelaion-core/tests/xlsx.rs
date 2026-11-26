@@ -66,8 +66,7 @@ fn login(host: &str, port: u16, user: &str, password: &str, database: &str) -> C
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("spelaion-xlsx-tests-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::support::run_dir("spelaion-xlsx-tests");
     let path = dir.join(name);
     let _ = std::fs::remove_file(&path);
     path
@@ -627,4 +626,32 @@ fn workbooks_are_recognised_and_old_ones_refused() {
     )
     .unwrap_err();
     assert!(matches!(pasted, ImportError::Invalid(_)), "{pasted:?}");
+}
+
+/// SDB-539: a folder an earlier run left under this run's name (Windows reuses process ids) is
+/// emptied the first time this run asks for it, so a leftover export cannot push this run's to
+/// `name (2).xlsx`; what this run writes there stays for its later calls.
+#[test]
+fn a_test_folder_left_by_an_earlier_run_is_emptied_first() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let prefix = "spelaion-xlsx-leftover-check";
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("workbook")).unwrap();
+    std::fs::write(
+        dir.join("workbook").join("main_tables.xlsx"),
+        b"left by an earlier run",
+    )
+    .unwrap();
+
+    let fresh = crate::support::run_dir(prefix);
+    assert_eq!(fresh, dir);
+    assert_eq!(std::fs::read_dir(&fresh).unwrap().count(), 0, "emptied");
+
+    std::fs::write(fresh.join("this-run.txt"), b"kept").unwrap();
+    let again = crate::support::run_dir(prefix);
+    assert!(
+        again.join("this-run.txt").is_file(),
+        "a later call keeps this run's files"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

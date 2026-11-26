@@ -51,7 +51,7 @@ fn server(var: &str) -> Option<(String, u16)> {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("spelaion-edit-source-{}", std::process::id()));
+    let dir = crate::support::run_dir("spelaion-edit-source");
     let path = dir.join(name);
     std::fs::create_dir_all(path.parent().expect("a folder")).unwrap();
     let _ = std::fs::remove_file(&path);

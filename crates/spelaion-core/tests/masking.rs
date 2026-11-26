@@ -613,8 +613,7 @@ async fn edits_never_write_the_mask_or_read_through_it() {
 async fn streaming_exports_statistics_search_and_agents_get_the_mask() {
     let _turn = crate::serial::file_turn(module_path!());
     let _serial = SERIAL.lock().await;
-    let dir = std::env::temp_dir().join(format!("spelaion-masking-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::support::run_dir("spelaion-masking");
     for (label, session, schema, _) in engines().await {
         setup(label, &session).await;
         // A streaming export (ADR-034) masks every batch it writes.
@@ -827,8 +826,7 @@ async fn a_session_without_rules_masks_nothing() {
 async fn an_alias_does_not_unmask_a_column_where_the_engine_reports_its_origin() {
     let _turn = crate::serial::file_turn(module_path!());
     let _serial = SERIAL.lock().await;
-    let dir = std::env::temp_dir().join(format!("spelaion-masking-alias-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::support::run_dir("spelaion-masking-alias");
     let sql = "SELECT id, email AS e, salary AS pay, card_number AS c, email_verified AS email, email AS email_verified, name AS n FROM mask_customers ORDER BY id";
     for (label, session, _, _) in engines().await {
         setup(label, &session).await;
