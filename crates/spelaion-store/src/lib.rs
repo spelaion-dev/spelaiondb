@@ -314,6 +314,9 @@ const MIGRATIONS: &[&str] = &["create table audit (
     // tabs are kept under it, and the window's order is put back from this. Rows written before
     // have none and keep their order within their folder.
     "alter table open_tabs add column window_position integer check (window_position >= 0);",
+    // A kept notebook tab (ADR-087): its text is the notebook's document. Rows written before
+    // have none and are editor tabs, as they were.
+    "alter table open_tabs add column notebook integer check (notebook = 1);",
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.

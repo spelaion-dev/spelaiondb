@@ -57,6 +57,7 @@ mod mongodb;
 mod mysql_dumps;
 mod mysql_sql_mode_checks;
 mod neo4j;
+mod notebooks;
 mod object_actions;
 mod object_details;
 mod open;

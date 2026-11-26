@@ -541,6 +541,21 @@
   was kept under. History and saved queries list every open folder's and the personal ones
   (`history_page`, `snippet_page` and the rest take the open folders' keys; each entry has its
   `workspace`).
+  `notebook/` (ADR-087, SDB-36) reads and writes SQL notebooks: `format.rs` is the file format
+  (a front matter block, `sql cell=<name>` fences, `<!-- cell -->` between two Markdown cells)
+  and its round trip, which the tests hold (`write(parse(write(x))) == write(x)`); files go
+  through `sql_file.rs`'s rules. `references.rs` expands a cell's `{{name}}` references into
+  CTEs of the referenced cells' SQL, found with the dialect's `code_ranges`; a referenced cell
+  must be one statement that `classify_read_only` reads as a query, so a reference never
+  repeats a write; the expanded statement is what `check_run` and the history see. Never run a
+  cell any other way. `markdown.rs` reads Markdown cells into blocks that the page and
+  `html.rs`'s export draw, never as HTML (raw HTML stays text, links are not followed); its
+  readers are bounded (depth, a cell's size, searches for closing marks) and a change keeps the
+  `deep_or_huge_input_stays_bounded` test. `html.rs` writes the export with every text escaped,
+  a no-script policy, at most `MAX_EXPORT_ROWS` per result from the stored (masked) results,
+  and a chart only as a `data:` image that passed `chart::is_plain_svg`. Results are never
+  written into a notebook file, and a kept notebook tab (`open_tabs.notebook`) holds its
+  document as text only. Tests: the modules' own and `tests/notebooks.rs` (every engine).
   `session_setup.rs` (ADR-037) applies a connection's `[session]` table every time a session
   opens (isolation level, default schema, setup statements), from `open_connection`; on a
   read-only connection, a Production type and sessions that only read

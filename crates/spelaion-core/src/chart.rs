@@ -743,6 +743,17 @@ pub enum ChartImageFormat {
     Svg,
 }
 
+/// Whether `data` is an SVG document with no script and no embedded HTML: what the app's charts
+/// draw, and all that is written to a file or embedded in a notebook's HTML export (ADR-040,
+/// ADR-087).
+pub(crate) fn is_plain_svg(data: &str) -> bool {
+    let text = data.trim_start_matches('\u{feff}').trim_start();
+    let starts = text.starts_with("<svg") || text.starts_with("<?xml");
+    let lower = text.to_ascii_lowercase();
+    let active = lower.contains("<script") || lower.contains("<foreignobject");
+    starts && !active && lower.contains("<svg") && text.trim_end().ends_with("</svg>")
+}
+
 /// Writes a chart image the UI drew to `path`, replacing the file whole: an SVG as its text,
 /// a PNG from base64 (optionally a `data:image/png;base64,` URL). Anything that is not such an
 /// image is refused, so this never writes arbitrary bytes; an SVG with a script or embedded HTML
@@ -754,12 +765,7 @@ pub fn save_chart_image(
 ) -> Result<(), ChartError> {
     let bytes = match format {
         ChartImageFormat::Svg => {
-            let text = data.trim_start_matches('\u{feff}').trim_start();
-            let starts = text.starts_with("<svg") || text.starts_with("<?xml");
-            let lower = text.to_ascii_lowercase();
-            let active = lower.contains("<script") || lower.contains("<foreignobject");
-            if !starts || active || !lower.contains("<svg") || !text.trim_end().ends_with("</svg>")
-            {
+            if !is_plain_svg(data) {
                 return Err(ChartError::NotAnImage("SVG"));
             }
             data.as_bytes().to_vec()

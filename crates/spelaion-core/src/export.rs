@@ -1677,7 +1677,7 @@ fn markdown_cell(text: &str) -> String {
         .replace(['\n', '\r'], "<br>")
 }
 
-fn is_numeric(logical: LogicalType) -> bool {
+pub(crate) fn is_numeric(logical: LogicalType) -> bool {
     match logical {
         LogicalType::Int | LogicalType::Float | LogicalType::Decimal => true,
         LogicalType::Bool
