@@ -1174,6 +1174,12 @@ impl Session {
                     Some(_) => None,
                 };
                 let execute = async {
+                    // What the language refuses is never sent, whatever sends it: a client
+                    // command line (ADR-078) or a psql line in any run (agents', setup, a file's,
+                    // a plan's EXPLAIN), and CQL's `USE`.
+                    if let Some(error) = language.refuse_statement(text) {
+                        return Err(request_error(text, error));
+                    }
                     if let Some(data) = copy_data.clone() {
                         return crate::copy_in::load(&*connection, text, &script[data], &cancelled, &options)
                             .await
@@ -1188,12 +1194,7 @@ impl Session {
                         None => match request_of(&*language, &*connection, text).await {
                             Some(Ok(request)) => connection.execute_request(request, &options).await,
                             Some(Err(error)) => Err(error),
-                            // A language sent as text may still refuse a statement (CQL's
-                            // `USE`): nothing is sent.
-                            None => match language.refuse_statement(text) {
-                                Some(error) => Err(request_error(text, error)),
-                                None => connection.execute(text, &options).await,
-                            },
+                            None => connection.execute(text, &options).await,
                         },
                     }
                 };

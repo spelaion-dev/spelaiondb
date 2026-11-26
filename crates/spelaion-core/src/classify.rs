@@ -97,6 +97,7 @@ pub fn classify_read_only(engine: &str, sql: &str) -> Result<ReadKind, String> {
         return classify_read_only(engine, &explain);
     }
     reject_unicode_escapes(engine, sql)?;
+    reject_client_command(engine, sql)?;
     let dialect = sql_dialect(engine);
     let statements = Parser::parse_sql(dialect.as_ref(), sql)
         .map_err(|e| format!("could not parse the statement: {e}"))?;
@@ -175,6 +176,7 @@ fn read_statement(engine: &str, statement: &Statement) -> Result<ReadKind, Strin
 pub fn classify_session_setup(engine: &str, sql: &str) -> Result<(), String> {
     reject_mysql_executable_comments(engine, sql)?;
     reject_unicode_escapes(engine, sql)?;
+    reject_client_command(engine, sql)?;
     let dialect = sql_dialect(engine);
     let statements = Parser::parse_sql(dialect.as_ref(), sql)
         .map_err(|e| format!("could not parse the statement: {e}"))?;
@@ -294,6 +296,7 @@ pub fn classify_read_only_connection(engine: &str, sql: &str) -> Result<(), Stri
         );
     }
     reject_unicode_escapes(engine, sql)?;
+    reject_client_command(engine, sql)?;
     let dialect = sql_dialect(engine);
     let statements = Parser::parse_sql(dialect.as_ref(), sql)
         .map_err(|e| format!("could not parse the statement: {e}"))?;
@@ -473,6 +476,26 @@ fn setting_allowed(engine: &str, name: &ObjectName) -> bool {
         _ => return false,
     };
     !setting.is_empty() && setup_settings(engine).contains(&setting.as_str())
+}
+
+/// A client command line (ADR-078) is never run for agents (point 10): `sql` is refused when the
+/// engine's own scanner reads any of its statements as one (`@` and a letter, where a statement
+/// could begin), whatever the SQL parser would make of it. An engine without a SQL dialect has
+/// no command lines.
+pub(crate) fn reject_client_command(engine: &str, sql: &str) -> Result<(), String> {
+    let Some(dialect) = spelaion_dialect::for_engine(engine).filter(|d| d.is_sql()) else {
+        return Ok(());
+    };
+    let command = dialect
+        .split_statements(sql)
+        .iter()
+        .find_map(|span| spelaion_dialect::client_command(span.text(sql)));
+    match command {
+        Some(word) => Err(format!(
+            "@{word} is a client command line of SpelaionDB's scripts, never run for agents"
+        )),
+        None => Ok(()),
+    }
 }
 
 /// MySQL and MariaDB may execute comment bodies differently depending on server version.

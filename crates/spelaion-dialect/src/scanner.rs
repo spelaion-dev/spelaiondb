@@ -152,6 +152,26 @@ impl Iterator for SemicolonScanner<'_> {
         let code = self.i;
         while self.i < len {
             let i = self.i;
+            if !self.has_code
+                && let Some(end) = command_line(script, i)
+            {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                // A client command line (ADR-078): a statement of its own, which the session
+                // refuses wherever nothing resolves it. Its newline is white space of what
+                // follows.
+                let statement = crate::trimmed(script, i, end);
+                self.i = end;
+                self.start = end;
+                return Some(Region {
+                    kind: RegionKind::MetaLine { statement },
+                    range: i..end,
+                });
+            }
             if let Some((kind, end)) = (self.opening)(script, i) {
                 if code < i {
                     return Some(Region {
@@ -208,4 +228,29 @@ impl Iterator for SemicolonScanner<'_> {
             range: len..len,
         })
     }
+}
+
+/// Where the client command line (ADR-078) that starts at byte `i` ends: `@` and an ASCII
+/// letter, with nothing but white space before it on its line, up to its newline (not
+/// included). `None` when no command line starts there. A scanner asks only where a statement
+/// could begin (no code yet in the current statement); the line is then a statement of its own,
+/// with no strings or comments in it, which the session refuses wherever nothing resolves it.
+pub(crate) fn command_line(script: &str, i: usize) -> Option<usize> {
+    let b = script.as_bytes();
+    if b.get(i) != Some(&b'@') || !b.get(i + 1).is_some_and(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let line_start = b[..i]
+        .iter()
+        .rposition(|&c| c == b'\n')
+        .map_or(0, |p| p + 1);
+    if !script[line_start..i].chars().all(char::is_whitespace) {
+        return None;
+    }
+    Some(
+        b[i..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(b.len(), |p| i + p),
+    )
 }

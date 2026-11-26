@@ -1,6 +1,7 @@
 # ADR-078: Client commands in scripts: `@set`, `@unset` and `@echo`, then a confined `@include`; no `@export`
 
-- **Status:** Accepted (not implemented)
+- **Status:** Accepted (being implemented: command lines recognised by every SQL dialect's
+  scanner and refused wherever nothing resolves them, SDB-466)
 - **Date:** 2026-11-24
 - **Builds on:** ADR-022 (repository trust), ADR-029 (the guard's questions), ADR-035 (script
   runs), ADR-051 (masking), ADR-053 (read-only connections), ADR-065 (one lexical scanner per

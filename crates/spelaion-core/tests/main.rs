@@ -24,6 +24,7 @@ mod bulk_edits;
 mod cassandra;
 mod cleartext;
 mod clickhouse;
+mod client_commands;
 mod column_stats;
 mod conn_test;
 mod copy_engines;

@@ -75,7 +75,13 @@
   typed password goes with it only to the same login on the same route (`carried_password`);
   otherwise the tab connects as a new one does. Nothing is run again (`tests/session_source.rs`).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
-  there needs tests that try to get around them. `tests/properties.rs` (SDB-156) generates
+  there needs tests that try to get around them. A client command line (ADR-078, SDB-466) is
+  refused wherever nothing resolves it: `classify.rs`'s `reject_client_command` (agents' reads,
+  the read-only connection barrier, session setup's check) and `write.rs`'s `check_write` refuse
+  a statement the engine's scanner reads as one, whatever the SQL parser would make of it, and
+  the session refuses it (the dialect's `refuse_statement`) before every send path: a plan's
+  EXPLAIN, COPY and a request included (`session.rs`). Only the editor's run will resolve
+  commands (SDB-467). `tests/properties.rs` (SDB-156) generates
   them: a write or a refused function hidden in every place it can go is never a read, and a
   destructive statement never passes the guard unasked; it also checks the `:name` scanner
   (`params.rs`: only placeholders in code are found and bound, a value stays in its literal),
