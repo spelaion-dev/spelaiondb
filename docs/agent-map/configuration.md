@@ -23,7 +23,8 @@
   hidden characters (`load.rs`), and like every key part of what a trusted repository pins.
   `definition.rs` (SDB-426) is what a connection's session is opened from, without secrets
   (its file, its network profile, `user.toml`, the connection types, the repository and its
-  trust), compared before a session is made from another one; nothing secret is read for it.
+  trust, and for a connection through a network profile that is not Kubernetes, the team's
+  `known_hosts` its tunnel is checked against, SDB-527), compared before a session is made from another one; nothing secret is read for it.
   With several folders open, `Config::connection_definition_open` (each open folder's `Config`
   and whether it is trusted) makes a personal connection's definition cover what it reads of
   every folder (its trust, its types, its `known_hosts`, and the profile it names wherever it

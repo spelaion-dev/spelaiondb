@@ -492,3 +492,53 @@ fn several_folders_a_personal_connections_definition_covers_every_open_folder() 
     assert_ne!(definition(&mine, false), after_profile);
     assert_eq!(definition(&orders, false), opened_orders);
 }
+
+/// SDB-527: with one folder open, a connection through a network profile is opened from its
+/// folder's `known_hosts` too, so a team change to it makes the next session resolve the saved
+/// configuration (and go through the review) instead of reusing one opened before. A connection
+/// without a profile does not read the file and its definition stays the same.
+#[test]
+fn one_folder_a_tunnelled_connections_definition_holds_its_folders_known_hosts() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let fx = Folders::new("known-hosts-definition");
+    fx.write(
+        "a/.spelaion/tunnels/bastion.toml",
+        &bastion("bastion.internal"),
+    );
+    fx.write("a/.spelaion/connections/orders.toml", &through("bastion"));
+    fx.write("a/.spelaion/connections/plain.toml", &sqlite("dev"));
+    fx.write("user/connections/mine.toml", &through("bastion"));
+    fx.write("user/connections/local.toml", &sqlite("dev"));
+    let definitions = || {
+        let a = fx.load("a");
+        assert!(a.problems.is_empty(), "{:?}", a.problems);
+        [
+            ws("orders"),
+            personal("mine"),
+            ws("plain"),
+            personal("local"),
+        ]
+        .map(|id| a.connection_definition(&id, true).unwrap())
+    };
+
+    // No file yet; the team adds one: the tunnelled connections' definitions change.
+    let before = definitions();
+    fx.write("a/.spelaion/known_hosts", &hosts(KEY));
+    let added = definitions();
+    assert_ne!(before[0], added[0], "a folder's tunnelled connection");
+    assert_ne!(
+        before[1], added[1],
+        "a personal connection through the folder's profile"
+    );
+    assert_eq!(before[2], added[2], "no tunnel: unchanged");
+    assert_eq!(before[3], added[3], "no tunnel: unchanged");
+
+    // The same file read again is the same definition; a server's new key changes it.
+    assert_eq!(added, definitions());
+    fx.write("a/.spelaion/known_hosts", &hosts(OTHER_KEY));
+    let changed = definitions();
+    assert_ne!(added[0], changed[0]);
+    assert_ne!(added[1], changed[1]);
+    assert_eq!(added[2], changed[2]);
+    assert_eq!(added[3], changed[3]);
+}
