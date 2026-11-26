@@ -169,6 +169,10 @@ fn no_value_changes_how_many_statements_a_script_has() {
                     Err(VariableError::Command(reason)) => {
                         panic!("{engine}: {script:?} read as a command: {reason}")
                     }
+                    // Nor does it include a file.
+                    Err(e @ (VariableError::Include(_) | VariableError::InFile { .. })) => {
+                        panic!("{engine}: {script:?} included a file: {e}")
+                    }
                 }
             }
         }
@@ -399,7 +403,7 @@ fn a_set_value_never_adds_a_statement_nor_hides_one_from_the_guard() {
         let d = dialect(engine);
         for value in SET_ATTEMPTS {
             let script = format!("@set v = {value}\nselect a from ${{v}};\nselect 2");
-            match spelaion_core::resolve_script(d.as_ref(), &script, &values(&[])) {
+            match spelaion_core::resolve_script(d.as_ref(), &script, &values(&[]), None) {
                 Ok(resolved) => {
                     let statements = d.split_statements(&resolved.text);
                     assert_eq!(
@@ -428,7 +432,7 @@ fn set_and_unset_change_values_from_their_line_on_for_this_run_only() {
         let tab = values(&[("t", "orders")]);
         let before = tab.clone();
         let script = "select * from ${t};\n@set t = customers\nselect * from ${t};\n@echo done\n@unset t\nselect 1";
-        let resolved = spelaion_core::resolve_script(d.as_ref(), script, &tab).unwrap();
+        let resolved = spelaion_core::resolve_script(d.as_ref(), script, &tab, None).unwrap();
         let statements: Vec<&str> = d
             .split_statements(&resolved.text)
             .iter()
@@ -447,7 +451,7 @@ fn set_and_unset_change_values_from_their_line_on_for_this_run_only() {
             resolved.echoes,
             [spelaion_core::ScriptEcho {
                 before: 2,
-                text: "done".into()
+                line: spelaion_core::EchoLine::Echo("done".into())
             }],
             "{engine}"
         );
@@ -456,20 +460,24 @@ fn set_and_unset_change_values_from_their_line_on_for_this_run_only() {
         // After `@unset`, a `${t}` has no value: refused before anything runs, never asked for.
         let unset = "@unset t\nselect * from ${t}";
         assert_eq!(
-            spelaion_core::resolve_script(d.as_ref(), unset, &tab),
+            spelaion_core::resolve_script(d.as_ref(), unset, &tab, None),
             Err(VariableError::Missing("t".into())),
             "{engine}"
         );
-        assert!(spelaion_core::missing_variables(d.as_ref(), unset, &tab).is_empty());
+        assert!(spelaion_core::missing_variables(d.as_ref(), unset, &tab, None).is_empty());
         assert!(
-            spelaion_core::missing_variables(d.as_ref(), "@set u = 1\nselect ${u}, ${w}", &tab)
-                == ["w"]
+            spelaion_core::missing_variables(
+                d.as_ref(),
+                "@set u = 1\nselect ${u}, ${w}",
+                &tab,
+                None
+            ) == ["w"]
         );
         // A command written otherwise than it reads is refused, saying how it is written.
         for bad in ["@set = 1", "@set 1x = 2", "@unset", "@unset a b"] {
             assert!(
                 matches!(
-                    spelaion_core::resolve_script(d.as_ref(), bad, &tab),
+                    spelaion_core::resolve_script(d.as_ref(), bad, &tab, None),
                     Err(VariableError::Command(_))
                 ),
                 "{engine}: {bad:?}"
@@ -477,7 +485,7 @@ fn set_and_unset_change_values_from_their_line_on_for_this_run_only() {
         }
         // `@include`, `@export` and an unknown `@word` are left for the session to refuse.
         let left = "@export {}\nselect 1";
-        let resolved = spelaion_core::resolve_script(d.as_ref(), left, &tab).unwrap();
+        let resolved = spelaion_core::resolve_script(d.as_ref(), left, &tab, None).unwrap();
         assert!(resolved.text.contains("@export"), "{engine}");
     }
 }
@@ -495,14 +503,16 @@ fn a_read_only_connection_runs_commands_and_reads_and_refuses_a_write() {
     ] {
         let d = dialect(engine);
         let reads = "@set t = items\n@echo reading\nselect * from ${t};\nselect 1";
-        let resolved = spelaion_core::resolve_script(d.as_ref(), reads, &values(&[])).unwrap();
+        let resolved =
+            spelaion_core::resolve_script(d.as_ref(), reads, &values(&[]), None).unwrap();
         assert!(
             spelaion_core::check_read_only(d.as_ref(), &resolved.text).is_ok(),
             "{engine}: {:?}",
             resolved.text
         );
         let write = "@set t = items\nselect * from ${t};\ndelete from ${t} where a = 1";
-        let resolved = spelaion_core::resolve_script(d.as_ref(), write, &values(&[])).unwrap();
+        let resolved =
+            spelaion_core::resolve_script(d.as_ref(), write, &values(&[]), None).unwrap();
         assert!(
             spelaion_core::check_read_only(d.as_ref(), &resolved.text).is_err(),
             "{engine}: a write passed"

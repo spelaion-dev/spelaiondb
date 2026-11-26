@@ -39,6 +39,7 @@ mod health;
 mod history;
 mod idle_transaction;
 mod import;
+mod include;
 pub mod instance;
 mod job;
 pub mod kube;
@@ -63,6 +64,7 @@ mod progress;
 mod query_page;
 mod readonly;
 mod references;
+mod resolve;
 #[cfg(test)]
 mod result_end_tests;
 mod result_tabs;
@@ -212,6 +214,10 @@ pub use import::{
     SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import, preview,
     run_import, suggested_table, text_format,
 };
+pub use include::{
+    IncludeError, IncludedFile, MAX_INCLUDE_DEPTH, MAX_INCLUDED_BYTES, MAX_INCLUDED_FILES,
+    PathRefusal, ScriptTree, check_included_files,
+};
 pub use job::{CancelRefused, JobCancel, JobEnd, JobHandle, JobRegistry, Refusal, TablesStopped};
 pub use load_rows::{
     LOAD_PAGE_ROWS, LoadCancel, LoadEstimate, LoadOutcome, LoadedRows, MAX_LOADED_ROWS,
@@ -267,6 +273,9 @@ pub use references::{
     FollowError, KeyDirection, KeyRef, KeyRows, KeyTarget, MAX_PREVIEW_ROWS, PREVIEW_CHARS,
     ReferenceOutcome, RowReference, TableKey, check_key_table, find_key, follow, key_rows,
     query_key_table, read_references, reference_targets, table_keys,
+};
+pub use resolve::{
+    EchoLine, ResolvedScript, ScriptEcho, StatementOrigin, missing_variables, resolve_script,
 };
 pub use result_tabs::{
     DEFAULT_RESULT_TABS, MAX_RESULT_NAME, MAX_RESULT_TABS, Placed, Placement, ResultTab,
@@ -354,9 +363,8 @@ pub use value_view::{
     statement_for_display, view_cell,
 };
 pub use variables::{
-    MAX_VARIABLE_NAME, MAX_VARIABLE_VALUE, ResolvedScript, ScriptEcho, VariableError,
-    is_variable_name, is_variable_value, missing_variables, resolve_script, script_variables,
-    substitute_variables,
+    MAX_VARIABLE_NAME, MAX_VARIABLE_VALUE, VariableError, is_variable_name, is_variable_value,
+    script_variables, substitute_variables,
 };
 pub use write::{
     AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,

@@ -1,7 +1,7 @@
 # ADR-036: SQL files in editor tabs, and open tabs that survive a restart
 
 - **Status:** Accepted (implemented; amended by ADR-075: with several folders open, a tab belongs
-  to the folder of its connection; and by ADR-078, not implemented yet: a script's `@include`
+  to the folder of its connection; and by ADR-078: a script's `@include`
   line may name a `.sql` file inside the script's own folder tree, which the core reads with
   point 1's rules although the user did not pick it; and by ADR-087: an open notebook is kept
   like a file tab, with its document as text)

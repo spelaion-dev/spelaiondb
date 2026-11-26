@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import { startJob, type Job } from "../jobs";
-import type { ResolvedScriptItem, ScriptEchoItem } from "../bindings";
+import type { IncludedFileItem, ResolvedScriptItem, ScriptEchoItem, StatementOriginItem } from "../bindings";
 import type { ExplorerDatabaseItem_Serialize as ExplorerDatabaseItem, KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
@@ -193,7 +193,9 @@ export function EditorTab({ tab }: { tab: Tab }) {
    *  core refuses (a value that would change how the statement is split or read). */
   async function withVariables(text: string): Promise<ResolvedScriptItem | null> {
     let values = tabNow()?.variables ?? {};
-    const used = await call(commands.scriptVariables(tab.id, text, values));
+    // A file tab's `@include` paths are relative to its file; a console has none (ADR-078).
+    const file = tabNow()?.file?.path ?? null;
+    const used = await call(commands.scriptVariables(tab.id, text, values, file));
     if (used.missing.length > 0) {
       const asked = await useDialogs.getState().askParams(used.missing, {}, true);
       if (!asked) return null;
@@ -203,7 +205,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // The core resolves the script's `@set`, `@unset` and `@echo` lines too (ADR-078): what it
     // returns is what runs and what the guard reads. A script's `@set` never changes the tab's
     // values.
-    return call(commands.resolveScript(tab.id, text, values));
+    return call(commands.resolveScript(tab.id, text, values, file));
   }
 
   /** `text` with its `:name` parameters written in as literals by the core. Each parameter's
@@ -1437,6 +1439,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // in as literals: the core does both, and everything after reads the text that runs.
     let text: string;
     let echoes: ScriptEchoItem[];
+    let origins: StatementOriginItem[];
+    let files: IncludedFileItem[];
     try {
       const written = await withVariables(request.text);
       if (written === null) return;
@@ -1444,6 +1448,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
       if (bound === null) return;
       text = bound;
       echoes = written.echoes;
+      origins = written.origins;
+      files = written.files;
     } catch (e) {
       const detail = message(e);
       updateTab(tab.id, { run: failedRun(detail, { key: "messages.runFailed", values: { detail } }) });
@@ -1457,10 +1463,15 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const risky = await call(commands.scriptRisks(tab.id, sent.text)).catch(() => []);
     let confirmed = false;
     if (risky.length > 0) {
-      const statements = risky.map((r) => ({
-        sql: sent.text.slice(byteToIndex(sent.text, r.start), byteToIndex(sent.text, r.end)),
-        risk: r.risk,
-      }));
+      // A statement of an included file is named with its file and line (ADR-078).
+      const statements = risky.map((r) => {
+        const place = placeOf(origins[r.index]);
+        return {
+          sql: sent.text.slice(byteToIndex(sent.text, r.start), byteToIndex(sent.text, r.end)),
+          risk: r.risk,
+          ...(place ? { place } : {}),
+        };
+      });
       if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
       confirmed = true;
     }
@@ -1477,11 +1488,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
       if (event.kind === "runStarted" && event.pageSort != null) {
         queryPage = { sql: sent.text, pageSize, ...(event.pageSort.length ? { sort: event.pageSort } : {}) };
       }
-      handle(event, sent, started.startedAt, queryPage, failures, started.run);
+      handle(event, sent, started.startedAt, queryPage, failures, started.run, origins);
       if (event.kind === "scriptFinished") finishEvent?.();
     };
-    // The script's `@echo` lines, shown when the run reaches each (ADR-078).
-    const options = { ...runOptionsOf(tab), echoes };
+    // The script's `@echo` lines and included files' names, shown when the run reaches each,
+    // and the files it included, which the core checks are still what it read (ADR-078).
+    const options = { ...runOptionsOf(tab), echoes, files };
     try {
       if (tab.table) await call(commands.runScript(tab.id, sent.text, confirmed, options, placement, channel));
       else await call(commands.runQueryPage(tab.id, sent.text, pageSize, sort, confirmed, options, placement, channel));
@@ -1565,7 +1577,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
   }
   explainAction.current = explainPressed;
 
-  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number; sort?: SortState[] } | null, failures: Map<number, string>, runId: number) {
+  /** "sub/a.sql, line 3" for a statement of an included file; `null` for the tab's own. */
+  function placeOf(origin: StatementOriginItem | undefined): string | null {
+    return origin?.file ? t("messages.inFile", { file: origin.file, line: origin.line }) : null;
+  }
+
+  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number; sort?: SortState[] } | null, failures: Map<number, string>, runId: number, origins: StatementOriginItem[] = []) {
     switch (event.kind) {
       case "runStarted":
         // What the core freed as the run started: every result that was not pinned, or none.
@@ -1604,6 +1621,10 @@ export function EditorTab({ tab }: { tab: Tab }) {
         // A script's `@echo` line: its own text, as written (ADR-078).
         updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "info", text: event.text }] }));
         break;
+      case "included":
+        // An included file starts (ADR-078).
+        updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "info", text: "", translation: { key: "messages.included", values: { file: event.file } } }] }));
+        break;
       case "historyWarning":
         updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: event.message, translation: { key: "messages.historySaveFailed", values: { detail: event.message } } }] }));
         break;
@@ -1622,12 +1643,15 @@ export function EditorTab({ tab }: { tab: Tab }) {
         const offset =
           event.scriptOffset == null || request.bound ? null : request.from + byteToIndex(request.text, event.scriptOffset);
         const diagnostic = { message: event.message, detail: event.detail, hint: event.hint, code: event.code, cancelled: event.end === "cancelled" };
-        failures.set(event.index, event.message);
+        // A statement of an included file says which file and line it came from (ADR-078).
+        const place = placeOf(origins[event.index]);
+        const reason = place ? `${place}: ${event.message}` : event.message;
+        failures.set(event.index, reason);
         const key = statementEndKey(event.end);
         updateRun(tab.id, (r) => ({
           ...r,
           error: { message: event.message, offset, diagnostic },
-          messages: [...r.messages, { kind: "error", text: event.message, translation: { key, values: { index: event.index + 1, reason: event.message } } }],
+          messages: [...r.messages, { kind: "error", text: reason, translation: { key, values: { index: event.index + 1, reason } } }],
         }));
         break;
       }

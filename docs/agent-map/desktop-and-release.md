@@ -325,11 +325,18 @@
   "untrusted" outcome (`ConnectOutcome`, `ConnectionTestOutcome`, `EditorAccessOutcome`) names
   the folder it is about (`root`), which the page trusts: not always the shown one.
 - The editor's run reads a script's variables and client commands through the core before
-  anything else (ADR-078, SDB-467): `EditorTab.tsx`'s `withVariables` asks `script_variables`
-  which values are missing (`missing_variables`) and then `resolve_script`, whose text is what
-  runs and what the guard (`script_risks`, then `check_run`) reads; its `@echo` lines travel in
-  the run's options (`RunOptionsItem::echoes`) and come back as `ScriptEvent::Echo` when the run
-  reaches each (`start_script`, through `spelaion_core::with_echoes`). The page never resolves a
+  anything else (ADR-078, SDB-467 and SDB-468): `EditorTab.tsx`'s `withVariables` asks
+  `script_variables` which values are missing (`missing_variables`) and then `resolve_script`,
+  whose text is what runs and what the guard (`script_risks`, then `check_run`) reads. Both take
+  the tab's file (`tab.file.path`, `null` for a console); `script_tree` (`lib.rs`) makes its
+  `ScriptTree` from the open folders (`OpenFolders::paths`), and the reading runs on a blocking
+  thread because `@include` reads files. Its `@echo` lines and included files' names travel in
+  the run's options (`RunOptionsItem::echoes`) and come back as `ScriptEvent::Echo` and
+  `ScriptEvent::Included` when the run reaches each (`start_script`, through
+  `spelaion_core::with_echoes`); the files it read travel as `RunOptionsItem::files`, and
+  `start_script` refuses the run with `check_included_files` when one changed after the guard's
+  question. The statements' origins stay in the page for the run: the risk dialog and a failed
+  statement's message name an included statement's file and line. The page never resolves a
   command, and a command line it sent unresolved is refused by the session (SDB-466). Only the
   editor's runs do this: table data, notebook cells, plans and every other run send no echoes and
   resolve nothing.

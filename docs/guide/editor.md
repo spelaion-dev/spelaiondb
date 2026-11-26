@@ -42,6 +42,8 @@ could begin:
 - `@unset name` removes it: a later `${name}` stops the run before anything is sent.
 - `@echo text` writes the text to the Messages tab when the run reaches it. It is not a
   statement and the summary does not count it.
+- `@include path` puts the statements of another `.sql` file in the script at that line, so
+  shared scripts can be reused without pasting them. See below.
 
 They start from the tab's values (over the connection's) and never change them: the variables
 panel is the same after the run. Running a selection or the statement under the cursor reads only
@@ -50,6 +52,26 @@ the history: a variable is not for passwords. `@export` is not supported (run th
 Export), and any other `@word` line is refused: a line starting with `@` and a letter is never
 sent to the server as SQL. Only the editor's runs read client commands: agents, "Run SQL file",
 exports and plans refuse such a line.
+
+`@include` works only in a tab that shows a `.sql` file: a console has no folder for the path to
+be relative to. The path is relative to the file, written with `/` (`@include ../shared/setup.sql`),
+and must name a `.sql` file inside the script's folder tree: the open folder when the file is in
+one, otherwise the file's own folder. Paths in an included file are relative to that file, inside
+the same tree. An absolute path, a drive letter, a `\`, a `~`, a `:` or a `${…}` in the path is
+refused, and so is a link or a `..` that leads out of the tree.
+
+- Each file is read once, before anything runs: a missing or unreadable file stops the run before
+  its first statement. If an included file changes after you answered the confirmation and before
+  the run starts, the run is refused: run it again.
+- Each file is a script of its own: a string it leaves open or a `DELIMITER` it sets stops at the
+  end of the file. A `@set` in it stays in force for the rest of the run.
+- The included statements are checked like typed ones: the confirmation names the file and line
+  of each statement it asks about, a read-only connection refuses the script if one of them
+  writes, and an error names the file and line it came from. The Messages tab names each file as
+  the run reaches it.
+- At most 8 levels of `@include`, 100 included files and 64 MiB of included text in one run. A
+  file that includes itself, directly or not, is refused; including the same file twice in a row
+  is fine.
 
 Before anything runs, the core looks for statements that are easy to regret: `DELETE` or
 `UPDATE` without `WHERE` (also inside a `WITH`), `DROP` and `TRUNCATE`, and, on connections

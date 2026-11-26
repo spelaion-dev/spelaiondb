@@ -100,7 +100,8 @@ export interface ScriptErrorRequest {
 /** Statements the core wants confirmed before they run. */
 export interface RiskRequest {
   connection: string;
-  statements: { sql: string; risk: RiskKind }[];
+  /** `place`: the included file and line a statement comes from (ADR-078). */
+  statements: { sql: string; risk: RiskKind; place?: string }[];
   resolve(run: boolean): void;
 }
 

@@ -16,6 +16,9 @@
 /crates/spelaion-core/src/import/source.rs             @petilolz @frglez
 /crates/spelaion-core/src/import/xlsx.rs               @petilolz @frglez
 
+# Which files a script's `@include` may read, and how much (ADR-078, point 7).
+/crates/spelaion-core/src/include.rs            @petilolz @frglez
+
 # Column masking (ADR-051).
 /crates/spelaion-core/src/masking.rs            @petilolz @frglez
 /crates/spelaion-config/src/masking.rs          @petilolz @frglez

@@ -1031,9 +1031,11 @@ export const commands = {
 	bindParams: (session: string, sql: string, values: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("bind_params", { session, sql, values })),
 	/**
 	 *  The `${name}` variables of a script's statements, in order, and which of them have no
-	 *  value yet (neither the tab's nor its connection's), so the UI can ask for those.
+	 *  value yet (neither the tab's nor its connection's, nor an earlier `@set`'s, in the script or
+	 *  a file it includes), so the UI can ask for those. `file`: the tab's `.sql` file, `null` for
+	 *  a console.
 	 */
-	scriptVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<ScriptVariablesItem, string>(__TAURI_INVOKE("script_variables", { session, sql, tab })),
+	scriptVariables: (session: string, sql: string, tab: { [key in string]: string }, file: string | null) => typedError<ScriptVariablesItem, string>(__TAURI_INVOKE("script_variables", { session, sql, tab, file })),
 	/**
 	 *  The script with its variables' values written in, by the core, before anything else reads
 	 *  it: the guard, the read-only checks and the run are given this text. Refused when a value
@@ -1043,11 +1045,14 @@ export const commands = {
 	/**
 	 *  The script with its client commands resolved and its variables' values written in, by the
 	 *  core, before anything else reads it (ADR-078): `@set` and `@unset` change the values from
-	 *  their line on for this run only (never the tab's or the connection's), `@echo` lines come
-	 *  back to be shown when the run reaches them. The run sends the text, and its guard and
-	 *  read-only check read it. Refused as `substitute_variables` refuses a value.
+	 *  their line on for this run only (never the tab's or the connection's), `@echo` lines and
+	 *  included files' names come back to be shown when the run reaches them, and `@include` puts
+	 *  a `.sql` file of the tab's folder tree in place, read here once. The run sends the text, and
+	 *  its guard and read-only check read it. `file`: the tab's `.sql` file, `null` for a console,
+	 *  which refuses `@include`. Refused as `substitute_variables` refuses a value, and for what
+	 *  `@include` refuses.
 	 */
-	resolveScript: (session: string, sql: string, tab: { [key in string]: string }) => typedError<ResolvedScriptItem, string>(__TAURI_INVOKE("resolve_script", { session, sql, tab })),
+	resolveScript: (session: string, sql: string, tab: { [key in string]: string }, file: string | null) => typedError<ResolvedScriptItem_Serialize, string>(__TAURI_INVOKE("resolve_script", { session, sql, tab, file })),
 	/**  A connection's variables, by name (SDB-383): local values, kept in the local store. */
 	connectionVariables: (connection: ConnectionKeyItem_Deserialize) => typedError<VariableItem[], string>(__TAURI_INVOKE("connection_variables", { connection })),
 	/**
@@ -3400,6 +3405,13 @@ export type DuplicatedItem = {
 	passwordCopied: boolean,
 };
 
+/**  What the Messages tab shows when the run reaches it (ADR-078). */
+export type EchoLineItem = 
+/**  An `@echo` line's text, as written. */
+{ kind: "echo"; text: string } | 
+/**  An included file starts: its name. */
+{ kind: "included"; file: string };
+
 /**  A column as a structure form shows it (ADR-047): every field is SQL as the engine writes it. */
 export type EditableColumnItem = EditableColumnItem_Serialize | EditableColumnItem_Deserialize;
 
@@ -4552,6 +4564,16 @@ export type ImportTarget_Serialize = {
 	folder: string,
 	/**  Keep the client's folders under it. */
 	keepClientFolders: boolean,
+};
+
+/**  A file a run included (ADR-078, point 7). */
+export type IncludedFileItem = {
+	/**  Canonical. */
+	path: string,
+	/**  Relative to the script's folder tree, with `/`. */
+	name: string,
+	/**  SHA-256 of what was read. */
+	hash: string,
 };
 
 export type IndexCleanupItem = "auto" | "on" | "off";
@@ -6732,11 +6754,33 @@ export type RerunCheckItem_Serialize = {
 
 /**
  *  A script the editor runs, with its client commands resolved by the core (ADR-078): the text
- *  the run sends, which its guard and read-only check read, and its `@echo` lines.
+ *  the run sends, which its guard and read-only check read, its `@echo` lines and included
+ *  files' names, where each statement comes from, and the files it read.
  */
-export type ResolvedScriptItem = {
+export type ResolvedScriptItem = ResolvedScriptItem_Serialize | ResolvedScriptItem_Deserialize;
+
+/**
+ *  A script the editor runs, with its client commands resolved by the core (ADR-078): the text
+ *  the run sends, which its guard and read-only check read, its `@echo` lines and included
+ *  files' names, where each statement comes from, and the files it read.
+ */
+export type ResolvedScriptItem_Deserialize = {
 	text: string,
 	echoes: ScriptEchoItem[],
+	origins: StatementOriginItem_Deserialize[],
+	files: IncludedFileItem[],
+};
+
+/**
+ *  A script the editor runs, with its client commands resolved by the core (ADR-078): the text
+ *  the run sends, which its guard and read-only check read, its `@echo` lines and included
+ *  files' names, where each statement comes from, and the files it read.
+ */
+export type ResolvedScriptItem_Serialize = {
+	text: string,
+	echoes: ScriptEchoItem[],
+	origins: StatementOriginItem_Serialize[],
+	files: IncludedFileItem[],
 };
 
 /**  A finished restore: the bytes of the file fed to the tool and how long it took. */
@@ -6974,10 +7018,15 @@ export type RunOptionsItem_Deserialize = {
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds?: number | null,
 	/**
-	 *  The run's `@echo` lines (ADR-078), as `resolve_script` gave them: none for any other
-	 *  run. Only shown, never a statement.
+	 *  The run's `@echo` lines and included files' names (ADR-078), as `resolve_script` gave
+	 *  them: none for any other run. Only shown, never a statement.
 	 */
 	echoes?: ScriptEchoItem[],
+	/**
+	 *  The files the run included, with the hash of what was read: the run is refused when one
+	 *  of them changed since (ADR-078, point 4). None for any other run.
+	 */
+	files?: IncludedFileItem[],
 };
 
 /**  How one run goes: its error mode and, if set, its own statement timeout. */
@@ -6986,10 +7035,15 @@ export type RunOptionsItem_Serialize = {
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds: number | null,
 	/**
-	 *  The run's `@echo` lines (ADR-078), as `resolve_script` gave them: none for any other
-	 *  run. Only shown, never a statement.
+	 *  The run's `@echo` lines and included files' names (ADR-078), as `resolve_script` gave
+	 *  them: none for any other run. Only shown, never a statement.
 	 */
 	echoes: ScriptEchoItem[],
+	/**
+	 *  The files the run included, with the hash of what was read: the run is refused when one
+	 *  of them changed since (ADR-078, point 4). None for any other run.
+	 */
+	files: IncludedFileItem[],
 };
 
 /**
@@ -7192,14 +7246,14 @@ export type ScreenFailureItem = {
 	stack: string,
 };
 
-/**  A line `@echo` writes to the Messages tab when the run reaches it (ADR-078). */
+/**  A line for the Messages tab, by the statement it comes before. */
 export type ScriptEchoItem = {
 	/**
 	 *  The statement of the resolved script it comes before (the number of statements when it
 	 *  comes after the last one).
 	 */
 	before: number,
-	text: string,
+	line: EchoLineItem,
 };
 
 export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
@@ -7241,7 +7295,12 @@ end: StatementEndItem } |
  *  A script's `@echo` line, when the run reached it (ADR-078): its text, as written. Not a
  *  statement.
  */
-{ kind: "echo"; text: string };
+{ kind: "echo"; text: string } | 
+/**
+ *  An included file starts (ADR-078, point 7): its name, relative to the script's folder
+ *  tree with `/`.
+ */
+{ kind: "included"; file: string };
 
 export type ScriptEvent_Serialize = 
 /**
@@ -7280,7 +7339,12 @@ end: StatementEndItem } |
  *  A script's `@echo` line, when the run reached it (ADR-078): its text, as written. Not a
  *  statement.
  */
-{ kind: "echo"; text: string };
+{ kind: "echo"; text: string } | 
+/**
+ *  An included file starts (ADR-078, point 7): its name, relative to the script's folder
+ *  tree with `/`.
+ */
+{ kind: "included"; file: string };
 
 /**  How scripts run from the editor, shared by every workspace. */
 export type ScriptPreferencesItem = {
@@ -7734,6 +7798,25 @@ export type StatStateItem = { kind: "done" } |
 export type StatementEndItem = "failed" | "cancelled" | 
 /**  It ran longer than the run's statement timeout. */
 "timedOut";
+
+/**  Where a statement of a resolved script was written. */
+export type StatementOriginItem = StatementOriginItem_Serialize | StatementOriginItem_Deserialize;
+
+/**  Where a statement of a resolved script was written. */
+export type StatementOriginItem_Deserialize = {
+	/**  The included file, relative to the script's tree; `null` for the tab's own text. */
+	file?: string | null,
+	/**  Its first line in that text, from 1. */
+	line: number,
+};
+
+/**  Where a statement of a resolved script was written. */
+export type StatementOriginItem_Serialize = {
+	/**  The included file, relative to the script's tree; `null` for the tab's own text. */
+	file: string | null,
+	/**  Its first line in that text, from 1. */
+	line: number,
+};
 
 /**
  *  What Ctrl+Enter runs: the text the core wrote for the statement under the cursor, and that

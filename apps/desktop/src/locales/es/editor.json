@@ -275,6 +275,8 @@
     "statementRows_one": "Sentencia {{index}}: {{formattedCount}} fila ({{duration}} ms: {{execution}} ms de ejecución, {{fetch}} ms de lectura)",
     "statementRows_other": "Sentencia {{index}}: {{formattedCount}} filas ({{duration}} ms: {{execution}} ms de ejecución, {{fetch}} ms de lectura)",
     "statementFailed": "Sentencia {{index}}: {{reason}}",
+    "included": "Ejecutando {{file}}",
+    "inFile": "{{file}}, línea {{line}}",
     "statementCancelled": "Sentencia {{index}}: Consulta cancelada",
     "cancelled": "Consulta cancelada",
     "detail": "Detalle: {{detail}}",

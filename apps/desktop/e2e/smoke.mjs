@@ -7020,6 +7020,36 @@ try {
     await page.keyboard.press("Control+w");
   }
 
+  step("@include (ADR-078): a file tab runs another file of its folder in place, named in the Messages tab; a console refuses it");
+  {
+    const includeDir = join(userDir, "include files");
+    mkdirSync(join(includeDir, "parts"), { recursive: true });
+    const mainPath = join(includeDir, "main.sql");
+    writeFileSync(join(includeDir, "parts", "count.sql"), "@echo counting orders\nselect count(*) as included_n from orders;\n");
+    writeFileSync(mainPath, "@include parts/count.sql\nselect 'after_include' as a;\n");
+    // A console has no folder to include from: refused before anything runs.
+    const consoleTab = await newQuery("Shop (SQLite)", "@include parts/count.sql");
+    await run(consoleTab);
+    await consoleTab.locator(".messages", { hasText: "@include runs only in a file tab" }).waitFor();
+    // The file tab takes the console's connection; its run includes parts/count.sql.
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, mainPath);
+    await page.keyboard.press("Control+o");
+    const mainLabel = page.locator(".tabbar .tab .tab-label", { hasText: /^main\.sql$/ });
+    await mainLabel.waitFor();
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    const filePanel = page.locator(".tab-panel:not([hidden])");
+    await run(filePanel);
+    await filePanel.locator(".result-tab-list").getByRole("button", { name: /^Messages/ }).click();
+    const messages = filePanel.locator(".messages");
+    await messages.getByText("Running parts/count.sql", { exact: true }).waitFor();
+    await messages.getByText("counting orders", { exact: true }).waitFor();
+    await messages.getByText(/^Statement 2:/).waitFor();
+    await shot("sdb-468-include");
+    await page.keyboard.press("Control+w");
+    await mainLabel.waitFor({ state: "detached" });
+    await page.keyboard.press("Control+w");
+  }
+
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(
     "Postgres (Docker)",

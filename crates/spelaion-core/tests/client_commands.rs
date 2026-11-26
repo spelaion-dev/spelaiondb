@@ -100,13 +100,19 @@ async fn items(session: &Session, script: &str) -> Vec<String> {
         session.dialect().as_ref(),
         script,
         &std::collections::HashMap::new(),
+        None,
     )
     .expect("resolved");
     let mut out = Vec::new();
     let mut run = spelaion_core::with_echoes(session.run_script(&resolved.text), resolved.echoes);
     while let Some(item) = run.next().await {
         match item {
-            spelaion_core::RunItem::Echo(text) => out.push(format!("echo:{text}")),
+            spelaion_core::RunItem::Echo(spelaion_core::EchoLine::Echo(text)) => {
+                out.push(format!("echo:{text}"))
+            }
+            spelaion_core::RunItem::Echo(spelaion_core::EchoLine::Included(file)) => {
+                out.push(format!("file:{file}"))
+            }
             spelaion_core::RunItem::Event(CoreEvent::StatementStarted { index, .. }) => {
                 out.push(format!("start:{index}"))
             }

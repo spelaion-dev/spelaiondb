@@ -275,6 +275,8 @@
     "statementRows_one": "Statement {{index}}: {{formattedCount}} row ({{duration}} ms: {{execution}} ms execute, {{fetch}} ms fetch)",
     "statementRows_other": "Statement {{index}}: {{formattedCount}} rows ({{duration}} ms: {{execution}} ms execute, {{fetch}} ms fetch)",
     "statementFailed": "Statement {{index}}: {{reason}}",
+    "included": "Running {{file}}",
+    "inFile": "{{file}}, line {{line}}",
     "statementCancelled": "Statement {{index}}: Query cancelled",
     "cancelled": "Query cancelled",
     "detail": "Detail: {{detail}}",
