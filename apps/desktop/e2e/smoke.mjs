@@ -11983,7 +11983,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await mcp.getByText(`${shownFolders.length} events exported to`, { exact: false }).waitFor();
     await page.evaluate(() => { delete window.__spelaionSavePath; });
     const exported = readFileSync(folderCsv, "utf8").trimEnd().split("\n").slice(1);
-    assert.ok(exported.length === shownFolders.length && exported.every((line) => line.endsWith(`,${secondRoot}`)), exported.join("\n"));
+    // Each line ends with the folder, then the database (SDB-32), none for this SQLite file.
+    assert.ok(exported.length === shownFolders.length && exported.every((line) => line.endsWith(`,${secondRoot},`)), exported.join("\n"));
     // Entries with no folder: the clearing record.
     await folderFilter.selectOption("noFolder");
     await events.getByText("Log cleared").waitFor();
