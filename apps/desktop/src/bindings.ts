@@ -182,6 +182,33 @@ export const commands = {
 	 *  read-only connection and an unconfirmed run.
 	 */
 	runSqlFile: (session: string, job: Channel<JobTicket>, path: string, onError: OnErrorItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<FileRunDoneItem, null>, string>(__TAURI_INVOKE("run_sql_file", { session, job, path, onError, confirmed, onEvent })),
+	/**  Every saved task, by folder and name, with its last run. */
+	tasks: () => typedError<TaskItem_Serialize[], string>(__TAURI_INVOKE("tasks")),
+	/**  A task's newest runs, newest first. */
+	taskRuns: (id: number | null) => typedError<TaskRunItem_Serialize[], string>(__TAURI_INVOKE("task_runs", { id })),
+	/**  A run's kept log. */
+	taskRunLog: (run: number | null) => typedError<TaskLogItem, string>(__TAURI_INVOKE("task_run_log", { run })),
+	/**
+	 *  Saves a dialog's request as the task `name` in `folder`, on the connection of `session`
+	 *  (ADR-089 point 10). A name another task has comes back as `nameTaken` unless `replace` is
+	 *  that task's id, which the page passes once the user agreed to replace it.
+	 */
+	saveTask: (session: string, name: string, folder: string, replace: number | null, request: TaskRequestItem_Deserialize) => typedError<SaveTaskOutcome, string>(__TAURI_INVOKE("save_task", { session, name, folder, replace, request })),
+	/**
+	 *  Changes a task's name, folder, connection, path or query (the Tasks view's Edit), checked
+	 *  again as when it was saved, with the new connection's secrets as the judge.
+	 */
+	editTask: (id: number | null, edit: TaskEditItem_Deserialize) => typedError<null, string>(__TAURI_INVOKE("edit_task", { id, edit })),
+	/**  A copy of a task under the next free "(copy)" name, without its runs. */
+	duplicateTask: (id: number | null) => typedError<number | null, string>(__TAURI_INVOKE("duplicate_task", { id })),
+	/**  Deletes a task and its runs. */
+	deleteTask: (id: number | null) => typedError<null, string>(__TAURI_INVOKE("delete_task", { id })),
+	/**
+	 *  Runs a task now, as the Tasks view's Run: the core asks back for a password or a yes
+	 *  (nothing is recorded until the run starts with the answer), runs it in a session of its
+	 *  own and records it. `password` is what the password dialog got, kept for this run only.
+	 */
+	runTask: (id: number | null, job: Channel<JobTicket>, password: string | null, confirmed: boolean, onEvent: Channel<TaskEventItem_Deserialize>) => typedError<TaskOutcomeItem_Serialize, string>(__TAURI_INVOKE("run_task", { id, job, password, confirmed, onEvent })),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -4563,7 +4590,9 @@ export type JobKind =
 /**  "Load every row", a page or a row jump of a query's result. */
 "rowLoad" | "pluginInstall" | 
 /**  A schema comparison's reads (ADR-070). */
-"schemaCompare";
+"schemaCompare" | 
+/**  A saved task's run (ADR-089). */
+"task";
 
 /**
  *  How a job ended (ADR-060): the one answer of every command that runs a job of the core (an
@@ -6980,6 +7009,9 @@ export type SaveFileOutcome = { kind: "saved"; path: string; name: string; hash:
 /**  The file's encoding cannot hold this character: save as UTF-8 instead? */
 { kind: "unrepresentable"; character: string; encoding: string };
 
+/**  How saving went: a name another task has is asked about before it is replaced. */
+export type SaveTaskOutcome = { kind: "saved"; id: number | null } | { kind: "nameTaken"; id: number | null };
+
 /**  A saved diagram with what it holds, checked by the core just now. */
 export type SavedDiagramDetailItem = SavedDiagramDetailItem_Serialize | SavedDiagramDetailItem_Deserialize;
 
@@ -7812,6 +7844,150 @@ export type TablesStoppedItem = {
 	files: ExportedFileItem[],
 	table: number,
 };
+
+/**
+ *  What the Tasks view's Edit changes. The other options are changed by saving again from the
+ *  dialog (ADR-089 point 10).
+ */
+export type TaskEditItem = TaskEditItem_Serialize | TaskEditItem_Deserialize;
+
+/**
+ *  What the Tasks view's Edit changes. The other options are changed by saving again from the
+ *  dialog (ADR-089 point 10).
+ */
+export type TaskEditItem_Deserialize = {
+	name: string,
+	folder: string,
+	connection: ConnectionKeyItem_Deserialize,
+	path?: string | null,
+	sql?: string | null,
+};
+
+/**
+ *  What the Tasks view's Edit changes. The other options are changed by saving again from the
+ *  dialog (ADR-089 point 10).
+ */
+export type TaskEditItem_Serialize = {
+	name: string,
+	folder: string,
+	connection: ConnectionKeyItem_Serialize,
+	path: string | null,
+	sql: string | null,
+};
+
+/**  A run's live log line or progress. */
+export type TaskEventItem = TaskEventItem_Serialize | TaskEventItem_Deserialize;
+
+/**  A run's live log line or progress. */
+export type TaskEventItem_Deserialize = { kind: "log"; line: string } | { kind: "rows"; table?: number | null; rows: number | null; bytes: number | null } | { kind: "import"; read: number | null; committed: number | null } | { kind: "bytes"; bytes: number | null; total?: number | null } | { kind: "statements"; done: number | null; total: number | null };
+
+/**  A run's live log line or progress. */
+export type TaskEventItem_Serialize = { kind: "log"; line: string } | { kind: "rows"; table: number | null; rows: number | null; bytes: number | null } | { kind: "import"; read: number | null; committed: number | null } | { kind: "bytes"; bytes: number | null; total: number | null } | { kind: "statements"; done: number | null; total: number | null };
+
+/**
+ *  A saved task as the Tasks view lists it. `unreadable` says why a document cannot be used;
+ *  such a task has no kind or connection and runs nothing.
+ */
+export type TaskItem = TaskItem_Serialize | TaskItem_Deserialize;
+
+/**
+ *  A saved task as the Tasks view lists it. `unreadable` says why a document cannot be used;
+ *  such a task has no kind or connection and runs nothing.
+ */
+export type TaskItem_Deserialize = {
+	id: number | null,
+	name: string,
+	folder: string,
+	kind?: TaskKindItem | null,
+	connection?: ConnectionKeyItem_Deserialize | null,
+	/**  The file or folder it writes to or reads from, as Edit changes it. */
+	path?: string | null,
+	/**  A query export's query, as Edit changes it. */
+	sql?: string | null,
+	unreadable?: string | null,
+	lastRun?: TaskRunItem_Deserialize | null,
+};
+
+/**
+ *  A saved task as the Tasks view lists it. `unreadable` says why a document cannot be used;
+ *  such a task has no kind or connection and runs nothing.
+ */
+export type TaskItem_Serialize = {
+	id: number | null,
+	name: string,
+	folder: string,
+	kind: TaskKindItem | null,
+	connection: ConnectionKeyItem_Serialize | null,
+	/**  The file or folder it writes to or reads from, as Edit changes it. */
+	path: string | null,
+	/**  A query export's query, as Edit changes it. */
+	sql: string | null,
+	unreadable: string | null,
+	lastRun: TaskRunItem_Serialize | null,
+};
+
+export type TaskKindItem = "export" | "import" | "dump" | "restore" | "embeddedDump" | "duckdbImport" | "runFile";
+
+export type TaskLogItem = {
+	log: string,
+	omitted: number | null,
+};
+
+export type TaskOriginItem = "app" | "cli";
+
+/**  How starting a task ended: it ran (recorded), or it asks first (nothing recorded). */
+export type TaskOutcomeItem = TaskOutcomeItem_Serialize | TaskOutcomeItem_Deserialize;
+
+/**  How starting a task ended: it ran (recorded), or it asks first (nothing recorded). */
+export type TaskOutcomeItem_Deserialize = { kind: "ran"; run: number | null; state: TaskRunStateItem; summary: string; message?: string | null } | { kind: "needsConfirmation"; plan: TaskPlanItem } | { kind: "passwordRequired"; canRemember: boolean };
+
+/**  How starting a task ended: it ran (recorded), or it asks first (nothing recorded). */
+export type TaskOutcomeItem_Serialize = { kind: "ran"; run: number | null; state: TaskRunStateItem; summary: string; message: string | null } | { kind: "needsConfirmation"; plan: TaskPlanItem } | { kind: "passwordRequired"; canRemember: boolean };
+
+/**  What a run will do, for the confirmation: written by the core. */
+export type TaskPlanItem = {
+	kind: TaskKindItem,
+	connection: string,
+	steps: string[],
+	risks: string[],
+	notes: string[],
+};
+
+/**  What a dialog's "Save as task…" saves: the request it would run, as it sends it to run. */
+export type TaskRequestItem = TaskRequestItem_Serialize | TaskRequestItem_Deserialize;
+
+/**  What a dialog's "Save as task…" saves: the request it would run, as it sends it to run. */
+export type TaskRequestItem_Deserialize = { kind: "exportQuery"; sql: string; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Deserialize } | { kind: "exportTable"; table: TableExportItem; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Deserialize } | { kind: "exportTables"; tables: RelationRefItem[]; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Deserialize } | { kind: "import"; request: ImportRequestItem } | { kind: "dump"; request: BackupRequestItem_Deserialize } | { kind: "restore"; request: RestoreRequestItem } | { kind: "embeddedDump"; request: EmbeddedBackupItem } | { kind: "duckdbImport"; folder: string } | { kind: "runFile"; path: string; onError: OnErrorItem };
+
+/**  What a dialog's "Save as task…" saves: the request it would run, as it sends it to run. */
+export type TaskRequestItem_Serialize = { kind: "exportQuery"; sql: string; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Serialize } | { kind: "exportTable"; table: TableExportItem; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Serialize } | { kind: "exportTables"; tables: RelationRefItem[]; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Serialize } | { kind: "import"; request: ImportRequestItem } | { kind: "dump"; request: BackupRequestItem_Serialize } | { kind: "restore"; request: RestoreRequestItem } | { kind: "embeddedDump"; request: EmbeddedBackupItem } | { kind: "duckdbImport"; folder: string } | { kind: "runFile"; path: string; onError: OnErrorItem };
+
+/**  A recorded run, from the app or the command line. */
+export type TaskRunItem = TaskRunItem_Serialize | TaskRunItem_Deserialize;
+
+/**  A recorded run, from the app or the command line. */
+export type TaskRunItem_Deserialize = {
+	id: number | null,
+	origin: TaskOriginItem,
+	startedMs: number | null,
+	endedMs?: number | null,
+	state: TaskRunStateItem,
+	summary: string,
+};
+
+/**  A recorded run, from the app or the command line. */
+export type TaskRunItem_Serialize = {
+	id: number | null,
+	origin: TaskOriginItem,
+	startedMs: number | null,
+	endedMs: number | null,
+	state: TaskRunStateItem,
+	summary: string,
+};
+
+export type TaskRunStateItem = 
+/**  No ending was recorded: still running, or its program stopped. */
+"unfinished" | "succeeded" | "failed" | "cancelled" | "refused";
 
 export type TemporalKindItem = "date" | "time" | "timestamp" | 
 /**  Written in UTC with `+00`, as the grid shows it. */

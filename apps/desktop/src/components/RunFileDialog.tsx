@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { useSaveTask } from "./SaveTaskDialog";
 import { create } from "zustand";
 import { call, commands } from "../api";
 import { startJob, type Job } from "../jobs";
@@ -42,6 +43,7 @@ export function RunFileDialog() {
 
 function RunFileForm({ request }: { request: RunFileRequest }) {
   const { t, i18n } = useTranslation("editor");
+  const { t: ts } = useTranslation("shell");
   const close = useRunFile((s) => s.close);
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const seconds = useMemo(() => new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 1 }), [i18n.language]);
@@ -240,6 +242,19 @@ function RunFileForm({ request }: { request: RunFileRequest }) {
           ) : (
             <>
               <button onClick={close}>{t("backup.close")}</button>
+              <button
+                disabled={!path.trim()}
+                onClick={() =>
+                  useSaveTask.getState().open({
+                    session: request.session,
+                    name: fileName,
+                    needsFolder: false,
+                    request: () => ({ kind: "runFile", path: path.trim(), onError }),
+                  })
+                }
+              >
+                {ts("tasks.saveAs")}
+              </button>
               <button className="primary" disabled={!plan || (plan.statements ?? 0) === 0} onClick={() => setConfirming(true)}>
                 {t("runFile.start")}
               </button>

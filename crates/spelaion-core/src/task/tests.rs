@@ -269,3 +269,40 @@ fn tasks_are_renamed_duplicated_and_listed_with_unreadable_ones() {
     ));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_edit_changes_the_connection_the_path_and_a_querys_text_only() {
+    let folder = absolute(&std::env::temp_dir());
+    let document = export_document(folder.clone(), "select 1");
+    assert_eq!(document.path(), Some(folder.as_path()));
+    assert_eq!(document.query(), Some("select 1"));
+    let other = TaskConnection {
+        folder: None,
+        id: "~/other".into(),
+        open_folders: Vec::new(),
+    };
+    let moved = folder.join("weekly");
+    let edited = document
+        .edited(other.clone(), Some(moved.clone()), Some("select 2".into()))
+        .unwrap();
+    assert_eq!(edited.connection, other);
+    assert_eq!(edited.path(), Some(moved.as_path()));
+    assert_eq!(edited.query(), Some("select 2"));
+    // The rest stays: an edit never changes what a task is.
+    match (&edited.request, &document.request) {
+        (TaskRequest::Export(a), TaskRequest::Export(b)) => {
+            assert_eq!(a.settings, b.settings);
+            assert_eq!(a.names, b.names);
+        }
+        other => panic!("{other:?}"),
+    }
+    // Checked again: a relative path, or a query for a task without one, is refused.
+    assert!(
+        document
+            .edited(other.clone(), Some(PathBuf::from("out")), None)
+            .is_err()
+    );
+    let dump = dump_document(folder, "");
+    assert_eq!(dump.query(), None);
+    assert!(dump.edited(other, None, Some("select 1".into())).is_err());
+}

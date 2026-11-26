@@ -517,6 +517,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "view.history": { run: () => useApp.getState().setHistoryOpen(!useApp.getState().historyOpen) },
   "view.savedQueries": { run: () => useApp.getState().setSnippetsOpen(!useApp.getState().snippetsOpen) },
   // The MCP page fills the window: leaving it shows the explorer again.
+  "view.tasks": { run: () => useApp.getState().setSidebarSection((current) => (current === "tasks" ? "connections" : "tasks")) },
   "view.mcp": { run: () => useApp.getState().setSidebarSection((current) => (current === "mcp" ? "connections" : "mcp")) },
   "view.settings": { run: () => useApp.getState().openSettings() },
   "view.plugins": { run: () => useApp.getState().openSettings("plugins") },

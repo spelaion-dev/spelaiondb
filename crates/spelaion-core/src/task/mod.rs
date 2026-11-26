@@ -24,12 +24,13 @@ pub use run::{
     Questions, TaskEnv, TaskEvent, TaskOutcome, TaskPlan, TaskProgress, resolve_connection,
     run_task,
 };
+/// The store the adapters open to read and save tasks, and where a run started.
+pub use spelaion_store::{Store, TaskOrigin};
 
 use spelaion_config::{ResolvedConnection, check_plain_text};
 use spelaion_driver_api::Secret;
 use spelaion_store::{
-    Store, StoreError, StoredTaskRun, TASK_FOLDER_MAX, TASK_NAME_MAX, TaskEnding, TaskOrigin,
-    TaskSave,
+    StoreError, StoredTaskRun, TASK_FOLDER_MAX, TASK_NAME_MAX, TaskEnding, TaskSave,
 };
 
 use crate::Redactor;
