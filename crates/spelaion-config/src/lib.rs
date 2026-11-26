@@ -50,7 +50,7 @@ mod types_edit;
 mod vars;
 mod workbench;
 
-pub use accounts::{connection_account, proxy_account, tunnel_account};
+pub use accounts::{connection_account, key_passphrase_account, proxy_account, tunnel_account};
 pub use beekeeper::{BeekeeperError, beekeeper_dir, read_beekeeper};
 pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
@@ -116,7 +116,8 @@ pub use resolve::{
 };
 pub use secrets::{
     KEYCHAIN_NOT_KEPT, KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef,
-    SystemBackend,
+    SystemBackend, forget_key_passphrase, key_passphrase_remembered, remember_key_passphrase,
+    remembered_key_passphrase,
 };
 pub use settings_files::{
     PERSONAL_FILE_MAX, PersonalFiles, PersonalFilesBefore, PersonalFilesPlan, apply_personal_files,
@@ -130,8 +131,8 @@ pub use trust::{
 pub use tunnel_draft::{
     HopDraft, KubernetesProfileDraft, ProxyDraft, SsmDraft, StoredTunnelPasswords,
     TUNNEL_SCHEMA_URL, TunnelDraft, TunnelDraftOptions, TunnelPasswords, add_tunnel, delete_tunnel,
-    tunnel_passwords_stored, tunnel_revision, tunnel_users, tunnels_dir, update_tunnel,
-    update_tunnel_at_revision,
+    hop_key_path, tunnel_passwords_stored, tunnel_revision, tunnel_users, tunnels_dir,
+    update_tunnel, update_tunnel_at_revision,
 };
 pub use types::{ConnectionType, ConnectionTypes, PRODUCTION, Safeguards, type_id};
 pub use types_edit::{remove_personal_type, set_personal_type};

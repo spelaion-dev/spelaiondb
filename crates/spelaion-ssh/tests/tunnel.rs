@@ -452,6 +452,117 @@ async fn putty_keys_log_in_and_ask_for_their_passphrase() {
     }
 }
 
+/// Keeps passphrases by key file as the desktop app's keychain does (ADR-090), and answers
+/// each passphrase question with a passphrase and whether to remember it.
+#[derive(Default)]
+struct KeepingUi {
+    kept: Mutex<std::collections::HashMap<PathBuf, String>>,
+    answers: Mutex<VecDeque<(&'static str, bool)>>,
+    asked: AtomicUsize,
+}
+
+#[async_trait]
+impl Interaction for KeepingUi {
+    async fn confirm_unknown_host(&self, _host: &HostInfo) -> bool {
+        true
+    }
+
+    async fn ask_secret(&self, _request: &SecretRequest) -> Option<Secret> {
+        panic!("a key's passphrase is asked through ask_key_passphrase")
+    }
+
+    async fn ask_key_passphrase(
+        &self,
+        _request: &SecretRequest,
+    ) -> Option<spelaion_ssh::KeyPassphraseAnswer> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        let (passphrase, remember) = self.answers.lock().unwrap().pop_front()?;
+        Some(spelaion_ssh::KeyPassphraseAnswer {
+            passphrase: Secret::new(passphrase),
+            remember,
+        })
+    }
+
+    fn passphrases_kept(&self) -> bool {
+        true
+    }
+
+    async fn remembered_passphrase(&self, key: &std::path::Path) -> Option<Secret> {
+        self.kept.lock().unwrap().get(key).cloned().map(Secret::new)
+    }
+
+    async fn remember_passphrase(&self, key: &std::path::Path, passphrase: &Secret) {
+        self.kept
+            .lock()
+            .unwrap()
+            .insert(key.to_path_buf(), passphrase.expose().to_string());
+    }
+
+    async fn forget_passphrase(&self, key: &std::path::Path) {
+        self.kept.lock().unwrap().remove(key);
+    }
+}
+
+/// A remembered passphrase (ADR-090) opens an encrypted PuTTY key's tunnel without asking,
+/// through the same interaction the tunnel's timing wraps; one that no longer works is dropped
+/// and the person is asked again.
+#[tokio::test]
+async fn a_remembered_passphrase_opens_the_tunnel_without_asking() {
+    let Some((host, port)) = bastion() else {
+        return;
+    };
+    let known = TempKnownHosts::new("remembered");
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/ppk")
+        .join("ppk_ed25519_v3_pass.ppk");
+    let canonical = std::fs::canonicalize(&file).unwrap();
+    let mut first = hop(&host, port, "id_ed25519");
+    first.identity_file = Some(file);
+    let spec = TunnelSpec {
+        hops: vec![first],
+        ..Default::default()
+    };
+
+    // First time: asked, ticked, remembered.
+    let ui = Arc::new(KeepingUi::default());
+    ui.answers
+        .lock()
+        .unwrap()
+        .push_back(("spelaion-test", true));
+    let tunnel = Tunnel::connect(&spec, &known.known(), ui.clone())
+        .await
+        .unwrap();
+    tunnel.close().await;
+    assert_eq!(ui.asked.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        ui.kept.lock().unwrap().get(&canonical).map(String::as_str),
+        Some("spelaion-test")
+    );
+
+    // Next time: nobody is asked.
+    let tunnel = Tunnel::connect(&spec, &known.known(), ui.clone())
+        .await
+        .unwrap();
+    tunnel.close().await;
+    assert_eq!(ui.asked.load(Ordering::SeqCst), 1, "not asked again");
+
+    // A remembered one that no longer works is dropped, and the person is asked.
+    ui.kept
+        .lock()
+        .unwrap()
+        .insert(canonical.clone(), "an old passphrase".into());
+    ui.answers
+        .lock()
+        .unwrap()
+        .push_back(("spelaion-test", false));
+    let tunnel = Tunnel::connect(&spec, &known.known(), ui.clone())
+        .await
+        .unwrap();
+    tunnel.close().await;
+    assert_eq!(ui.asked.load(Ordering::SeqCst), 2);
+    assert!(ui.kept.lock().unwrap().get(&canonical).is_none());
+}
+
 #[tokio::test]
 async fn auth_failures_say_which_hop_and_what_was_tried() {
     let Some((host, port)) = bastion() else {

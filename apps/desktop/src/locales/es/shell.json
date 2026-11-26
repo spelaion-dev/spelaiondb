@@ -295,6 +295,7 @@
   "sshPassword": "Contraseña SSH",
   "verificationFor": "Verificación de {{host}}",
   "unlockKey": "Desbloquear clave",
+  "rememberPassphrase": "Recordar en el llavero del sistema",
   "signIn": "Iniciar sesión",
   "signInToProxy": "Iniciar sesión en el proxy",
   "sendCode": "Enviar código",

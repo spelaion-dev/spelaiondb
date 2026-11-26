@@ -530,9 +530,12 @@ function InteractionDialog() {
   const item = useDialogs((s) => s.interactions[0]);
   const pop = useDialogs((s) => s.popInteraction);
   const [value, setValue] = useState("");
+  // Off each time the question opens (ADR-090): remembering is the person's choice every time.
+  const [remember, setRemember] = useState(false);
   if (!item) return null;
+  const canRemember = item.request.kind === "secret" && item.request.label.kind === "keyPassphrase" && item.request.label.canRemember;
   const answer = (accept: boolean) => {
-    void call(commands.answerInteraction(item.id, accept, accept && item.request.kind === "secret" ? value : null));
+    void call(commands.answerInteraction(item.id, accept, accept && item.request.kind === "secret" ? value : null, accept && canRemember && remember));
     pop(item.id);
   };
   const r = item.request;
@@ -595,6 +598,12 @@ function InteractionDialog() {
         autoComplete="off"
         aria-label={prompt}
       />
+      {canRemember && (
+        <label className="check">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          {t("rememberPassphrase")}
+        </label>
+      )}
       <div className="modal-actions">
         <button onClick={() => answer(false)}>{t("cancel")}</button>
         <button className="primary" onClick={() => answer(true)}>

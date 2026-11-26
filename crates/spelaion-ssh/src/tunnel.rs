@@ -69,6 +69,30 @@ impl Interaction for Timed {
         let _open = self.asking.open();
         self.inner.ask_secret(request).await
     }
+
+    async fn ask_key_passphrase(
+        &self,
+        request: &SecretRequest,
+    ) -> Option<crate::KeyPassphraseAnswer> {
+        let _open = self.asking.open();
+        self.inner.ask_key_passphrase(request).await
+    }
+
+    fn passphrases_kept(&self) -> bool {
+        self.inner.passphrases_kept()
+    }
+
+    async fn remembered_passphrase(&self, key: &std::path::Path) -> Option<Secret> {
+        self.inner.remembered_passphrase(key).await
+    }
+
+    async fn remember_passphrase(&self, key: &std::path::Path, passphrase: &Secret) {
+        self.inner.remember_passphrase(key, passphrase).await;
+    }
+
+    async fn forget_passphrase(&self, key: &std::path::Path) {
+        self.inner.forget_passphrase(key).await;
+    }
 }
 
 /// Runs `work` with at most `limit` of the time no person is being asked anything; `None` if

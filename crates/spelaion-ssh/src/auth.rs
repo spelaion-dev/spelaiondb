@@ -235,14 +235,34 @@ async fn load_key(
         Err(_) if is_encrypted_ppk(&text) => {}
         Err(e) => return Err(reading(&e)),
     }
+    // A passphrase remembered for this file (ADR-090) is tried before anyone is asked; one
+    // that no longer decrypts it (the key changed) is forgotten, and the person is asked.
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut retry = false;
+    if let Some(remembered) = ui.remembered_passphrase(&canonical).await {
+        if let Ok(key) = russh::keys::decode_secret_key(&text, Some(remembered.expose())) {
+            return Ok(key);
+        }
+        ui.forget_passphrase(&canonical).await;
+        retry = true;
+    }
+    let can_remember = ui.passphrases_kept();
     for attempt in 0..3 {
         let request = SecretRequest::KeyPassphrase {
             hop,
             path: path.to_path_buf(),
-            retry: attempt > 0,
+            retry: retry || attempt > 0,
+            can_remember,
         };
-        let passphrase = ui.ask_secret(&request).await.ok_or(SshError::Cancelled)?;
-        if let Ok(key) = russh::keys::decode_secret_key(&text, Some(passphrase.expose())) {
+        let answer = ui
+            .ask_key_passphrase(&request)
+            .await
+            .ok_or(SshError::Cancelled)?;
+        if let Ok(key) = russh::keys::decode_secret_key(&text, Some(answer.passphrase.expose())) {
+            // Only a passphrase that decrypted the key is remembered, and only when asked.
+            if answer.remember && can_remember {
+                ui.remember_passphrase(&canonical, &answer.passphrase).await;
+            }
             return Ok(key);
         }
     }
@@ -374,7 +394,7 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::HostInfo;
+    use crate::{HostInfo, KeyPassphraseAnswer};
 
     /// PuTTY keys made with puttygen 0.82 (SDB-528): one RSA and one Ed25519 key, each as PPK
     /// version 2 and version 3 (Argon2id), without and with the passphrase `spelaion-test`, and
@@ -461,6 +481,146 @@ mod tests {
     async fn load(name: &str, ui: &Arc<Answers>) -> Result<PrivateKey, SshError> {
         let ui: Arc<dyn Interaction> = ui.clone();
         load_key(&fixture(name), 0, &spec(), &ui).await
+    }
+
+    /// Keeps passphrases by key file, as the desktop app's keychain does (ADR-090), and answers
+    /// each question in turn with a passphrase and whether to remember it.
+    struct Keeper {
+        kept: Mutex<std::collections::HashMap<PathBuf, String>>,
+        answers: Mutex<VecDeque<(&'static str, bool)>>,
+        asked: Mutex<Vec<SecretRequest>>,
+    }
+
+    impl Keeper {
+        fn new(kept: &[(PathBuf, &str)], answers: &[(&'static str, bool)]) -> Arc<Self> {
+            Arc::new(Self {
+                kept: Mutex::new(
+                    kept.iter()
+                        .map(|(path, value)| (path.clone(), value.to_string()))
+                        .collect(),
+                ),
+                answers: Mutex::new(answers.iter().copied().collect()),
+                asked: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn kept(&self, path: &Path) -> Option<String> {
+            self.kept.lock().unwrap().get(path).cloned()
+        }
+    }
+
+    #[async_trait]
+    impl Interaction for Keeper {
+        async fn confirm_unknown_host(&self, _host: &HostInfo) -> bool {
+            panic!("no host is checked here")
+        }
+
+        async fn ask_secret(&self, _request: &SecretRequest) -> Option<Secret> {
+            panic!("a key's passphrase is asked through ask_key_passphrase")
+        }
+
+        async fn ask_key_passphrase(&self, request: &SecretRequest) -> Option<KeyPassphraseAnswer> {
+            self.asked.lock().unwrap().push(request.clone());
+            let (passphrase, remember) = self.answers.lock().unwrap().pop_front()?;
+            Some(KeyPassphraseAnswer {
+                passphrase: Secret::new(passphrase.to_string()),
+                remember,
+            })
+        }
+
+        fn passphrases_kept(&self) -> bool {
+            true
+        }
+
+        async fn remembered_passphrase(&self, key: &Path) -> Option<Secret> {
+            self.kept(key).map(Secret::new)
+        }
+
+        async fn remember_passphrase(&self, key: &Path, passphrase: &Secret) {
+            self.kept
+                .lock()
+                .unwrap()
+                .insert(key.to_path_buf(), passphrase.expose().to_string());
+        }
+
+        async fn forget_passphrase(&self, key: &Path) {
+            self.kept.lock().unwrap().remove(key);
+        }
+    }
+
+    fn canonical(name: &str) -> PathBuf {
+        std::fs::canonicalize(fixture(name)).unwrap()
+    }
+
+    async fn load_with(name: &str, ui: &Arc<Keeper>) -> Result<PrivateKey, SshError> {
+        let ui: Arc<dyn Interaction> = ui.clone();
+        load_key(&fixture(name), 0, &spec(), &ui).await
+    }
+
+    #[tokio::test]
+    async fn a_remembered_passphrase_opens_the_key_without_asking() {
+        let name = "ppk_ed25519_v3_pass.ppk";
+        let ui = Keeper::new(&[(canonical(name), "spelaion-test")], &[]);
+        let key = load_with(name, &ui).await.unwrap();
+        assert_eq!(key.public_key().key_data(), exported("ed25519").key_data());
+        assert!(ui.asked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_remembered_passphrase_that_no_longer_works_is_forgotten_and_asked() {
+        let name = "ppk_rsa_v2_pass.ppk";
+        let ui = Keeper::new(
+            &[(canonical(name), "an old one")],
+            &[("spelaion-test", false)],
+        );
+        load_with(name, &ui).await.unwrap();
+        let asked = ui.asked.lock().unwrap().clone();
+        assert!(
+            matches!(
+                asked.as_slice(),
+                [SecretRequest::KeyPassphrase {
+                    retry: true,
+                    can_remember: true,
+                    ..
+                }]
+            ),
+            "{asked:?}"
+        );
+        assert_eq!(ui.kept(&canonical(name)), None, "dropped, and not ticked");
+    }
+
+    #[tokio::test]
+    async fn only_a_passphrase_that_worked_is_remembered_and_only_when_asked() {
+        let name = "ppk_ed25519_v2_pass.ppk";
+        // Ticked on a wrong one, then on the right one: only the right one is kept.
+        let ui = Keeper::new(&[], &[("wrong", true), ("spelaion-test", true)]);
+        load_with(name, &ui).await.unwrap();
+        assert_eq!(ui.kept(&canonical(name)).as_deref(), Some("spelaion-test"));
+        // Not ticked: nothing is kept.
+        let ui = Keeper::new(&[], &[("spelaion-test", false)]);
+        load_with(name, &ui).await.unwrap();
+        assert_eq!(ui.kept(&canonical(name)), None);
+        // Three wrong ones, each ticked: nothing is kept.
+        let ui = Keeper::new(&[], &[("a", true), ("b", true), ("c", true)]);
+        assert!(load_with(name, &ui).await.is_err());
+        assert_eq!(ui.kept(&canonical(name)), None);
+    }
+
+    #[tokio::test]
+    async fn an_interaction_that_keeps_nothing_is_never_offered_to_remember() {
+        let ui = Answers::new(&[Some("spelaion-test")]);
+        load("ppk_rsa_v3_pass.ppk", &ui).await.unwrap();
+        let asked = ui.asked.lock().unwrap().clone();
+        assert!(
+            matches!(
+                asked.as_slice(),
+                [SecretRequest::KeyPassphrase {
+                    can_remember: false,
+                    ..
+                }]
+            ),
+            "{asked:?}"
+        );
     }
 
     #[tokio::test]

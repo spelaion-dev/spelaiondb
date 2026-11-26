@@ -387,7 +387,11 @@
     "ssmAws": "Programa de la AWS CLI",
     "ssmHint": "SpelaionDB ejecuta aws ssm start-session con tus credenciales de AWS (inicia sesión antes, por ejemplo con aws sso login). Necesita la AWS CLI v2 y el plugin de Session Manager. Sin saltos, el host de la conexión se alcanza desde el nodo administrado: localhost es el propio nodo, y cualquier otro host (un endpoint de RDS) se alcanza a través de él.",
     "ssmHopsHint": "Los saltos después de AWS SSM se alcanzan por su sesión: el primero es un host al que llega el nodo administrado (o localhost, el propio nodo).",
-    "okSsm": "AWS SSM está listo"
+    "okSsm": "AWS SSM está listo",
+    "passphraseRemembered": "La frase de paso de esta clave está guardada en el llavero del sistema.",
+    "forgetPassphrase": "Olvidar la frase de paso guardada",
+    "passphraseForgotten": "Olvidada: se pedirá la próxima vez que se use esta clave.",
+    "forgetFailed": "No se pudo olvidar la frase de paso: {{detail}}"
   },
   "newDatabase": "Nueva base de datos…",
   "url": {

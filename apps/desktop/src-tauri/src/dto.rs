@@ -3956,10 +3956,24 @@ pub enum InteractionKind {
     rename_all_fields = "camelCase"
 )]
 pub enum SecretLabel {
-    KeyPassphrase { path: String, retry: bool },
-    Password { user: String, host: String },
-    ProxyPassword { user: String, host: String },
-    Challenge { host: String, instructions: String },
+    /// `can_remember`: the dialog offers "Remember in the system keychain" (ADR-090).
+    KeyPassphrase {
+        path: String,
+        retry: bool,
+        can_remember: bool,
+    },
+    Password {
+        user: String,
+        host: String,
+    },
+    ProxyPassword {
+        user: String,
+        host: String,
+    },
+    Challenge {
+        host: String,
+        instructions: String,
+    },
 }
 
 /// One engine in the "add connection" picker. `available`: it has a driver and can be used.

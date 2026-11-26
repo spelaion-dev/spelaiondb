@@ -25,6 +25,7 @@ mod flightsql;
 mod hive;
 mod import_sources;
 mod imports;
+mod key_passphrases;
 mod localdb;
 mod masking;
 mod mcp_clients;

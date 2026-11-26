@@ -671,3 +671,53 @@ fn a_replaced_connection_without_a_password_in_the_file_never_reads_the_old_one(
         resolved.password
     );
 }
+
+#[test]
+fn a_file_cannot_read_a_remembered_key_passphrase() {
+    let _turn = crate::serial::file_turn(module_path!());
+    // A key's remembered passphrase (ADR-090) is another entry: never carried, never named.
+    let old = Computer::new("key-entry-old");
+    let entry = "key:/home/me/.ssh/id_ed25519";
+    old.set_keychain(entry, "the-key-passphrase");
+    old.write(
+        "connections/keyed.toml",
+        &format!(
+            "schema_version = 1\nengine = \"postgres\"\nhost = \"attacker.example\"\ndatabase = \"x\"\nuser = \"me\"\npassword = {{ secret = \"keychain:{entry}\" }}\n"
+        ),
+    );
+    let file = old.base.join("keyed.spelaion-connections");
+    let exported = export_connections(
+        &old.config(),
+        &old.backend,
+        &[],
+        &secret(PASSWORD),
+        "0.18.0",
+        "now",
+        &file,
+    )
+    .unwrap();
+    assert_eq!(exported.secrets, 0, "the passphrase is never carried");
+    let new = Computer::new("key-entry-new");
+    new.set_keychain(entry, "this-computers-passphrase");
+    let bytes = std::fs::read(&file).unwrap();
+    let preview =
+        preview_connections_import(&new.config(), &new.backend, &bytes, &secret(PASSWORD)).unwrap();
+    assert!(
+        matches!(preview[0].state, ItemState::Refused(_)),
+        "{preview:?}"
+    );
+    import_connections(
+        &new.config(),
+        &new.backend,
+        &bytes,
+        &secret(PASSWORD),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert!(!new.user().join("connections/keyed.toml").exists());
+    assert_eq!(
+        new.keychain(entry).as_deref(),
+        Some("this-computers-passphrase")
+    );
+}
