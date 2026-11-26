@@ -79,6 +79,11 @@
   Databend has moved (SDB-456): `opening` in `databend.rs` reads its strings and names
   (backslash escapes, doubled quotes), backticked names, `--` and block comments and `$$`
   bodies.
+  TDengine has moved (SDB-456): `TdengineScanner` in `tdengine.rs` reads strings, backquoted
+  names and comments through `opening`, and keeps what its splitter decides with: whether the
+  statement's code holds a word, and where its first code is (leading comments are left out of
+  what is sent). `words`, which the guard's `statement_class` and `refuse_statement` read,
+  reads the scanner's code ranges.
   Every dialect but SQL Server answers `None` to `first_word` for now, and the guard reads the
   word through its
   `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,

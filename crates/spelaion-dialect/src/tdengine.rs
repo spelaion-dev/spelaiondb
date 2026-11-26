@@ -14,7 +14,9 @@
 //! - `USE` is refused before it is sent ([`refuse_statement`]): the tab's database is chosen above
 //!   the editor, and the plugin runs every statement in it.
 
-use spelaion_driver_api::{Dialect, RequestClass, RequestError, StatementSpan, code_ranges};
+use spelaion_driver_api::{Dialect, RequestClass, RequestError, StatementSpan};
+
+use crate::scanner::{self, Region, RegionKind};
 
 /// TDengine's SQL.
 #[derive(Debug, Clone, Copy, Default)]
@@ -35,7 +37,7 @@ impl Dialect for TdengineDialect {
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        code_ranges(script, skip)
+        scanner::code_ranges(TdengineScanner::new(script))
     }
 
     fn is_sql(&self) -> bool {
@@ -69,20 +71,21 @@ pub fn browse_statement(dialect: &TdengineDialect, database: &str, table: &str) 
 
 // ------------------------------------------------------------------------------ splitting
 
-/// Where a string, a quoted name or a comment that starts at `i` ends, or `None`.
-fn skip(script: &str, i: usize) -> Option<usize> {
+/// The string, quoted name or comment that starts at byte `i`, with the byte after it; `None`
+/// when none starts there. The scanner's one reading of them.
+fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
-    match b[i] {
+    match *b.get(i)? {
         quote @ (b'\'' | b'"') => {
             let mut j = i + 1;
             while j < b.len() {
                 match b[j] {
                     b'\\' => j += 2,
-                    c if c == quote => return Some(j + 1),
+                    c if c == quote => return Some((RegionKind::String, j + 1)),
                     _ => j += 1,
                 }
             }
-            Some(b.len())
+            Some((RegionKind::String, b.len()))
         }
         b'`' => {
             let mut j = i + 1;
@@ -92,28 +95,143 @@ fn skip(script: &str, i: usize) -> Option<usize> {
                         j += 2;
                         continue;
                     }
-                    return Some(j + 1);
+                    return Some((RegionKind::QuotedName, j + 1));
                 }
                 j += 1;
             }
-            Some(b.len())
+            Some((RegionKind::QuotedName, b.len()))
         }
-        b'-' if b.get(i + 1) == Some(&b'-') => {
-            Some(script[i..].find('\n').map_or(b.len(), |end| i + end))
-        }
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((
+            RegionKind::Comment,
+            script[i..].find('\n').map_or(b.len(), |end| i + end),
+        )),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((
+            RegionKind::Comment,
             script[i + 2..]
                 .find("*/")
                 .map_or(b.len(), |end| i + 2 + end + 2),
-        ),
+        )),
         _ => None,
+    }
+}
+
+/// TDengine's lexical scanner (ADR-065): the script as regions. Strings, names and comments are
+/// read by [`opening`]; a statement ends at a `;` outside them. A statement is one only when its
+/// code holds a word, and it starts at its first code: TDengine refuses an `INSERT` with a
+/// comment before it (its insert parser reads `INSERT` first), so leading comments are left out
+/// of what is sent. The splitter, `code_ranges` and [`words`] (which the guard reads) all read
+/// it.
+struct TdengineScanner<'a> {
+    script: &'a str,
+    /// Where the next region starts.
+    i: usize,
+    /// Where the current statement's first code is: its first byte that is neither white space
+    /// nor in a comment.
+    first: Option<usize>,
+    /// Whether the current statement's code holds a word's character (a letter, a digit, `_`).
+    has_word: bool,
+    /// The end of the script was reached.
+    ended: bool,
+}
+
+impl<'a> TdengineScanner<'a> {
+    fn new(script: &'a str) -> Self {
+        Self {
+            script,
+            i: 0,
+            first: None,
+            has_word: false,
+            ended: false,
+        }
+    }
+
+    /// The statement that ends at `end`, if it held a word: from its first code, without the
+    /// white space after it.
+    fn statement(&mut self, end: usize) -> Option<StatementSpan> {
+        let first = self.first.take();
+        let has_word = std::mem::take(&mut self.has_word);
+        let start = first.filter(|_| has_word)?;
+        let body = self.script[start..end].trim_end();
+        Some(StatementSpan {
+            start,
+            end: start + body.len(),
+        })
+    }
+}
+
+impl Iterator for TdengineScanner<'_> {
+    type Item = Region;
+
+    fn next(&mut self) -> Option<Region> {
+        let script = self.script;
+        let b = script.as_bytes();
+        let len = b.len();
+        let code = self.i;
+        while self.i < len {
+            let i = self.i;
+            if let Some((kind, end)) = opening(script, i) {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                if kind != RegionKind::Comment {
+                    self.first.get_or_insert(i);
+                }
+                self.i = end.max(i + 1);
+                return Some(Region {
+                    kind,
+                    range: i..self.i,
+                });
+            }
+            if b[i] == b';' {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                let statement = self.statement(i);
+                self.i = i + 1;
+                return Some(Region {
+                    kind: RegionKind::StatementEnd { statement },
+                    range: i..i + 1,
+                });
+            }
+            if !crate::is_white_space_at(script, i) {
+                self.first.get_or_insert(i);
+            }
+            if b[i].is_ascii_alphanumeric() || b[i] == b'_' {
+                self.has_word = true;
+            }
+            self.i += 1;
+        }
+        if code < len {
+            return Some(Region {
+                kind: RegionKind::Code,
+                range: code..len,
+            });
+        }
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        // The end of the script ends the last statement.
+        let statement = self.statement(len)?;
+        Some(Region {
+            kind: RegionKind::StatementEnd {
+                statement: Some(statement),
+            },
+            range: len..len,
+        })
     }
 }
 
 /// The words of `text`'s code, uppercased, in order.
 fn words(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for range in code_ranges(text, skip) {
+    for range in scanner::code_ranges(TdengineScanner::new(text)) {
         let mut word = String::new();
         for c in text[range].chars() {
             if c.is_ascii_alphanumeric() || c == '_' {
@@ -130,48 +248,7 @@ fn words(text: &str) -> Vec<String> {
 }
 
 fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut i = 0;
-    // A statement starts at its first code: TDengine refuses an `INSERT` with a comment before
-    // it (its insert parser reads `INSERT` first), so leading comments are left out of what is
-    // sent.
-    let push = |from: usize, to: usize, spans: &mut Vec<StatementSpan>| {
-        if words(&script[from..to]).is_empty() {
-            return;
-        }
-        let mut start = from;
-        loop {
-            // White space by the one rule of every splitter (SDB-434).
-            while start < to && crate::is_white_space_at(script, start) {
-                start += 1;
-            }
-            let comment = matches!(&b[start..to], [b'-', b'-', ..] | [b'/', b'*', ..]);
-            match skip(script, start).filter(|_| comment) {
-                Some(end) => start = end.min(to),
-                None => break,
-            }
-        }
-        let body = script[start..to].trim_end();
-        spans.push(StatementSpan {
-            start,
-            end: start + body.len(),
-        });
-    };
-    while i < b.len() {
-        if let Some(end) = skip(script, i) {
-            i = end.max(i + 1);
-            continue;
-        }
-        if b[i] == b';' {
-            push(start, i, &mut spans);
-            start = i + 1;
-        }
-        i += 1;
-    }
-    push(start, b.len(), &mut spans);
-    spans
+    scanner::statements(TdengineScanner::new(script))
 }
 
 // ------------------------------------------------------------------------------ the guard
