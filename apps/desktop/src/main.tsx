@@ -5,6 +5,7 @@ import { ResultsWindow } from "./components/ResultsWindow";
 import { setWindowContext, windowContext } from "./windowContext";
 import { ScreenBoundary } from "./components/ScreenBoundary";
 import "./i18n";
+import { followPreferences } from "./preferenceSync";
 import { usePreferences } from "./preferences";
 import { useShortcuts } from "./shortcutPreferences";
 import { useSnippets } from "./snippetStore";
@@ -30,6 +31,8 @@ if (!root) throw new Error("missing #root");
 // failure leaves the defaults.
 // What this window shows comes from the core (SDB-30): the main window, a connection's window
 // or a tab's results; a failure to ask is the main window, as before there were others.
+// Before they are read: a preference saved in another window meanwhile is read again (SDB-535).
+followPreferences();
 void Promise.all([
   usePreferences.getState().load(),
   useShortcuts.getState().load(),
@@ -48,4 +51,6 @@ void Promise.all([
     void useSnippets.getState().load();
     // After the first render: a slow network never delays the window. Once, from the main one.
     if (context.kind === "main") void useUpdate.getState().start();
+    // The other windows only read whether to check, for their Settings (SDB-535).
+    else void useUpdate.getState().readCheckAtStartup();
   });

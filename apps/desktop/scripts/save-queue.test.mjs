@@ -172,3 +172,18 @@ test("a refused change that was not shown still lets values from another window 
   assert.equal(setting.changedElsewhere("later"), "later");
   assert.equal(setting.saved, "later");
 });
+
+// SDB-535: several values saved elsewhere while a change of this window is on its way: that
+// change keeps showing, and if it fails it goes back to the newest of them.
+test("values saved elsewhere while a change is pending: a failure goes back to the newest", async () => {
+  const rig = toggleRig(false);
+  const mine = rig.click();
+  assert.equal(rig.setting.changedElsewhere(true), undefined);
+  assert.equal(rig.setting.changedElsewhere(false), undefined);
+  assert.equal(rig.state.shown, true, "this window's change still shows");
+  await rig.settle();
+  rig.core.calls[0].save.reject(new Error("refused"));
+  await mine;
+  assert.equal(rig.state.shown, false, "back to the newest value saved elsewhere");
+  assert.equal(rig.setting.saved, false);
+});

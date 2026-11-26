@@ -25,6 +25,7 @@ mod open_folders;
 mod panics;
 mod plans;
 mod plugins;
+mod preferences_sync;
 mod schema_compare;
 mod settings_transfer;
 mod startup;
@@ -445,12 +446,18 @@ async fn get_language(state: State<'_, AppState>) -> CmdResult<String> {
 }
 
 #[command]
-async fn set_language(language: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn set_language(
+    language: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     state
         .history
         .set_language(language)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Language]);
+    Ok(())
 }
 
 #[command]
@@ -459,12 +466,18 @@ async fn get_theme(state: State<'_, AppState>) -> CmdResult<String> {
 }
 
 #[command]
-async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn set_theme(
+    theme: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     state
         .history
         .set_theme(theme)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Theme]);
+    Ok(())
 }
 
 /// The interface size in percent (SDB-389).
@@ -484,6 +497,7 @@ async fn get_interface_size(state: State<'_, AppState>) -> CmdResult<u16> {
 async fn set_interface_size(
     size: u16,
     window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
@@ -491,9 +505,17 @@ async fn set_interface_size(
         .set_interface_size(size)
         .await
         .map_err(|e| e.to_string())?;
+    // Every window is drawn at it (SDB-535); the one that asked must succeed.
+    for (label, other) in app.webview_windows() {
+        if label != window.label() {
+            let _ = other.set_zoom(interface_scale(size));
+        }
+    }
     window
         .set_zoom(interface_scale(size))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::InterfaceSize]);
+    Ok(())
 }
 
 /// The steps the interface size and the editor's zoom move through, as the core lists them.
@@ -527,13 +549,16 @@ async fn get_explorer_preferences(
 #[command]
 async fn set_explorer_preferences(
     preferences: ExplorerPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_explorer_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Explorer]);
+    Ok(())
 }
 
 #[command]
@@ -548,13 +573,16 @@ async fn get_editor_preferences(state: State<'_, AppState>) -> CmdResult<EditorP
 #[command]
 async fn set_editor_preferences(
     preferences: EditorPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_editor_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Editor]);
+    Ok(())
 }
 
 /// The user's own editor snippets (SDB-384), by name.
@@ -585,13 +613,16 @@ async fn shortcut_overrides(state: State<'_, AppState>) -> CmdResult<Vec<Shortcu
 #[command]
 async fn set_shortcut_overrides(
     overrides: Vec<ShortcutOverrideItem>,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_shortcut_overrides(overrides.into_iter().map(Into::into).collect())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Shortcuts]);
+    Ok(())
 }
 
 /// Why some keys cannot be a command's shortcut, or `None` when they can (ADR-064): the
@@ -608,23 +639,32 @@ fn check_shortcut(keys: String) -> Option<String> {
 #[command]
 async fn save_editor_snippet(
     snippet: EditorSnippetItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .save_editor_snippet(snippet.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Snippets]);
+    Ok(())
 }
 
 /// Deletes the editor snippet of that name; whether there was one.
 #[command]
-async fn delete_editor_snippet(name: String, state: State<'_, AppState>) -> CmdResult<bool> {
-    state
+async fn delete_editor_snippet(
+    name: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<bool> {
+    let saved = state
         .history
         .delete_editor_snippet(name)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Snippets]);
+    Ok(saved)
 }
 
 /// The text a new script starts with; empty when there is none.
@@ -639,12 +679,18 @@ async fn new_script_template(state: State<'_, AppState>) -> CmdResult<String> {
 
 /// Saves the text a new script starts with (empty: none), checked by the core.
 #[command]
-async fn set_new_script_template(template: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn set_new_script_template(
+    template: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     state
         .history
         .set_new_script_template(template)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Snippets]);
+    Ok(())
 }
 
 /// The core's limits for editor snippets and the template, for the settings page.
@@ -683,6 +729,7 @@ async fn get_display_format(state: State<'_, AppState>) -> CmdResult<DisplayForm
 #[command]
 async fn set_display_format(
     format: DisplayFormatItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let display = state
@@ -691,6 +738,7 @@ async fn set_display_format(
         .await
         .map_err(|e| e.to_string())?;
     *state.display.write().map_err(|_| "lock poisoned")? = Arc::new(display);
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::DisplayFormat]);
     Ok(())
 }
 
@@ -703,13 +751,16 @@ async fn time_zones() -> CmdResult<Vec<String>> {
 #[command]
 async fn set_grid_preferences(
     preferences: GridPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_grid_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Grid]);
+    Ok(())
 }
 
 /// The map view's background (ADR-045): tiles from the user's tile server, off by default.
@@ -746,9 +797,9 @@ async fn set_side_panel(hidden: bool, width: u32, state: State<'_, AppState>) ->
 }
 
 /// Saves the map's preferences; the core checks the tile server first. Answers what the core
-/// stored, and sends it to every window (`MapPreferencesChanged`, SDB-533): a window opened
-/// before the change would otherwise keep the old value, draw tiles that were turned off and
-/// save them on again with its next change.
+/// stored, and tells every window (`PreferencesChanged`, SDB-533): a window opened before the
+/// change would otherwise keep the old value, draw tiles that were turned off and save them on
+/// again with its next change.
 #[command]
 async fn set_map_preferences(
     preferences: MapPreferencesItem,
@@ -767,7 +818,7 @@ async fn set_map_preferences(
             .await
             .map_err(|e| e.to_string())?,
     );
-    tiles::announce_map_preferences(&app, stored.clone());
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Map]);
     Ok(stored)
 }
 
@@ -824,13 +875,16 @@ async fn get_script_preferences(state: State<'_, AppState>) -> CmdResult<ScriptP
 #[command]
 async fn set_script_preferences(
     preferences: ScriptPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_script_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Script]);
+    Ok(())
 }
 
 #[command]
@@ -843,12 +897,18 @@ async fn get_update_check(state: State<'_, AppState>) -> CmdResult<bool> {
 }
 
 #[command]
-async fn set_update_check(enabled: bool, state: State<'_, AppState>) -> CmdResult<()> {
+async fn set_update_check(
+    enabled: bool,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     state
         .history
         .set_update_check(enabled)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::UpdateCheck]);
+    Ok(())
 }
 
 /// The page chose a folder (it shows one at a time, ADR-075): every other open folder closes,
@@ -7184,7 +7244,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             QuitRequested,
             plugins::PluginInstallChanged,
             plugins::PluginsChanged,
-            tiles::MapPreferencesChanged,
+            preferences_sync::PreferencesChanged,
             launch::LaunchRequested,
             update_state::UpdateChanged,
             windows::WindowCloseRequested,

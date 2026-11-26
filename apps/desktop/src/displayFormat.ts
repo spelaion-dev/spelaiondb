@@ -31,6 +31,9 @@ interface DisplayStore {
   load(): Promise<void>;
   /** Saves the format; the core refuses one it cannot use, and then nothing changes. */
   save(next: DisplayFormat): Promise<boolean>;
+  /** Reads it again: the core stored another one, saved in another window or imported
+   *  (SDB-535). The grids ask for their rows again when it differs. */
+  changedElsewhere(): Promise<void>;
 }
 
 export const useDisplayFormat = create<DisplayStore>((set, get) => ({
@@ -56,6 +59,14 @@ export const useDisplayFormat = create<DisplayStore>((set, get) => ({
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
       return false;
+    }
+  },
+  async changedElsewhere() {
+    try {
+      const format = await call(commands.getDisplayFormat());
+      if (JSON.stringify(format) !== JSON.stringify(get().format)) set((s) => ({ format, revision: s.revision + 1, loaded: true }));
+    } catch {
+      // What it shows stays; the core formats every window it serves with what it stored.
     }
   },
 }));

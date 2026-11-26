@@ -275,9 +275,9 @@ export const commands = {
 	getMapPreferences: () => typedError<MapPreferencesItem, string>(__TAURI_INVOKE("get_map_preferences")),
 	/**
 	 *  Saves the map's preferences; the core checks the tile server first. Answers what the core
-	 *  stored, and sends it to every window (`MapPreferencesChanged`, SDB-533): a window opened
-	 *  before the change would otherwise keep the old value, draw tiles that were turned off and
-	 *  save them on again with its next change.
+	 *  stored, and tells every window (`PreferencesChanged`, SDB-533): a window opened before the
+	 *  change would otherwise keep the old value, draw tiles that were turned off and save them on
+	 *  again with its next change.
 	 */
 	setMapPreferences: (preferences: MapPreferencesItem) => typedError<MapPreferencesItem, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
 	/**
@@ -1150,8 +1150,8 @@ export const commands = {
 	previewSettingsImport: (path: string) => typedError<SettingsSummaryItem_Serialize, string>(__TAURI_INVOKE("preview_settings_import", { path })),
 	/**
 	 *  Imports the settings file at `path`, checked whole by the core first. The configuration is
-	 *  read again and every window takes the new interface size; the page reloads its own
-	 *  preferences.
+	 *  read again, every window takes the new interface size and reads every preference again
+	 *  (`PreferencesChanged`, SDB-535).
 	 */
 	importSettings: (path: string) => typedError<SettingsSummaryItem_Serialize, string>(__TAURI_INVOKE("import_settings", { path })),
 	/**  The log's entries of `level` or more important, newest first, with where the file is. */
@@ -1451,9 +1451,9 @@ export const events = {
 	interactionClosed: makeEvent<InteractionClosed, InteractionClosed>("interaction-closed"),
 	interactionRequest: makeEvent<InteractionRequest, InteractionRequest>("interaction-request"),
 	launchRequested: makeEvent<LaunchRequested_Serialize, LaunchRequested_Deserialize>("launch-requested"),
-	mapPreferencesChanged: makeEvent<MapPreferencesChanged, MapPreferencesChanged>("map-preferences-changed"),
 	pluginInstallChanged: makeEvent<PluginInstallChanged, PluginInstallChanged>("plugin-install-changed"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
+	preferencesChanged: makeEvent<PreferencesChanged, PreferencesChanged>("preferences-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
 	resultsWindowClosed: makeEvent<ResultsWindowClosed, ResultsWindowClosed>("results-window-closed"),
 	runChanged: makeEvent<RunChanged, RunChanged>("run-changed"),
@@ -4989,14 +4989,6 @@ export type MapNote =
  */
 "sqlServerTypeUnknown";
 
-/**
- *  The map's preferences the core stored after a change (SDB-533), sent to every window: each
- *  shows them as they are, so tiles turned off in one window are off in all of them.
- */
-export type MapPreferencesChanged = {
-	preferences: MapPreferencesItem,
-};
-
 /**  The map view's background (ADR-045): tiles from the user's server, off by default. */
 export type MapPreferencesItem = {
 	tiles: boolean,
@@ -6438,6 +6430,16 @@ export type PluginsOverview_Serialize = {
 
 /**  A PostgreSQL connection's pooler (SDB-396). */
 export type PoolerItem = "session" | "transaction";
+
+/**  A personal preference a window keeps once read. */
+export type PreferenceKind = "language" | "theme" | "interfaceSize" | "explorer" | "grid" | "script" | "editor" | "map" | "reconnectOnStart" | "displayFormat" | "shortcuts" | 
+/**  The editor snippets and the new script's template. */
+"snippets" | "updateCheck";
+
+/**  The core stored new values of these preferences: every window reads them again. */
+export type PreferencesChanged = {
+	settings: PreferenceKind[],
+};
 
 export type PreviewColumnItem = {
 	name: string,
