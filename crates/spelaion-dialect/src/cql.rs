@@ -272,13 +272,27 @@ pub fn statement_class(statement: &str) -> RequestClass {
             Some("OR") => RequestClass::Drop,
             _ => RequestClass::Write,
         },
-        "BEGIN" => batch_class(statement),
+        // Only a batch's header opens a batch (SDB-540): any other `BEGIN` is unknown, never
+        // read again as a batch, so its reading always ends.
+        "BEGIN" if is_batch_header(&words) => batch_class(statement),
+        "BEGIN" => RequestClass::Unknown,
         // `GRANT`, `REVOKE`, `USE` (refused anyway) and anything else.
         _ => RequestClass::Unknown,
     }
 }
 
-/// A batch is as serious as its most serious statement; it holds only writes in CQL.
+/// Whether `words` start with a batch's header: `BEGIN [UNLOGGED | COUNTER] BATCH`.
+fn is_batch_header(words: &[String]) -> bool {
+    let word = |i: usize| words.get(i).map(String::as_str);
+    word(0) == Some("BEGIN")
+        && (word(1) == Some("BATCH")
+            || (matches!(word(1), Some("UNLOGGED" | "COUNTER")) && word(2) == Some("BATCH")))
+}
+
+/// A batch is as serious as its most serious statement; it holds only writes in CQL. A piece
+/// that still starts with `BEGIN` once the batch's own words are left out (a batch inside a
+/// batch, or a header written twice) is unknown: it is never read as a batch again, so reading
+/// a batch never leads back to itself (SDB-540).
 fn batch_class(statement: &str) -> RequestClass {
     let mut worst = RequestClass::Write;
     let ranges = code_ranges(statement, skip);
@@ -310,7 +324,11 @@ fn batch_class(statement: &str) -> RequestClass {
             continue;
         }
         let text: Vec<&str> = words.iter().map(|w| w.as_str()).collect();
-        let class = statement_class(&text.join(" "));
+        let class = if text.first() == Some(&"BEGIN") {
+            RequestClass::Unknown
+        } else {
+            statement_class(&text.join(" "))
+        };
         worst = more_serious(worst, class);
     }
     worst
@@ -385,6 +403,89 @@ mod tests {
         let unlogged =
             "begin unlogged batch insert into t (a) values (1); apply batch; select 1 from t";
         assert_eq!(texts(unlogged).len(), 2);
+    }
+
+    /// SDB-540: a statement that starts with `BEGIN` but is no batch is unknown, read once, and
+    /// a batch inside a batch never leads back to the batch reading. Before, each of these
+    /// overflowed the stack, which aborts the app.
+    #[test]
+    fn a_begin_that_is_no_batch_is_unknown_and_never_read_again() {
+        for text in [
+            "BEGIN",
+            "BEGIN;",
+            "begin x",
+            "BEGIN UNLOGGED",
+            "BEGIN COUNTER INSERT INTO t (a) VALUES (1)",
+            "BEGIN TRANSACTION",
+        ] {
+            assert_eq!(statement_class(text), RequestClass::Unknown, "{text}");
+        }
+        // A batch whose pieces start with BEGIN again: unknown, the batch's worst.
+        for text in [
+            "BEGIN BEGIN BATCH INSERT INTO t (a) VALUES (1); APPLY BATCH",
+            "BEGIN BATCH BEGIN BATCH INSERT INTO t (a) VALUES (1); APPLY BATCH; APPLY BATCH",
+            "BEGIN BATCH BEGIN; BEGIN x; APPLY BATCH",
+        ] {
+            assert_eq!(statement_class(text), RequestClass::Unknown, "{text}");
+        }
+        // A header written again at the start of a later piece is left out like the batch's
+        // own, as before: the piece is read as its statement, never as a batch.
+        assert_eq!(
+            statement_class(
+                "BEGIN BATCH INSERT INTO t (a) VALUES (1); BEGIN BATCH UPDATE t SET b = 1 WHERE a = 1; APPLY BATCH"
+            ),
+            RequestClass::Write
+        );
+    }
+
+    /// Real batches keep their classes: as serious as their most serious statement.
+    #[test]
+    fn real_batches_keep_their_classes() {
+        for (text, class) in [
+            (
+                "BEGIN BATCH INSERT INTO t (a) VALUES (1); UPDATE t SET b = 2 WHERE a = 1; APPLY BATCH",
+                RequestClass::Write,
+            ),
+            (
+                "BEGIN UNLOGGED BATCH INSERT INTO t (a) VALUES (1); APPLY BATCH",
+                RequestClass::Write,
+            ),
+            (
+                "begin counter batch UPDATE c SET n = n + 1 WHERE k = 1; apply batch",
+                RequestClass::Write,
+            ),
+            (
+                "BEGIN BATCH INSERT INTO t (a) VALUES (1); TRUNCATE t; APPLY BATCH",
+                RequestClass::DeleteAll,
+            ),
+            ("BEGIN BATCH APPLY BATCH", RequestClass::Write),
+        ] {
+            assert_eq!(statement_class(text), class, "{text}");
+        }
+    }
+
+    proptest::proptest! {
+        /// No text makes the guard's reading run forever (SDB-540): it returns a class for
+        /// anything, BEGIN and BATCH words included.
+        #[test]
+        fn the_guard_returns_on_any_text(
+            words in proptest::collection::vec(
+                proptest::prop_oneof![
+                    proptest::strategy::Just("BEGIN".to_string()),
+                    proptest::strategy::Just("BATCH".to_string()),
+                    proptest::strategy::Just("UNLOGGED".to_string()),
+                    proptest::strategy::Just("COUNTER".to_string()),
+                    proptest::strategy::Just("APPLY".to_string()),
+                    proptest::strategy::Just(";".to_string()),
+                    proptest::strategy::Just("INSERT INTO t (a) VALUES (1)".to_string()),
+                    "[ -~]{0,12}",
+                ],
+                0..24,
+            ),
+        ) {
+            let text = words.join(" ");
+            let _ = statement_class(&text);
+        }
     }
 
     #[test]
