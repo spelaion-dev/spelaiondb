@@ -13,7 +13,9 @@
 //! - `USE` is refused before it is sent ([`refuse_statement`]): the tab's keyspace is chosen
 //!   above the editor, and the core keeps it as the session knows it.
 
-use spelaion_driver_api::{Dialect, RequestClass, RequestError, StatementSpan, code_ranges};
+use spelaion_driver_api::{Dialect, RequestClass, RequestError, StatementSpan};
+
+use crate::scanner::{self, Region, RegionKind};
 
 /// Cassandra's language.
 #[derive(Debug, Clone, Copy, Default)]
@@ -44,7 +46,7 @@ impl Dialect for CqlDialect {
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        code_ranges(script, skip)
+        scanner::code_ranges(CqlScanner::new(script))
     }
 
     fn is_sql(&self) -> bool {
@@ -141,11 +143,17 @@ const RESERVED: &[&str] = &[
 
 // ------------------------------------------------------------------------------ splitting
 
-/// Where a string, a quoted name, a `$$` body or a comment that starts at `i` ends, or `None`.
-fn skip(script: &str, i: usize) -> Option<usize> {
+/// The string, quoted name, `$$` body or comment that starts at byte `i`, with the byte after it;
+/// `None` when none starts there. The scanner's one reading of them.
+fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
-    match b[i] {
+    match *b.get(i)? {
         quote @ (b'\'' | b'"') => {
+            let kind = if quote == b'\'' {
+                RegionKind::String
+            } else {
+                RegionKind::QuotedName
+            };
             let mut j = i + 1;
             while j < b.len() {
                 if b[j] == quote {
@@ -153,24 +161,26 @@ fn skip(script: &str, i: usize) -> Option<usize> {
                         j += 2;
                         continue;
                     }
-                    return Some(j + 1);
+                    return Some((kind, j + 1));
                 }
                 j += 1;
             }
-            Some(b.len())
+            Some((kind, b.len()))
         }
-        b'$' if b.get(i + 1) == Some(&b'$') => Some(
+        b'$' if b.get(i + 1) == Some(&b'$') => Some((
+            RegionKind::QuotedBody,
             script[i + 2..]
                 .find("$$")
                 .map_or(b.len(), |end| i + 2 + end + 2),
-        ),
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(line_end(script, i)),
-        b'/' if b.get(i + 1) == Some(&b'/') => Some(line_end(script, i)),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(
+        )),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((RegionKind::Comment, line_end(script, i))),
+        b'/' if b.get(i + 1) == Some(&b'/') => Some((RegionKind::Comment, line_end(script, i))),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((
+            RegionKind::Comment,
             script[i + 2..]
                 .find("*/")
                 .map_or(b.len(), |end| i + 2 + end + 2),
-        ),
+        )),
         _ => None,
     }
 }
@@ -179,11 +189,145 @@ fn line_end(script: &str, i: usize) -> usize {
     script[i..].find('\n').map_or(script.len(), |end| i + end)
 }
 
+/// CQL's lexical scanner (ADR-065): the script as regions. Strings, names, `$$` bodies and
+/// comments are read by [`opening`]; a statement ends at a `;` outside them, unless it is a batch
+/// (`BEGIN [UNLOGGED | COUNTER] BATCH`) not yet applied (`APPLY BATCH`), which the scanner tells
+/// from the statement's words as [`words`] reads them, kept as it goes. A statement is one only
+/// when it holds a word. The splitter, `code_ranges`, [`words`] and the batch's reading all read
+/// it.
+struct CqlScanner<'a> {
+    script: &'a str,
+    /// Where the next region starts.
+    i: usize,
+    /// Where the current statement starts.
+    start: usize,
+    /// The current statement's words so far, uppercased, `;` among them: what [`words`] gives
+    /// for its text.
+    words: Vec<String>,
+    /// The word being read.
+    word: String,
+    /// The end of the script was reached.
+    ended: bool,
+}
+
+impl<'a> CqlScanner<'a> {
+    fn new(script: &'a str) -> Self {
+        Self {
+            script,
+            i: 0,
+            start: 0,
+            words: Vec::new(),
+            word: String::new(),
+            ended: false,
+        }
+    }
+
+    /// Ends the word being read: a string, a comment or a byte that is not a word's ends it.
+    fn end_word(&mut self) {
+        if !self.word.is_empty() {
+            self.words.push(std::mem::take(&mut self.word));
+        }
+    }
+
+    /// Whether the statement so far is a batch not yet applied: its `;` do not end it.
+    fn in_batch(&self) -> bool {
+        let so_far = &self.words;
+        so_far.first().is_some_and(|w| w == "BEGIN")
+            && so_far.iter().take(3).any(|w| w == "BATCH")
+            && !so_far
+                .windows(2)
+                .any(|w| w[0] == "APPLY" && w[1] == "BATCH")
+    }
+
+    /// The statement that ends at `end`, if it held a word; the next one starts at `next`.
+    fn statement(&mut self, end: usize, next: usize) -> Option<StatementSpan> {
+        let has_word = self.words.iter().any(|w| w != ";");
+        self.words.clear();
+        let statement = crate::trimmed(self.script, self.start, end).filter(|_| has_word);
+        self.start = next;
+        statement
+    }
+}
+
+impl Iterator for CqlScanner<'_> {
+    type Item = Region;
+
+    fn next(&mut self) -> Option<Region> {
+        let script = self.script;
+        let b = script.as_bytes();
+        let len = b.len();
+        let code = self.i;
+        while self.i < len {
+            let i = self.i;
+            if let Some((kind, end)) = opening(script, i) {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                self.end_word();
+                self.i = end.max(i + 1);
+                return Some(Region {
+                    kind,
+                    range: i..self.i,
+                });
+            }
+            let c = b[i];
+            if c.is_ascii_alphanumeric() || c == b'_' {
+                self.word.push(c.to_ascii_uppercase() as char);
+                self.i += 1;
+                continue;
+            }
+            self.end_word();
+            if c == b';' {
+                if !self.in_batch() {
+                    if code < i {
+                        return Some(Region {
+                            kind: RegionKind::Code,
+                            range: code..i,
+                        });
+                    }
+                    let statement = self.statement(i, i + 1);
+                    self.i = i + 1;
+                    return Some(Region {
+                        kind: RegionKind::StatementEnd { statement },
+                        range: i..i + 1,
+                    });
+                }
+                self.words.push(";".into());
+            }
+            self.i += 1;
+        }
+        if code < len {
+            // A word at the end of the text ends with it.
+            self.end_word();
+            return Some(Region {
+                kind: RegionKind::Code,
+                range: code..len,
+            });
+        }
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        self.end_word();
+        // The end of the script ends the last statement.
+        let statement = self.statement(len, len)?;
+        Some(Region {
+            kind: RegionKind::StatementEnd {
+                statement: Some(statement),
+            },
+            range: len..len,
+        })
+    }
+}
+
 /// The words of `text`'s code, uppercased, in order (names, numbers and keywords; strings and
 /// comments left out).
 fn words(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for range in code_ranges(text, skip) {
+    for range in scanner::code_ranges(CqlScanner::new(text)) {
         let mut word = String::new();
         for c in text[range].chars() {
             if c.is_ascii_alphanumeric() || c == '_' {
@@ -205,42 +349,7 @@ fn words(text: &str) -> Vec<String> {
 }
 
 fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut i = 0;
-    let push = |from: usize, to: usize, spans: &mut Vec<StatementSpan>| {
-        let text = &script[from..to];
-        if words(text).iter().any(|w| w != ";") {
-            let lead = text.len() - text.trim_start().len();
-            let body = text.trim();
-            spans.push(StatementSpan {
-                start: from + lead,
-                end: from + lead + body.len(),
-            });
-        }
-    };
-    while i < b.len() {
-        if let Some(end) = skip(script, i) {
-            i = end.max(i + 1);
-            continue;
-        }
-        if b[i] == b';' {
-            let so_far = words(&script[start..i]);
-            let in_batch = so_far.first().is_some_and(|w| w == "BEGIN")
-                && so_far.iter().take(3).any(|w| w == "BATCH")
-                && !so_far
-                    .windows(2)
-                    .any(|w| w[0] == "APPLY" && w[1] == "BATCH");
-            if !in_batch {
-                push(start, i, &mut spans);
-                start = i + 1;
-            }
-        }
-        i += 1;
-    }
-    push(start, b.len(), &mut spans);
-    spans
+    scanner::statements(CqlScanner::new(script))
 }
 
 // ------------------------------------------------------------------------------ the guard
@@ -295,7 +404,7 @@ fn is_batch_header(words: &[String]) -> bool {
 /// a batch never leads back to itself (SDB-540).
 fn batch_class(statement: &str) -> RequestClass {
     let mut worst = RequestClass::Write;
-    let ranges = code_ranges(statement, skip);
+    let ranges = scanner::code_ranges(CqlScanner::new(statement));
     let mut from = 0;
     let mut pieces = Vec::new();
     for range in ranges {

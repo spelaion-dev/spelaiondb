@@ -84,6 +84,11 @@
   statement's code holds a word, and where its first code is (leading comments are left out of
   what is sent). `words`, which the guard's `statement_class` and `refuse_statement` read,
   reads the scanner's code ranges.
+  CQL has moved (SDB-456): `CqlScanner` in `cql.rs` reads strings, names, `$$` bodies and `--`,
+  `//` and block comments through `opening`, and keeps the statement's words as it goes, so it
+  tells an unapplied `BEGIN … BATCH` (whose `;` do not end it) without reading the statement
+  again at every `;`. `words` and `batch_class`, which the guard reads, read the scanner's code
+  ranges.
   Every dialect but SQL Server answers `None` to `first_word` for now, and the guard reads the
   word through its
   `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
