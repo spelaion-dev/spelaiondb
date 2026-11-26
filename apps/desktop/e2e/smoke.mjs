@@ -6154,7 +6154,12 @@ try {
         await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.disabled === false);
         await settings.locator('input[name="tileAttribution"]').fill("Test tiles");
         await page.keyboard.press("Enter");
-        await page.waitForFunction(() => !document.querySelector(".settings-page input:disabled"));
+        // Until the core has the attribution (SDB-532): the next field's typing waits for the
+        // save, as it does for a person, instead of racing it on a slow machine.
+        await page.waitForFunction(async () => {
+          const saved = await window.__TAURI_INTERNALS__.invoke("get_map_preferences");
+          return saved.tileAttribution === "Test tiles";
+        });
         // An address the core refuses is said, and the saved one stays.
         await settings.locator('input[name="tileUrl"]').fill("http://tiles.example.com/{z}/{x}/{y}.png");
         await page.keyboard.press("Enter");
