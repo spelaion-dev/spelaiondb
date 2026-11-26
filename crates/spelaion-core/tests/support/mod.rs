@@ -57,6 +57,9 @@ pub async fn run_cleanup(label: &str, session: &Session, statements: &[String], 
 /// folder an earlier run left with the same name (an export that would now be written beside it
 /// as `name (2).xlsx`) is gone before any test of this run writes in it; later calls in the
 /// same run keep what earlier ones wrote.
+// Used by the core binary's files; the binaries that run apart (`postgres_family`…) share
+// this module without it.
+#[allow(dead_code)]
 pub fn run_dir(prefix: &str) -> std::path::PathBuf {
     static CLEARED: std::sync::Mutex<std::collections::BTreeSet<String>> =
         std::sync::Mutex::new(std::collections::BTreeSet::new());
