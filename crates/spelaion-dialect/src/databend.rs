@@ -1,6 +1,6 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
-use crate::{is_white_space_at, trimmed};
+use crate::scanner::{self, RegionKind, SemicolonScanner};
 
 /// Databend's dialect, as Databend's own lexer reads text (checked with 1.2.881):
 ///
@@ -25,7 +25,7 @@ impl Dialect for DatabendDialect {
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, skip_non_code)
+        scanner::code_ranges(SemicolonScanner::new(script, opening))
     }
 
     /// Always in double quotes, a quote doubled: a backtick cannot hold a backtick at all, and
@@ -36,76 +36,48 @@ impl Dialect for DatabendDialect {
 }
 
 fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut has_code = false;
-    let mut i = 0;
-
-    while i < b.len() {
-        if let Some(end) = skip_non_code(script, i) {
-            let comment = matches!(b[i], b'-' | b'/');
-            if !comment {
-                has_code = true;
-            }
-            i = end.max(i + 1);
-            continue;
-        }
-        match b[i] {
-            b';' => {
-                if has_code {
-                    spans.extend(trimmed(script, start, i));
-                }
-                i += 1;
-                start = i;
-                has_code = false;
-            }
-            _ => {
-                if !is_white_space_at(script, i) {
-                    has_code = true;
-                }
-                i += 1;
-            }
-        }
-    }
-    if has_code {
-        spans.extend(trimmed(script, start, b.len()));
-    }
-    spans
+    scanner::statements(SemicolonScanner::new(script, opening))
 }
 
-/// The byte after the string, quoted name or comment that starts at `i`; `None` when none
-/// starts there.
-fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+/// The string, quoted name, comment or `$$` body that starts at byte `i`, with the byte after it;
+/// `None` when none starts there. The scanner's one reading of them (Databend's statements end at
+/// a `;` outside them: [`SemicolonScanner`]).
+fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
     match *b.get(i)? {
-        q @ (b'\'' | b'"') => Some(skip_quoted(b, i, q)),
-        b'`' => Some(
+        b'\'' => Some((RegionKind::String, skip_quoted(b, i, b'\''))),
+        b'"' => Some((RegionKind::QuotedName, skip_quoted(b, i, b'"'))),
+        b'`' => Some((
+            RegionKind::QuotedName,
             b[i + 1..]
                 .iter()
                 .position(|&c| c == b'`')
                 .map_or(b.len(), |p| i + 1 + p + 1),
-        ),
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(
+        )),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((
+            RegionKind::Comment,
             b[i..]
                 .iter()
                 .position(|&c| c == b'\n')
                 .map_or(b.len(), |p| i + p + 1),
-        ),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(
+        )),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((
+            RegionKind::Comment,
             script[i + 2..]
                 .find("*/")
                 .map_or(b.len(), |p| i + 2 + p + 2),
-        ),
-        b'$' if b.get(i + 1) == Some(&b'$') => Some(
+        )),
+        b'$' if b.get(i + 1) == Some(&b'$') => Some((
+            RegionKind::QuotedBody,
             script[i + 2..]
                 .find("$$")
                 .map_or(b.len(), |p| i + 2 + p + 2),
-        ),
+        )),
         _ => None,
     }
 }
 
+/// The byte after the string, quoted name or comment that starts at `i`; `None` when none
 /// Skips a quoted string or name starting at `i` (the opening quote): a backslash escapes the
 /// next byte and a doubled quote is a quote.
 fn skip_quoted(b: &[u8], i: usize, quote: u8) -> usize {

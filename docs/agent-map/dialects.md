@@ -76,6 +76,9 @@
   backslash escapes), backquoted names and comments for Hive, Spark, Kyuubi and Impala alike.
   Spanner has moved (SDB-456): `opening` in `spanner.rs` reads GoogleSQL's `'…'` and `"…"`
   strings (triple-quoted too), backquoted names and `--`, `#` and block comments.
+  Databend has moved (SDB-456): `opening` in `databend.rs` reads its strings and names
+  (backslash escapes, doubled quotes), backticked names, `--` and block comments and `$$`
+  bodies.
   Every dialect but SQL Server answers `None` to `first_word` for now, and the guard reads the
   word through its
   `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
