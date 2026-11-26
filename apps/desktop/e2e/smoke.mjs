@@ -10643,6 +10643,44 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await answerProxyPassword();
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
 
+  step("an encrypted SSH key's passphrase remembered in the system keychain, then forgotten (SDB-534)");
+  await withSettings("network", async (settings) => {
+    await settings.getByRole("button", { name: "New network profile…" }).click();
+    const locked = page.getByRole("dialog", { name: "New network profile" });
+    await locked.getByLabel("Profile name").fill("Locked key");
+    await locked.getByRole("radio", { name: "Personal", exact: true }).check();
+    await locked.getByLabel("Hop 1 Host").fill("127.0.0.1");
+    await locked.getByLabel("Hop 1 Port").fill("2221");
+    await locked.getByLabel("Hop 1 User").fill("spelaion");
+    await locked.getByLabel("Hop 1 Authentication").selectOption("key");
+    await locked.getByLabel("Hop 1 Private key file").fill(join(root, "testing", "docker", "keys", "id_ed25519_pass"));
+    // First test: the passphrase is asked, with the box off; ticked, it is remembered.
+    await locked.getByRole("button", { name: "Test profile" }).click();
+    const passphrase = page.getByRole("dialog", { name: "SSH key passphrase" });
+    await passphrase.waitFor();
+    const remember = passphrase.getByRole("checkbox", { name: "Remember in the system keychain" });
+    assert.equal(await remember.isChecked(), false, "off by default");
+    await remember.check();
+    await passphrase.locator("input[type=password]").fill("spelaion-test");
+    await shot("14c-remember-passphrase");
+    await passphrase.getByRole("button", { name: "Unlock key" }).click();
+    await locked.locator(".test-result", { hasText: "Tunnel OK · 1 hop" }).waitFor();
+    await locked.getByText("A passphrase for this key is remembered in the system keychain.").waitFor();
+    // Second test: nobody is asked.
+    await locked.getByRole("button", { name: "Test profile" }).click();
+    await locked.locator(".test-result", { hasText: "Tunnel OK · 1 hop" }).waitFor();
+    assert.equal(await passphrase.count(), 0, "a remembered passphrase is not asked");
+    // Forgotten from the profile: the next test asks again (and is cancelled here).
+    await locked.getByRole("button", { name: "Forget remembered passphrase" }).click();
+    await locked.getByText("Forgotten: the passphrase is asked the next time this key is used.").waitFor();
+    await locked.getByRole("button", { name: "Test profile" }).click();
+    await passphrase.waitFor();
+    await passphrase.getByRole("button", { name: "Cancel", exact: true }).click();
+    await passphrase.waitFor({ state: "detached" });
+    await locked.getByRole("button", { name: "Cancel", exact: true }).last().click();
+    await locked.waitFor({ state: "detached" });
+  });
+
   step("Settings → Network: network profiles listed, created, edited and deleted there");
   await withSettings("network", async (settings) => {
     const corp = settings.getByRole("listitem", { name: "corp-proxy" });

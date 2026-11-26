@@ -152,6 +152,54 @@ pub(crate) fn forget(backend: &dyn SecretBackend, account: &str) -> Result<(), S
     backend.keychain_delete(account)
 }
 
+/// The passphrase remembered for the SSH key file at `key` (ADR-090), if there is a keychain
+/// and it holds one. A keychain that fails to answer holds nothing usable: the person is asked.
+pub fn remembered_key_passphrase(
+    backend: &dyn SecretBackend,
+    key: &std::path::Path,
+) -> Option<Secret> {
+    if !backend.keychain_available() {
+        return None;
+    }
+    backend
+        .keychain_get(&crate::accounts::key_passphrase_account(key))
+        .ok()
+        .flatten()
+        .map(Secret::new)
+}
+
+/// Remembers the passphrase of the SSH key file at `key`, once it decrypted the key: written
+/// through [`store`], so a keychain that keeps nothing is an error.
+pub fn remember_key_passphrase(
+    backend: &dyn SecretBackend,
+    key: &std::path::Path,
+    passphrase: &Secret,
+) -> Result<(), String> {
+    if !backend.keychain_available() {
+        return Err(KEYCHAIN_UNAVAILABLE.to_string());
+    }
+    store(
+        backend,
+        &crate::accounts::key_passphrase_account(key),
+        passphrase.expose(),
+    )
+}
+
+/// Forgets the passphrase remembered for the SSH key file at `key`; nothing to forget is not an
+/// error.
+pub fn forget_key_passphrase(
+    backend: &dyn SecretBackend,
+    key: &std::path::Path,
+) -> Result<(), String> {
+    forget(backend, &crate::accounts::key_passphrase_account(key))
+}
+
+/// Whether a passphrase is remembered for the SSH key file at `key`, without reading it out:
+/// for the SSH settings to offer to forget it.
+pub fn key_passphrase_remembered(backend: &dyn SecretBackend, key: &std::path::Path) -> bool {
+    is_stored(backend, &crate::accounts::key_passphrase_account(key))
+}
+
 /// The system's real keychain, environment and commands.
 pub struct SystemBackend;
 

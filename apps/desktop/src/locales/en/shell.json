@@ -295,6 +295,7 @@
   "sshPassword": "SSH password",
   "verificationFor": "Verification for {{host}}",
   "unlockKey": "Unlock key",
+  "rememberPassphrase": "Remember in the system keychain",
   "signIn": "Sign in",
   "signInToProxy": "Sign in to proxy",
   "sendCode": "Send code",

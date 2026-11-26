@@ -1173,6 +1173,38 @@ impl Interaction for Recording {
         }
         answer
     }
+
+    async fn ask_key_passphrase(
+        &self,
+        request: &SecretRequest,
+    ) -> Option<spelaion_ssh::KeyPassphraseAnswer> {
+        let answer = self.inner.ask_key_passphrase(request).await;
+        if let Some(answer) = &answer {
+            self.redactor.add(answer.passphrase.expose());
+        }
+        answer
+    }
+
+    fn passphrases_kept(&self) -> bool {
+        self.inner.passphrases_kept()
+    }
+
+    /// A passphrase remembered in the keychain (ADR-090) is redacted like a typed one.
+    async fn remembered_passphrase(&self, key: &std::path::Path) -> Option<Secret> {
+        let remembered = self.inner.remembered_passphrase(key).await;
+        if let Some(secret) = &remembered {
+            self.redactor.add(secret.expose());
+        }
+        remembered
+    }
+
+    async fn remember_passphrase(&self, key: &std::path::Path, passphrase: &Secret) {
+        self.inner.remember_passphrase(key, passphrase).await;
+    }
+
+    async fn forget_passphrase(&self, key: &std::path::Path) {
+        self.inner.forget_passphrase(key).await;
+    }
 }
 
 // ------------------------------------------------------------------------------ redaction
@@ -1464,6 +1496,66 @@ fn redact_key_values(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Keeps one passphrase for every key, and answers a key's question with another.
+    struct Remembers;
+
+    #[async_trait]
+    impl Interaction for Remembers {
+        async fn confirm_unknown_host(&self, _host: &HostInfo) -> bool {
+            false
+        }
+
+        async fn ask_secret(&self, _request: &SecretRequest) -> Option<Secret> {
+            None
+        }
+
+        async fn ask_key_passphrase(
+            &self,
+            _request: &SecretRequest,
+        ) -> Option<spelaion_ssh::KeyPassphraseAnswer> {
+            Some(spelaion_ssh::KeyPassphraseAnswer {
+                passphrase: Secret::new("typed-key-passphrase".to_string()),
+                remember: true,
+            })
+        }
+
+        fn passphrases_kept(&self) -> bool {
+            true
+        }
+
+        async fn remembered_passphrase(&self, _key: &std::path::Path) -> Option<Secret> {
+            Some(Secret::new("remembered-key-passphrase".to_string()))
+        }
+    }
+
+    /// A passphrase read from the keychain (ADR-090) is redacted in the connection test's
+    /// report like a typed one, and the wrapper passes every passphrase method through.
+    #[tokio::test]
+    async fn a_remembered_key_passphrase_is_redacted_like_a_typed_one() {
+        let redactor = Arc::new(Redactor::new());
+        let recording = Recording {
+            inner: Arc::new(Remembers),
+            redactor: redactor.clone(),
+        };
+        assert!(recording.passphrases_kept());
+        let key = std::path::Path::new("/keys/id");
+        assert!(recording.remembered_passphrase(key).await.is_some());
+        let request = SecretRequest::KeyPassphrase {
+            hop: 0,
+            path: key.to_path_buf(),
+            retry: false,
+            can_remember: true,
+        };
+        let answer = recording.ask_key_passphrase(&request).await.unwrap();
+        assert!(answer.remember);
+        assert_eq!(
+            redactor.redact(
+                "key remembered-key-passphrase did not work, then typed-key-passphrase did"
+            ),
+            "key *** did not work, then *** did"
+        );
+    }
 
     fn redact(secrets: &[&str], text: &str) -> String {
         let redactor = Redactor::new();

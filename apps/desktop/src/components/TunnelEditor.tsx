@@ -534,6 +534,9 @@ export function TunnelEditor(props: {
                       </button>
                     </div>
                   )}
+                  {(hop.method === "agent" || hop.method === "key" || hop.method === "custom") && (
+                    <RememberedPassphrase personal={mode.personal} identityFile={hop.identityFile} testing={log.running} />
+                  )}
                   {usesPassword(auth) &&
                     (hop.fixedMode ? (
                       <label className="field">
@@ -774,6 +777,60 @@ function UsedBy({ users }: { users: ProfileUsers }) {
     default: {
       const unknown: never = users;
       return unknown;
+    }
+  }
+}
+
+/** Whether a passphrase is remembered for the key file a hop names (ADR-090), with a way to
+ *  forget it. The core resolves the path and answers only whether, never the passphrase. */
+type Remembered = { kind: "unknown" } | { kind: "none" } | { kind: "remembered" } | { kind: "forgotten" } | { kind: "failed"; detail: string };
+
+/** `testing`: a test of the profile is running; it is asked again when one ends, since the test
+ *  may have just remembered a passphrase. */
+function RememberedPassphrase({ personal, identityFile, testing }: { personal: boolean; identityFile: string; testing: boolean }) {
+  const { t } = useTranslation("connections");
+  const [state, setState] = useState<Remembered>({ kind: "unknown" });
+  useEffect(() => {
+    let current = true;
+    if (!identityFile.trim() || testing) {
+      if (!identityFile.trim()) setState({ kind: "none" });
+      return;
+    }
+    call(commands.keyPassphraseRemembered(personal, identityFile))
+      .then((remembered) => current && setState({ kind: remembered ? "remembered" : "none" }))
+      .catch(() => current && setState({ kind: "none" }));
+    return () => {
+      current = false;
+    };
+  }, [personal, identityFile, testing]);
+  const forget = async () => {
+    try {
+      await call(commands.forgetKeyPassphrase(personal, identityFile));
+      setState({ kind: "forgotten" });
+    } catch (e) {
+      setState({ kind: "failed", detail: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  switch (state.kind) {
+    case "unknown":
+    case "none":
+      return null;
+    case "remembered":
+      return (
+        <p className="small remembered-passphrase">
+          {t("tunnel.passphraseRemembered")}{" "}
+          <button type="button" className="ghost small" onClick={() => void forget()}>
+            {t("tunnel.forgetPassphrase")}
+          </button>
+        </p>
+      );
+    case "forgotten":
+      return <p className="muted small" role="status">{t("tunnel.passphraseForgotten")}</p>;
+    case "failed":
+      return <p className="error small" role="alert">{t("tunnel.forgetFailed", { detail: state.detail })}</p>;
+    default: {
+      const never: never = state;
+      return never;
     }
   }
 }

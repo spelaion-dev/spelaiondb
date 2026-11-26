@@ -6792,10 +6792,52 @@ async fn answer_interaction(
     id: u32,
     accept: bool,
     secret: Option<String>,
+    remember: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    state.pending.answer(id, accept, secret.map(Secret::new));
+    state
+        .pending
+        .answer(id, accept, secret.map(Secret::new), remember);
     Ok(())
+}
+
+/// The key file a hop's `identity_file` names, as the core reads it, in the shown folder's
+/// personal layer or repository (ADR-090).
+async fn hop_key(state: &AppState, personal: bool, identity_file: &str) -> Option<PathBuf> {
+    let config = state.config().await;
+    let source = if personal {
+        Source::User
+    } else {
+        Source::Workspace
+    };
+    spelaion_config::hop_key_path(&config, source, identity_file)
+}
+
+/// Whether a passphrase is remembered for the key file a hop names (ADR-090): only whether,
+/// never the passphrase.
+#[command]
+async fn key_passphrase_remembered(
+    personal: bool,
+    identity_file: String,
+    state: State<'_, AppState>,
+) -> CmdResult<bool> {
+    Ok(hop_key(&state, personal, &identity_file)
+        .await
+        .is_some_and(|key| spelaion_config::key_passphrase_remembered(&SystemBackend, &key)))
+}
+
+/// Forgets the passphrase remembered for the key file a hop names (ADR-090): it is asked the
+/// next time the key is used.
+#[command]
+async fn forget_key_passphrase(
+    personal: bool,
+    identity_file: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    match hop_key(&state, personal, &identity_file).await {
+        Some(key) => spelaion_config::forget_key_passphrase(&SystemBackend, &key),
+        None => Ok(()),
+    }
 }
 
 /// Window of rows as binary Arrow IPC (no JSON), with every cell already converted to the
@@ -7216,6 +7258,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             join_sql,
             query_key_table,
             answer_interaction,
+            key_passphrase_remembered,
+            forget_key_passphrase,
             transaction_status,
             set_auto_commit,
             commit_transaction,

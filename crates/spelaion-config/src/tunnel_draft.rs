@@ -702,6 +702,74 @@ pub fn update_tunnel_at_revision(
     update_tunnel(config, source, name, draft, passwords, backend)
 }
 
+/// The key file a hop's `identity_file` text names, as the resolver reads it: `~/` is the home
+/// folder and a relative path hangs from the layer's folder (the personal folder, or the
+/// repository's root). `None` for no text, or one that uses a variable (the resolver alone
+/// expands those, when it connects).
+pub fn hop_key_path(config: &Config, source: Source, identity_file: &str) -> Option<PathBuf> {
+    let text = identity_file.trim();
+    if text.is_empty() || text.contains("${") {
+        return None;
+    }
+    let base = match source {
+        Source::User => config.user_dir.clone(),
+        Source::Workspace => config.workspace_root.clone()?,
+    };
+    Some(crate::vars::resolve_path(text, &base))
+}
+
+/// Every key file the loaded configuration's hops name, as keychain names (ADR-090), leaving
+/// out the hops of the profile `skip` (its old version, while it is being saved).
+fn keys_in_use(config: &Config, skip: Option<(Source, &str)>) -> Vec<String> {
+    config
+        .tunnels
+        .iter()
+        .filter(|tunnel| skip != Some((tunnel.source, tunnel.name.as_str())))
+        .flat_map(|tunnel| {
+            tunnel.file.hops.iter().filter_map(move |hop| {
+                hop_key_path(config, tunnel.source, hop.identity_file.as_deref()?)
+                    .map(|path| crate::accounts::key_passphrase_account(&path))
+            })
+        })
+        .collect()
+}
+
+/// After a profile is saved: the passphrase remembered for a key file one of its hops stopped
+/// using is forgotten (ADR-090), unless another hop of the loaded configuration, this profile's
+/// new ones included, still uses that file.
+fn forget_replaced_keys(
+    config: &Config,
+    source: Source,
+    name: &str,
+    old: &TunnelFile,
+    new: &TunnelFile,
+    backend: &dyn SecretBackend,
+) -> Result<(), ResolveError> {
+    let account_of = |hop: &crate::model::HopConfig| {
+        hop_key_path(config, source, hop.identity_file.as_deref()?)
+            .map(|path| (crate::accounts::key_passphrase_account(&path), path))
+    };
+    let mut in_use = keys_in_use(config, Some((source, name)));
+    in_use.extend(
+        new.hops
+            .iter()
+            .filter_map(account_of)
+            .map(|(account, _)| account),
+    );
+    for (account, path) in old.hops.iter().filter_map(account_of) {
+        if in_use.contains(&account) {
+            continue;
+        }
+        crate::secrets::forget_key_passphrase(backend, &path).map_err(|message| {
+            ResolveError::Secret {
+                reference: format!("keychain:{account}"),
+                message,
+            }
+        })?;
+    }
+    Ok(())
+}
+
 /// Saves edited hops by position, preserving comments and `command`. A stored password is
 /// forgotten when its hop stops using the keychain or points to another server.
 pub fn update_tunnel(
@@ -799,6 +867,9 @@ pub fn update_tunnel(
                 });
             }
         }
+    }
+    if result.is_ok() {
+        result = forget_replaced_keys(config, source, name, old, &new, backend);
     }
     if result.is_err() {
         // Put the file back as it was, the same way it was written.

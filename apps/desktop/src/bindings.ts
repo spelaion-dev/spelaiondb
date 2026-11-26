@@ -1377,7 +1377,17 @@ export const commands = {
 	 */
 	queryKeyTable: (session: string, result: number, sql: string) => typedError<KeyTableItem | null, string>(__TAURI_INVOKE("query_key_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
-	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
+	answerInteraction: (id: number, accept: boolean, secret: string | null, remember: boolean) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret, remember })),
+	/**
+	 *  Whether a passphrase is remembered for the key file a hop names (ADR-090): only whether,
+	 *  never the passphrase.
+	 */
+	keyPassphraseRemembered: (personal: boolean, identityFile: string) => typedError<boolean, string>(__TAURI_INVOKE("key_passphrase_remembered", { personal, identityFile })),
+	/**
+	 *  Forgets the passphrase remembered for the key file a hop names (ADR-090): it is asked the
+	 *  next time the key is used.
+	 */
+	forgetKeyPassphrase: (personal: boolean, identityFile: string) => typedError<null, string>(__TAURI_INVOKE("forget_key_passphrase", { personal, identityFile })),
 	/**  An editor tab's transaction, as the core last read it (ADR-031). */
 	transactionStatus: (session: string) => typedError<TransactionStatusItem, string>(__TAURI_INVOKE("transaction_status", { session })),
 	/**
@@ -7294,7 +7304,9 @@ export type SearchTableItem = {
 };
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
-export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "proxyPassword"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
+export type SecretLabel = 
+/**  `can_remember`: the dialog offers "Remember in the system keychain" (ADR-090). */
+{ kind: "keyPassphrase"; path: string; retry: boolean; canRemember: boolean } | { kind: "password"; user: string; host: string } | { kind: "proxyPassword"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
 
 /**
  *  The numbers about a grid selection (the calc panel), computed by the core over the stored

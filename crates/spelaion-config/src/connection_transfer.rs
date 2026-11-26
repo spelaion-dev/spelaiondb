@@ -156,11 +156,13 @@ fn personal_profile<'a>(config: &'a Config, name: &str) -> Option<&'a TunnelEntr
 }
 
 /// Whether a named keychain entry (`keychain:<name>`) is one the app names after another
-/// connection or profile (`repo:…`, `~/…`): an import never writes one nor a connection that
-/// reads one, and an export never carries one, so a file cannot send another connection's
-/// password to a server it chooses (ADR-009's names, ADR-088).
+/// connection or profile (`repo:…`, `~/…`) or after an SSH key file (`key:…`, ADR-090): an
+/// import never writes one nor a connection that reads one, and an export never carries one,
+/// so a file cannot send another connection's password or a key's passphrase to a server it
+/// chooses (ADR-009's names, ADR-088).
 fn names_another_entry(name: &str, default_account: &str) -> bool {
-    (name.starts_with("repo:") || name.starts_with("~/")) && name != default_account
+    (name.starts_with("repo:") || name.starts_with("~/") || name.starts_with("key:"))
+        && name != default_account
 }
 
 /// The keychain entry a password spec reads, if it reads one of its own.

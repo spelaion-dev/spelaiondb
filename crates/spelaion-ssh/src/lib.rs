@@ -18,7 +18,7 @@ mod proxy;
 mod ssm;
 mod tunnel;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -192,6 +192,9 @@ pub enum SecretRequest {
         hop: usize,
         path: PathBuf,
         retry: bool,
+        /// The dialog may offer to remember it in the system keychain (ADR-090): the
+        /// interaction keeps passphrases ([`Interaction::passphrases_kept`]).
+        can_remember: bool,
     },
     Password {
         hop: usize,
@@ -210,14 +213,55 @@ pub enum SecretRequest {
     },
 }
 
+/// The answer to a key's passphrase question: the passphrase, and whether the person asked to
+/// remember it in the system keychain (ADR-090).
+#[derive(Debug, Clone)]
+pub struct KeyPassphraseAnswer {
+    pub passphrase: Secret,
+    pub remember: bool,
+}
+
 /// Dialogs a tunnel may need to open. The app shows them; the headless MCP answers no to
 /// everything (so an unknown host is rejected).
+///
+/// A key's passphrase may be remembered (ADR-090): only an interaction that keeps passphrases
+/// (the desktop app's, in the system keychain) overrides the methods that read and write them;
+/// every other keeps the defaults, which read nothing, write nothing and offer nothing, so the
+/// MCP server and the command line never read a remembered passphrase. A wrapper forwards
+/// every method.
 #[async_trait]
 pub trait Interaction: Send + Sync {
     /// Unknown host: `true` to trust it and store its fingerprint.
     async fn confirm_unknown_host(&self, host: &HostInfo) -> bool;
     /// `None` cancels opening the tunnel.
     async fn ask_secret(&self, request: &SecretRequest) -> Option<Secret>;
+
+    /// Asks for a key's passphrase ([`SecretRequest::KeyPassphrase`]); `None` cancels. By
+    /// default it is [`Interaction::ask_secret`], never remembered.
+    async fn ask_key_passphrase(&self, request: &SecretRequest) -> Option<KeyPassphraseAnswer> {
+        self.ask_secret(request)
+            .await
+            .map(|passphrase| KeyPassphraseAnswer {
+                passphrase,
+                remember: false,
+            })
+    }
+
+    /// Whether this interaction keeps passphrases, so the dialog may offer to remember one.
+    fn passphrases_kept(&self) -> bool {
+        false
+    }
+
+    /// The passphrase remembered for the key file at `key` (its canonical path), if any.
+    async fn remembered_passphrase(&self, _key: &Path) -> Option<Secret> {
+        None
+    }
+
+    /// Remembers `passphrase` for the key file at `key`, once it decrypted the key.
+    async fn remember_passphrase(&self, _key: &Path, _passphrase: &Secret) {}
+
+    /// Forgets the passphrase remembered for the key file at `key` (it no longer decrypts it).
+    async fn forget_passphrase(&self, _key: &Path) {}
 }
 
 /// What went wrong with a proxy, for the connection test's hints (ADR-032).
