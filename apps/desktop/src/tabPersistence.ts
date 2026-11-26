@@ -45,6 +45,8 @@ function snapshot(tabs: Tab[], activeTab: string | null): { tabs: OpenTabItem[];
       file: tab.file
         ? { path: tab.file.path, hash: tab.file.hash, format: tab.file.format, modified: isModified(tab) }
         : null,
+      // A notebook keeps its text, as its file holds it, and comes back as a notebook (ADR-087).
+      notebook: Boolean(tab.notebook),
     })),
     active: active < 0 ? null : active,
   };

@@ -301,6 +301,22 @@
   folder's types, and a connection's sessions are told apart by folder as well as id. An
   "untrusted" outcome (`ConnectOutcome`, `ConnectionTestOutcome`, `EditorAccessOutcome`) names
   the folder it is about (`root`), which the page trusts: not always the shown one.
+- SQL notebooks (ADR-087, SDB-36): a notebook tab is a file tab (`tab.file`, `tab.sql`) with
+  `tab.notebook` (`store.ts`): `sql` is the notebook's text as the core writes it from the cells
+  (`notebook_text`, `notebook.ts`'s `syncNotebookText`, after each change and before every save),
+  so saving, the changed-on-disk check, the unsaved mark, closing's question and kept tabs are
+  `sqlFiles.ts`'s and ADR-036's; an opened or restored notebook reads its cells from its text
+  (`parse_notebook`) and is not written again until a cell changes. `.md` paths open as notebooks
+  (`openFilePath`). `NotebookTab.tsx` runs a cell as the editor runs a script: `expand_notebook_cell`
+  (the core's CTE expansion with the session's dialect), `script_risks` and the confirmation,
+  then `run_notebook_cell` (`notebook.rs`), which is `start_script` with the cell's results key
+  (`cell_results_key`), so `check_run`, the history and the run options are the editor's; never
+  run a cell's text any other way. Each cell's results are freed with the tab (`close_editor`
+  frees its cells' keys too) or when the cell goes (`release_notebook_cell`). Markdown is drawn
+  from `notebook_markdown`'s blocks as React text; links and images are never followed or
+  fetched. The HTML export (`export_notebook_html`) sends result ids and a shown chart's SVG,
+  never rows. A command that acts on an editor tab excludes notebooks (`editorTab` in
+  `commands.ts` and the other kind checks); `fileTab` is the editor's or a notebook's.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

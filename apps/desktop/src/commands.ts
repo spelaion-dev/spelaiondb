@@ -14,6 +14,7 @@ import { toggleSidePanel } from "./sidePanel";
 import { duplicateConnection } from "./connectionCopies";
 import { disconnectAll, hasSessions } from "./connectionControl";
 import { openFileDialog, reloadTab, saveTab, saveTabAs } from "./sqlFiles";
+import { newNotebook } from "./notebook";
 import { openSavedPlan } from "./planFiles";
 import { SAVE_DIAGRAM_EVENT, openDiagram } from "./diagramTabs";
 import { usePreferences } from "./preferences";
@@ -98,10 +99,16 @@ function tabOf(context: CommandContext): Tab | undefined {
   return context.tab ? useApp.getState().tabs.find((tab) => tab.id === context.tab) : undefined;
 }
 
-/** A SQL editor tab (not a table's data or details). */
+/** A SQL editor tab (not a table's data or details, nor a notebook). */
 function editorTab(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
-  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram ? tab : undefined;
+  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && !tab.notebook ? tab : undefined;
+}
+
+/** A tab whose text is saved to a file: a SQL editor's or a notebook's (ADR-087). */
+function fileTab(context: CommandContext): Tab | undefined {
+  const tab = tabOf(context);
+  return tab?.notebook ? tab : editorTab(context);
 }
 
 /** The result a SQL editor tab shows now, whose tab the result commands act on. */
@@ -159,7 +166,7 @@ function connectedEditorTab(context: CommandContext): boolean {
 /** A tab whose result may hold pending table edits (a table's data, or a query's). */
 function editableTab(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
-  return tab && !tab.tableDetails && !tab.plan && !tab.diagram && isConnected(tab) ? tab : undefined;
+  return tab && !tab.tableDetails && !tab.plan && !tab.diagram && !tab.notebook && isConnected(tab) ? tab : undefined;
 }
 
 function editsCommand(command: "undo" | "redo"): CommandBinding["run"] {
@@ -203,7 +210,7 @@ async function importFromClipboard(context: CommandContext) {
 /** The connected tab an "ER diagram" command starts from: any but a diagram or a plan. */
 function diagramSource(context: CommandContext): Tab | undefined {
   const tab = tabOf(context);
-  return tab && tab.connectionId && !tab.diagram && !tab.plan && isConnected(tab) ? tab : undefined;
+  return tab && tab.connectionId && !tab.diagram && !tab.plan && !tab.notebook && isConnected(tab) ? tab : undefined;
 }
 
 /** A diagram around the active tab's table, or of its editor's current schema. */
@@ -252,7 +259,7 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   "tab.duplicate": {
     enabled: (c) => {
       const tab = tabOf(c);
-      return tab !== undefined && !tab.tableDetails && !tab.plan && !tab.diagram;
+      return tab !== undefined && !tab.tableDetails && !tab.plan && !tab.diagram && !tab.notebook;
     },
     run: (c) => c.tab && duplicateTab(c.tab),
   },
@@ -341,21 +348,32 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
   },
   "file.open": { run: () => openFileDialog() },
   "file.openPlan": { run: () => openSavedPlan() },
+  // A new notebook on the active tab's connection; it connects and runs only on a click (ADR-087).
+  "file.newNotebook": {
+    // The active tab's, whatever the command came from: the file menu runs its items without a
+    // tab of their own, as Open… does (`openFilePath`).
+    run: () => {
+      const app = useApp.getState();
+      const active = app.tabs.find((tab) => tab.id === app.activeTab);
+      newNotebook(active && !active.table && !active.tableDetails && !active.diagram ? tabConnection(active) : null);
+    },
+  },
   "editor.explain": { enabled: runnableTab, run: editorCommand("explain") },
   "file.save": {
-    enabled: (c) => editorTab(c) !== undefined || Boolean(tabOf(c)?.diagram),
+    enabled: (c) => fileTab(c) !== undefined || Boolean(tabOf(c)?.diagram),
     // A file tab saves its file; a console saves its query by name (ADR-036); a diagram tab
     // saves the diagram (ADR-084).
-    label: (c) => (tabOf(c)?.diagram ? "app:commands.saveDiagram" : tabOf(c)?.file ? "app:tabs.saveFile" : "app:commands.saveQuery"),
+    label: (c) => (tabOf(c)?.diagram ? "app:commands.saveDiagram" : tabOf(c)?.file || tabOf(c)?.notebook ? "app:tabs.saveFile" : "app:commands.saveQuery"),
     run: (c) => {
       const diagram = tabOf(c);
       if (diagram?.diagram) {
         window.dispatchEvent(new CustomEvent(SAVE_DIAGRAM_EVENT, { detail: diagram.id }));
         return;
       }
-      const tab = editorTab(c);
+      const tab = fileTab(c);
       if (!tab) return;
-      if (tab.file) {
+      // A notebook is saved to its file, or asks where the first time (ADR-087).
+      if (tab.file || tab.notebook) {
         void saveTab(tab.id);
         return;
       }
@@ -367,11 +385,11 @@ const BINDINGS: Record<CommandId, CommandBinding> = {
     },
   },
   "file.saveAs": {
-    enabled: (c) => editorTab(c) !== undefined,
+    enabled: (c) => fileTab(c) !== undefined,
     run: (c) => c.tab && saveTabAs(c.tab),
   },
   "file.reload": {
-    enabled: (c) => Boolean(editorTab(c)?.file),
+    enabled: (c) => Boolean(fileTab(c)?.file),
     run: (c) => c.tab && reloadTab(c.tab),
   },
   "editor.run": { enabled: runnableTab, run: editorCommand("runCurrent") },

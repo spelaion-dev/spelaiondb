@@ -44,6 +44,7 @@ import {
   Minimize2,
   Minus,
   Network,
+  NotebookText,
   PanelLeftClose,
   PanelRight,
   PictureInPicture2,
@@ -122,12 +123,13 @@ const ICONS = {
   saved: Bookmark,
   mcp: Cpu,
   settings: Settings,
-  // A tab's kind: a query, a SQL file, table data, a table's details, an ER diagram.
+  // A tab's kind: a query, a SQL file, table data, a table's details, an ER diagram, a notebook.
   query: Terminal,
   file: FileText,
   table: Table,
   details: Info,
   diagram: Workflow,
+  notebook: NotebookText,
   // The editor's action column (cancel is `stopped`, filled).
   run: Play,
   runScript: ListVideo,

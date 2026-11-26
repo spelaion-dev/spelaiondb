@@ -20,6 +20,7 @@ mod launch;
 mod library;
 mod log_viewer;
 mod mcp;
+mod notebook;
 mod open_folders;
 mod panics;
 mod plans;
@@ -3109,7 +3110,7 @@ async fn run_script(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     start_script(
-        &state, &session, sql, confirmed, options, placement, on_event, None,
+        &state, &session, sql, confirmed, options, placement, on_event, None, None,
     )
     .await
 }
@@ -3129,8 +3130,10 @@ async fn answer_script_error(
         .map_err(|e| e.to_string())
 }
 
+/// `results`: the key the run's results are kept under, when it is not the session's own (a
+/// notebook cell's, ADR-087).
 #[allow(clippy::too_many_arguments)]
-async fn start_script(
+pub(crate) async fn start_script(
     state: &AppState,
     session: &str,
     sql: String,
@@ -3139,12 +3142,13 @@ async fn start_script(
     placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
     page: Option<(String, Vec<SortKeyItem>)>,
+    results: Option<String>,
 ) -> CmdResult<()> {
     let (original, page_sort) = match page {
         Some((original, sort)) => (Some(original), Some(sort)),
         None => (None, None),
     };
-    let editor = session;
+    let editor = results.as_deref().unwrap_or(session);
     let (open, workspace) = {
         let sessions = state.sessions.lock().await;
         let session = sessions
@@ -3265,7 +3269,7 @@ async fn run_query_page(
         None => (sql, None),
     };
     start_script(
-        &state, &session, sql, confirmed, options, placement, on_event, page,
+        &state, &session, sql, confirmed, options, placement, on_event, page, None,
     )
     .await
 }
@@ -6879,6 +6883,15 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             file_dialog::choose_path,
             clipboard_text::read_clipboard_text,
             files::open_sql_file,
+            notebook::parse_notebook,
+            notebook::notebook_text,
+            notebook::notebook_markdown,
+            notebook::new_notebook_cell_name,
+            notebook::check_notebook_cell_name,
+            notebook::expand_notebook_cell,
+            notebook::run_notebook_cell,
+            notebook::release_notebook_cell,
+            notebook::export_notebook_html,
             files::save_sql_file,
             files::recent_files,
             files::forget_recent_file,

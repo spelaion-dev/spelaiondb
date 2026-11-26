@@ -14,6 +14,7 @@ import { DeleteConnection } from "./components/DeleteConnection";
 import { MoveConnection } from "./components/MoveConnection";
 import { Dialogs } from "./components/Dialogs";
 import { EditorTab } from "./components/EditorTab";
+import { NotebookTab } from "./components/NotebookTab";
 import { PlanFileTab } from "./components/PlanViewer";
 import { openSavedPlan } from "./planFiles";
 import { TabBar } from "./components/TabBar";
@@ -445,8 +446,8 @@ const TabPanel = memo(function TabPanel({ id, active, pane }: { id: string; acti
       onPointerDownCapture={takeFocus}
       onFocusCapture={takeFocus}
     >
-      <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
-        {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
+      <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : t.notebook ? "notebook" : "editor"}>
+        {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : t.notebook ? <NotebookTab tab={t} /> : <EditorTab tab={t} />}
       </ScreenBoundary>
     </div>
   );

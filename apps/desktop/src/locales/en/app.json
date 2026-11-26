@@ -75,7 +75,8 @@
     "noRecent": "No recent files yet.",
     "missing": "{{path}} (no longer on disk)",
     "missingShort": "missing",
-    "forget": "Remove {{name}} from recent files"
+    "forget": "Remove {{name}} from recent files",
+    "newNotebook": "New notebook"
   },
   "screenFailed": {
     "title": "This screen stopped working",
