@@ -1,6 +1,6 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
-use crate::{is_white_space_at, trimmed};
+use crate::scanner::{self, RegionKind, SemicolonScanner};
 
 /// Spanner's GoogleSQL dialect, as its lexer reads text:
 ///
@@ -23,7 +23,7 @@ impl Dialect for SpannerDialect {
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, skip_non_code)
+        scanner::code_ranges(SemicolonScanner::new(script, opening))
     }
 
     /// Always in backticks, with `\` and `` ` `` escaped.
@@ -33,69 +33,37 @@ impl Dialect for SpannerDialect {
 }
 
 fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut has_code = false;
-    let mut i = 0;
-
-    while i < b.len() {
-        if let Some(end) = skip_non_code(script, i) {
-            let comment = matches!(b[i], b'-' | b'#' | b'/');
-            if !comment {
-                has_code = true;
-            }
-            i = end.max(i + 1);
-            continue;
-        }
-        match b[i] {
-            b';' => {
-                if has_code {
-                    spans.extend(trimmed(script, start, i));
-                }
-                i += 1;
-                start = i;
-                has_code = false;
-            }
-            _ => {
-                if !is_white_space_at(script, i) {
-                    has_code = true;
-                }
-                i += 1;
-            }
-        }
-    }
-    if has_code {
-        spans.extend(trimmed(script, start, b.len()));
-    }
-    spans
+    scanner::statements(SemicolonScanner::new(script, opening))
 }
 
-/// The byte after the string, quoted name or comment that starts at `i`; `None` when none
-/// starts there. A string's prefix (`r`, `b`, `rb`, `br`) is part of the word before it, so
-/// the string starts at its quote.
-fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+/// The string, quoted name or comment that starts at byte `i`, with the byte after it; `None`
+/// when none starts there. The scanner's one reading of GoogleSQL's: `'…'` and `"…"` strings
+/// (triple-quoted ones too), `` `…` `` names, `--`, `#` and block comments (Spanner's statements
+/// end at a `;` outside them: [`SemicolonScanner`]).
+fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
     match *b.get(i)? {
         q @ (b'\'' | b'"') => {
             if b.get(i + 1) == Some(&q) && b.get(i + 2) == Some(&q) {
-                Some(skip_triple(b, i, q))
+                Some((RegionKind::String, skip_triple(b, i, q)))
             } else {
-                Some(skip_quoted(b, i, q))
+                Some((RegionKind::String, skip_quoted(b, i, q)))
             }
         }
-        b'`' => Some(skip_quoted(b, i, b'`')),
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(line_end(b, i)),
-        b'#' => Some(line_end(b, i)),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(
+        b'`' => Some((RegionKind::QuotedName, skip_quoted(b, i, b'`'))),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((RegionKind::Comment, line_end(b, i))),
+        b'#' => Some((RegionKind::Comment, line_end(b, i))),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((
+            RegionKind::Comment,
             script[i + 2..]
                 .find("*/")
                 .map_or(b.len(), |p| i + 2 + p + 2),
-        ),
+        )),
         _ => None,
     }
 }
 
+/// The byte after the string, quoted name or comment that starts at `i`; `None` when none
 fn line_end(b: &[u8], i: usize) -> usize {
     b[i..]
         .iter()
