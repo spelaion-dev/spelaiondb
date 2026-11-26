@@ -4689,7 +4689,12 @@ mod tests {
         assert_eq!(shop.id, "prod/orders");
         let personal = ConnectionKeyItem::stored("/work/shop", "~/local").expect("named");
         assert_eq!(personal.folder, None);
-        assert_eq!(ConnectionKeyItem::stored("", "~/local").expect("named").folder, None);
+        assert_eq!(
+            ConnectionKeyItem::stored("", "~/local")
+                .expect("named")
+                .folder,
+            None
+        );
         assert!(ConnectionKeyItem::stored("/work/shop", "").is_none());
         // A repository connection kept outside any folder cannot be told apart from another's.
         assert!(ConnectionKeyItem::stored("", "prod/orders").is_none());
