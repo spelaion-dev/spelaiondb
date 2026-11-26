@@ -67,7 +67,9 @@
   file are one error) and `connection_transfer.rs` gathers the export (personal connections, the
   personal profiles they name, the keychain values their files name) and writes the import: every
   item checked as a file on disk first, nothing that runs a program (`cmd:`, `sqlite3`, a hop
-  `command`, an `aws` or `kubectl` path), each item's secrets through `secrets::store` and then
+  `command`, an `aws` or `kubectl` path), never a password this computer already keeps (a
+  `keychain:<name>` only with its value in the file and no other value here; an item's own entry
+  the file does not carry is cleared), each item's secrets through `secrets::store` and then
   its file, the keychain put back when a step fails. Any change there needs tests that try to get
   around it (`tests/connection_transfer.rs` and the format's own tests). Argon2 and blake2 build
   optimized in dev (the workspace's `Cargo.toml`): unoptimized, one key takes minutes.

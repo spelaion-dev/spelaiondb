@@ -70,7 +70,7 @@ pub async fn preview_connections_file(
     let bytes =
         spelaion_config::read_connections_file(&PathBuf::from(path)).map_err(|e| e.to_string())?;
     let config = state.config().await;
-    spelaion_config::preview_connections_import(&config, &bytes, &password)
+    spelaion_config::preview_connections_import(&config, &SystemBackend, &bytes, &password)
         .map(|items| items.into_iter().map(Into::into).collect())
         .map_err(|e| e.to_string())
 }
