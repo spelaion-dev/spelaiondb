@@ -72,6 +72,8 @@
   Trino has moved (SDB-456): `opening` in `trino.rs` is standard SQL's reading (`'…'`, `"…"`,
   `--`, block comments that do not nest), which the standard dialect (`standard.rs`, the Flight
   SQL engines) reads too, through `trino::split` and `trino::code_ranges`.
+  Hive has moved (SDB-456): `opening` in `hive.rs` reads HiveQL's strings (`'…'` and `"…"`,
+  backslash escapes), backquoted names and comments for Hive, Spark, Kyuubi and Impala alike.
   Every dialect but SQL Server answers `None` to `first_word` for now, and the guard reads the
   word through its
   `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
