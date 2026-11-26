@@ -307,3 +307,41 @@ mod tests {
         );
     }
 }
+
+/// What a run whose client commands were resolved yields (ADR-078): its events, and the text
+/// of each `@echo` line when the run reaches it.
+#[derive(Debug)]
+pub enum RunItem {
+    Event(crate::CoreEvent),
+    Echo(String),
+}
+
+/// The run's events with its `@echo` lines (ADR-078, point 6): each comes just before the
+/// statement after it starts; the ones after the last statement come when the run went through
+/// every statement, before its end. A run that stopped earlier never reaches the rest. An echo
+/// is not a statement: the run's summary does not count it.
+pub fn with_echoes(
+    mut events: futures_util::stream::BoxStream<'static, crate::CoreEvent>,
+    echoes: Vec<crate::ScriptEcho>,
+) -> futures_util::stream::BoxStream<'static, RunItem> {
+    use futures_util::StreamExt;
+    Box::pin(async_stream::stream! {
+        let mut pending = echoes.into_iter().peekable();
+        while let Some(event) = events.next().await {
+            match &event {
+                crate::CoreEvent::StatementStarted { index, .. } => {
+                    while let Some(echo) = pending.next_if(|e| e.before <= *index) {
+                        yield RunItem::Echo(echo.text);
+                    }
+                }
+                crate::CoreEvent::ScriptFinished { summary, .. } if summary.stop.is_none() => {
+                    for echo in pending.by_ref() {
+                        yield RunItem::Echo(echo.text);
+                    }
+                }
+                _ => {}
+            }
+            yield RunItem::Event(event);
+        }
+    })
+}

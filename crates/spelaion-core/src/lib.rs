@@ -285,6 +285,7 @@ pub use schema_compare::{
     SchemaSnapshot, TableSnapshot, ViewSnapshot, compare, compare_schemas, compare_support,
     migration_script, read_snapshot,
 };
+pub use script::{RunItem, with_echoes};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
 };
@@ -353,8 +354,9 @@ pub use value_view::{
     statement_for_display, view_cell,
 };
 pub use variables::{
-    MAX_VARIABLE_NAME, MAX_VARIABLE_VALUE, VariableError, is_variable_name, is_variable_value,
-    script_variables, substitute_variables,
+    MAX_VARIABLE_NAME, MAX_VARIABLE_VALUE, ResolvedScript, ScriptEcho, VariableError,
+    is_variable_name, is_variable_value, missing_variables, resolve_script, script_variables,
+    substitute_variables,
 };
 pub use write::{
     AgentAccess, AgentView, ReadOnlyBecause, WriteError, WriteLimits, WriteResult, agent_access,

@@ -3199,12 +3199,13 @@ pub(crate) async fn start_script(
     session: &str,
     sql: String,
     confirmed: bool,
-    options: RunOptionsItem,
+    mut options: RunOptionsItem,
     placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
     page: Option<(String, Vec<SortKeyItem>)>,
     results: Option<String>,
 ) -> CmdResult<()> {
+    let echoes = std::mem::take(&mut options.echoes);
     let (original, page_sort) = match page {
         Some((original, sort)) => (Some(original), Some(sort)),
         None => (None, None),
@@ -3263,14 +3264,21 @@ pub(crate) async fn start_script(
     );
     // A big result streams hundreds of batches a second: the window gets its row count a few
     // times a second, so redrawing it never keeps Cancel from answering.
-    let mut events = spelaion_core::coalesce_rows(events, spelaion_core::ROWS_PROGRESS_INTERVAL);
+    let events = spelaion_core::coalesce_rows(events, spelaion_core::ROWS_PROGRESS_INTERVAL);
+    // The script's `@echo` lines, each when the run reaches it (ADR-078).
+    let mut events =
+        spelaion_core::with_echoes(events, echoes.into_iter().map(Into::into).collect());
     tauri::async_runtime::spawn(async move {
         // `open` lives while the script runs, even if the UI closes the tab halfway.
         let _keep = open;
-        while let Some(event) = events.next().await {
+        while let Some(item) = events.next().await {
             // Keep consuming after the tab closes: executed statements still need their
             // completion/error recorded, and later statements must not be silently aborted.
-            let _ = on_event.send(placed.event(event));
+            let event = match item {
+                spelaion_core::RunItem::Event(event) => placed.event(event),
+                spelaion_core::RunItem::Echo(text) => ScriptEvent::Echo { text },
+            };
+            let _ = on_event.send(event);
         }
     });
     Ok(())
@@ -3564,13 +3572,32 @@ async fn script_variables(
     state: State<'_, AppState>,
 ) -> CmdResult<ScriptVariablesItem> {
     let (open, values) = variable_values(&state, &session, tab).await?;
-    let names = spelaion_core::script_variables(open.session.dialect().as_ref(), &sql);
-    let missing = names
-        .iter()
-        .filter(|name| !values.contains_key(*name))
-        .cloned()
-        .collect();
+    let dialect = open.session.dialect();
+    let names = spelaion_core::script_variables(dialect.as_ref(), &sql);
+    // A name an earlier `@set` gives is not asked for, nor one an `@unset` removed (ADR-078).
+    let missing = spelaion_core::missing_variables(dialect.as_ref(), &sql, &values);
     Ok(ScriptVariablesItem { names, missing })
+}
+
+/// The script with its client commands resolved and its variables' values written in, by the
+/// core, before anything else reads it (ADR-078): `@set` and `@unset` change the values from
+/// their line on for this run only (never the tab's or the connection's), `@echo` lines come
+/// back to be shown when the run reaches them. The run sends the text, and its guard and
+/// read-only check read it. Refused as `substitute_variables` refuses a value.
+#[command]
+async fn resolve_script(
+    session: String,
+    sql: String,
+    tab: HashMap<String, String>,
+    state: State<'_, AppState>,
+) -> CmdResult<ResolvedScriptItem> {
+    let (open, values) = variable_values(&state, &session, tab).await?;
+    let resolved = spelaion_core::resolve_script(open.session.dialect().as_ref(), &sql, &values)
+        .map_err(|e| e.to_string())?;
+    Ok(ResolvedScriptItem {
+        text: resolved.text,
+        echoes: resolved.echoes.into_iter().map(Into::into).collect(),
+    })
 }
 
 /// The script with its variables' values written in, by the core, before anything else reads
@@ -7155,6 +7182,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             bind_params,
             script_variables,
             substitute_variables,
+            resolve_script,
             connection_variables,
             set_connection_variable,
             variable_is_valid,

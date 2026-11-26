@@ -33,6 +33,24 @@ core writes them in as literals with the engine's quoting: numbers, `NULL`, `TRU
 `FALSE` as they are, anything else as text. Strings, comments and PostgreSQL `::casts` are
 never mistaken for placeholders.
 
+A script can carry its own `${name}` values and messages in lines for SpelaionDB, not the
+server (client commands). A line that starts with `@`, alone on its line where a statement
+could begin:
+
+- `@set name = value` gives `${name}` that value for the statements after it, in this run only.
+  The value is the rest of the line, as written: nothing in it is expanded.
+- `@unset name` removes it: a later `${name}` stops the run before anything is sent.
+- `@echo text` writes the text to the Messages tab when the run reaches it. It is not a
+  statement and the summary does not count it.
+
+They start from the tab's values (over the connection's) and never change them: the variables
+panel is the same after the run. Running a selection or the statement under the cursor reads only
+the commands in it. A value in a script is text in a file and, once written into a statement, in
+the history: a variable is not for passwords. `@export` is not supported (run the query, then use
+Export), and any other `@word` line is refused: a line starting with `@` and a letter is never
+sent to the server as SQL. Only the editor's runs read client commands: agents, "Run SQL file",
+exports and plans refuse such a line.
+
 Before anything runs, the core looks for statements that are easy to regret: `DELETE` or
 `UPDATE` without `WHERE` (also inside a `WITH`), `DROP` and `TRUNCATE`, and, on connections
 whose environment is `prod`/`production`, every statement that is not a read. They are listed

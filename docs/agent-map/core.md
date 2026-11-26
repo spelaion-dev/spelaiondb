@@ -192,7 +192,14 @@
   values given (the tab's, over its connection's in `spelaion-store`'s `connection_variables`):
   never the environment, and `${env:…}` is not a name. Agents have no variables. Like
   `classify.rs`, any change there needs tests that try to get around it (`tests/variables.rs`,
-  on every dialect).
+  on every dialect). `resolve_script` (ADR-078, SDB-467) is the editor's run's reading: it
+  walks the split script, `@set`/`@unset` change a copy of the values from their line on (the
+  values given are never changed), each `@echo` is kept with the statement it comes before, and
+  the command lines leave the text; every other statement is substituted with the values in
+  force there, by the same checks. `missing_variables` is what the page asks for (not a name an
+  earlier `@set` gives or an `@unset` removed). `script.rs`'s `with_echoes` yields each echo
+  just before the statement after it starts (the trailing ones only when the run went through
+  every statement). Any other `@` line stays in the text, for the session to refuse.
   `result_tabs.rs` (SDB-378) is each editor tab's result tabs over the `ResultStore`: which
   results a run replaces is decided there, never in the UI. A run frees the results that are
   not pinned, a run into a new tab frees none, a re-run of one result takes its place when

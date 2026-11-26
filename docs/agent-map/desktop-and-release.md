@@ -324,6 +324,15 @@
   folder's types, and a connection's sessions are told apart by folder as well as id. An
   "untrusted" outcome (`ConnectOutcome`, `ConnectionTestOutcome`, `EditorAccessOutcome`) names
   the folder it is about (`root`), which the page trusts: not always the shown one.
+- The editor's run reads a script's variables and client commands through the core before
+  anything else (ADR-078, SDB-467): `EditorTab.tsx`'s `withVariables` asks `script_variables`
+  which values are missing (`missing_variables`) and then `resolve_script`, whose text is what
+  runs and what the guard (`script_risks`, then `check_run`) reads; its `@echo` lines travel in
+  the run's options (`RunOptionsItem::echoes`) and come back as `ScriptEvent::Echo` when the run
+  reaches each (`start_script`, through `spelaion_core::with_echoes`). The page never resolves a
+  command, and a command line it sent unresolved is refused by the session (SDB-466). Only the
+  editor's runs do this: table data, notebook cells, plans and every other run send no echoes and
+  resolve nothing.
 - SQL notebooks (ADR-087, SDB-36): a notebook tab is a file tab (`tab.file`, `tab.sql`) with
   `tab.notebook` (`store.ts`): `sql` is the notebook's text as the core writes it from the cells
   (`notebook_text`, `notebook.ts`'s `syncNotebookText`, after each change and before every save),

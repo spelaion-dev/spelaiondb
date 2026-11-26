@@ -1040,6 +1040,14 @@ export const commands = {
 	 *  would change how the script is split or read.
 	 */
 	substituteVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("substitute_variables", { session, sql, tab })),
+	/**
+	 *  The script with its client commands resolved and its variables' values written in, by the
+	 *  core, before anything else reads it (ADR-078): `@set` and `@unset` change the values from
+	 *  their line on for this run only (never the tab's or the connection's), `@echo` lines come
+	 *  back to be shown when the run reaches them. The run sends the text, and its guard and
+	 *  read-only check read it. Refused as `substitute_variables` refuses a value.
+	 */
+	resolveScript: (session: string, sql: string, tab: { [key in string]: string }) => typedError<ResolvedScriptItem, string>(__TAURI_INVOKE("resolve_script", { session, sql, tab })),
 	/**  A connection's variables, by name (SDB-383): local values, kept in the local store. */
 	connectionVariables: (connection: ConnectionKeyItem_Deserialize) => typedError<VariableItem[], string>(__TAURI_INVOKE("connection_variables", { connection })),
 	/**
@@ -6722,6 +6730,15 @@ export type RerunCheckItem_Serialize = {
 	openTransaction: boolean,
 };
 
+/**
+ *  A script the editor runs, with its client commands resolved by the core (ADR-078): the text
+ *  the run sends, which its guard and read-only check read, and its `@echo` lines.
+ */
+export type ResolvedScriptItem = {
+	text: string,
+	echoes: ScriptEchoItem[],
+};
+
 /**  A finished restore: the bytes of the file fed to the tool and how long it took. */
 export type RestoreDoneItem = {
 	bytes: number | null,
@@ -6956,6 +6973,11 @@ export type RunOptionsItem_Deserialize = {
 	onError: OnErrorItem,
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds?: number | null,
+	/**
+	 *  The run's `@echo` lines (ADR-078), as `resolve_script` gave them: none for any other
+	 *  run. Only shown, never a statement.
+	 */
+	echoes?: ScriptEchoItem[],
 };
 
 /**  How one run goes: its error mode and, if set, its own statement timeout. */
@@ -6963,6 +6985,11 @@ export type RunOptionsItem_Serialize = {
 	onError: OnErrorItem,
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds: number | null,
+	/**
+	 *  The run's `@echo` lines (ADR-078), as `resolve_script` gave them: none for any other
+	 *  run. Only shown, never a statement.
+	 */
+	echoes: ScriptEchoItem[],
 };
 
 /**
@@ -7165,6 +7192,16 @@ export type ScreenFailureItem = {
 	stack: string,
 };
 
+/**  A line `@echo` writes to the Messages tab when the run reaches it (ADR-078). */
+export type ScriptEchoItem = {
+	/**
+	 *  The statement of the resolved script it comes before (the number of statements when it
+	 *  comes after the last one).
+	 */
+	before: number,
+	text: string,
+};
+
 export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 
 export type ScriptEvent_Deserialize = 
@@ -7199,7 +7236,12 @@ end: StatementEndItem } |
 /**  The run waits for `answer_script_error` with this ticket (ADR-035). */
 { kind: "errorPaused"; index: number; ticket: number; remaining: number } | 
 /**  The run ended; its summary says how. */
-{ kind: "scriptFinished"; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
+{ kind: "scriptFinished"; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string } | 
+/**
+ *  A script's `@echo` line, when the run reached it (ADR-078): its text, as written. Not a
+ *  statement.
+ */
+{ kind: "echo"; text: string };
 
 export type ScriptEvent_Serialize = 
 /**
@@ -7233,7 +7275,12 @@ end: StatementEndItem } |
 /**  The run waits for `answer_script_error` with this ticket (ADR-035). */
 { kind: "errorPaused"; index: number; ticket: number; remaining: number } | 
 /**  The run ended; its summary says how. */
-{ kind: "scriptFinished"; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string };
+{ kind: "scriptFinished"; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string } | 
+/**
+ *  A script's `@echo` line, when the run reached it (ADR-078): its text, as written. Not a
+ *  statement.
+ */
+{ kind: "echo"; text: string };
 
 /**  How scripts run from the editor, shared by every workspace. */
 export type ScriptPreferencesItem = {

@@ -2440,6 +2440,11 @@ pub enum ScriptEvent {
     HistoryWarning {
         message: String,
     },
+    /// A script's `@echo` line, when the run reached it (ADR-078): its text, as written. Not a
+    /// statement.
+    Echo {
+        text: String,
+    },
 }
 
 /// How far a stored result got (SDB-367), as the core says it: the page shows it and never
@@ -2697,12 +2702,53 @@ impl From<OnErrorItem> for spelaion_core::ScriptErrorMode {
 }
 
 /// How one run goes: its error mode and, if set, its own statement timeout.
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOptionsItem {
     pub on_error: OnErrorItem,
     /// Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run.
     pub timeout_seconds: Option<u32>,
+    /// The run's `@echo` lines (ADR-078), as `resolve_script` gave them: none for any other
+    /// run. Only shown, never a statement.
+    #[serde(default)]
+    pub echoes: Vec<ScriptEchoItem>,
+}
+
+/// A line `@echo` writes to the Messages tab when the run reaches it (ADR-078).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptEchoItem {
+    /// The statement of the resolved script it comes before (the number of statements when it
+    /// comes after the last one).
+    pub before: u32,
+    pub text: String,
+}
+
+impl From<spelaion_core::ScriptEcho> for ScriptEchoItem {
+    fn from(echo: spelaion_core::ScriptEcho) -> Self {
+        Self {
+            before: u32::try_from(echo.before).unwrap_or(u32::MAX),
+            text: echo.text,
+        }
+    }
+}
+
+impl From<ScriptEchoItem> for spelaion_core::ScriptEcho {
+    fn from(echo: ScriptEchoItem) -> Self {
+        Self {
+            before: echo.before as usize,
+            text: echo.text,
+        }
+    }
+}
+
+/// A script the editor runs, with its client commands resolved by the core (ADR-078): the text
+/// the run sends, which its guard and read-only check read, and its `@echo` lines.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedScriptItem {
+    pub text: String,
+    pub echoes: Vec<ScriptEchoItem>,
 }
 
 /// The answer to a paused run.
