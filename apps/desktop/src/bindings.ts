@@ -1112,6 +1112,23 @@ export const commands = {
 	 *  dialog; how many were written.
 	 */
 	exportLog: (level: LogLevelItem, path: string) => typedError<number, string>(__TAURI_INVOKE("export_log", { level, path })),
+	/**
+	 *  Seals the personal connections `ids` (as the explorer lists them, `~/orders`; empty: every
+	 *  personal one) with the password the user typed twice, into `path`, chosen in the save
+	 *  dialog. A repository connection is refused: it moves with its repository (ADR-022).
+	 */
+	exportPersonalConnections: (ids: string[], password: string, path: string) => typedError<ConnectionsExportedItem, string>(__TAURI_INVOKE("export_personal_connections", { ids, password, path })),
+	/**
+	 *  Opens the connections file at `path` with `password` and says what importing each item
+	 *  would do; nothing is written.
+	 */
+	previewConnectionsFile: (path: string, password: string) => typedError<ConnectionImportItem[], string>(__TAURI_INVOKE("preview_connections_file", { path, password })),
+	/**
+	 *  Imports the connections file at `path`: each item whole or not at all, its passwords into
+	 *  the keychain. Items that exist here are replaced only when named in `replace_connections`
+	 *  or `replace_profiles`. The configuration is read again afterwards.
+	 */
+	importConnectionsFile: (path: string, password: string, replaceConnections: string[], replaceProfiles: string[]) => typedError<ConnectionImportResultItem[], string>(__TAURI_INVOKE("import_connections_file", { path, password, replaceConnections, replaceProfiles })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
 	historyPage: (filter: HistoryFilterItem_Deserialize, limit: number, offset: number) => typedError<HistoryPageItem_Serialize, string>(__TAURI_INVOKE("history_page", { filter, limit, offset })),
@@ -2363,6 +2380,21 @@ export type ConnectionDraftItem_Serialize = {
 	maskNever: string[],
 };
 
+/**  One item of a connections file, as its import preview shows it. */
+export type ConnectionImportItem = {
+	kind: TransferItemKindItem,
+	id: string,
+	name: string,
+	state: ImportStateItem,
+	secrets: number,
+};
+
+export type ConnectionImportResultItem = {
+	kind: TransferItemKindItem,
+	id: string,
+	outcome: ImportOutcomeItem,
+};
+
 export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deserialize;
 
 export type ConnectionItem_Deserialize = {
@@ -2606,6 +2638,18 @@ export type ConnectionTypeItem_Serialize = {
 	maskColumns: string[],
 	/**  The team's: the user cannot remove them. */
 	inheritedMaskColumns: string[],
+};
+
+/**  What exporting personal connections wrote (ADR-088). */
+export type ConnectionsExportedItem = {
+	connections: number,
+	networkProfiles: number,
+	/**  Keychain passwords carried, encrypted. */
+	secrets: number,
+	/**  No system keychain here: no password could be carried. */
+	withoutKeychain: boolean,
+	/**  Network profiles the connections name that are not personal: not in the file. */
+	profilesNotCarried: string[],
 };
 
 export type ConstraintDetails = ConstraintDetails_Serialize | ConstraintDetails_Deserialize;
@@ -4181,6 +4225,9 @@ export type ImportOptionsItem = {
 	sheet: string,
 };
 
+/**  What happened to an item on import. */
+export type ImportOutcomeItem = { kind: "added" } | { kind: "replaced" } | { kind: "skipped" } | { kind: "notImported"; reason: string } | { kind: "failed"; reason: string };
+
 /**  What will run, written by the core, to show before it does. */
 export type ImportPlanItem = {
 	statements: string[],
@@ -4315,6 +4362,9 @@ export type ImportSkip = {
 export type ImportSourceItem = { kind: "file"; path: string } | 
 /**  Pasted or clipboard text. */
 { kind: "text"; text: string };
+
+/**  What importing an item of a connections file would do, as the core decided. */
+export type ImportStateItem = { kind: "new" } | { kind: "exists" } | { kind: "refused"; reason: string } | { kind: "invalid"; reason: string };
 
 /**  Where the connections go. */
 export type ImportTarget = ImportTarget_Serialize | ImportTarget_Deserialize;
@@ -7885,6 +7935,9 @@ inTransaction: boolean;
 autoCommitLocked: boolean; 
 /**  Commit and Rollback are shown: in manual commit, or while a transaction is open. */
 endActionsShown: boolean };
+
+/**  Whether an item of a connections file is a connection or a network profile. */
+export type TransferItemKindItem = "connection" | "networkProfile";
 
 /**  The transposed view of rows of a result (SDB-386): a result of its own in the core. */
 export type TransposedItem = {

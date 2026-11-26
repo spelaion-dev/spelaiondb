@@ -52,3 +52,12 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# The encrypted connections file's key derivation (ADR-088): Argon2id over 64 MiB takes minutes
+# unoptimized, in tests and in a debug build of the app; optimized it takes a fraction of a
+# second, as in a release.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+

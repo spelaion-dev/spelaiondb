@@ -1176,6 +1176,127 @@ impl LogPageItem {
     }
 }
 
+/// What exporting personal connections wrote (ADR-088).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionsExportedItem {
+    pub connections: u32,
+    pub network_profiles: u32,
+    /// Keychain passwords carried, encrypted.
+    pub secrets: u32,
+    /// No system keychain here: no password could be carried.
+    pub without_keychain: bool,
+    /// Network profiles the connections name that are not personal: not in the file.
+    pub profiles_not_carried: Vec<String>,
+}
+
+impl From<spelaion_config::ConnectionsExported> for ConnectionsExportedItem {
+    fn from(exported: spelaion_config::ConnectionsExported) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            connections: count(exported.connections),
+            network_profiles: count(exported.network_profiles),
+            secrets: count(exported.secrets),
+            without_keychain: exported.without_keychain,
+            profiles_not_carried: exported.profiles_not_carried,
+        }
+    }
+}
+
+/// Whether an item of a connections file is a connection or a network profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferItemKindItem {
+    Connection,
+    NetworkProfile,
+}
+
+impl From<spelaion_config::ItemKind> for TransferItemKindItem {
+    fn from(kind: spelaion_config::ItemKind) -> Self {
+        match kind {
+            spelaion_config::ItemKind::Connection => TransferItemKindItem::Connection,
+            spelaion_config::ItemKind::NetworkProfile => TransferItemKindItem::NetworkProfile,
+        }
+    }
+}
+
+/// What importing an item of a connections file would do, as the core decided.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ImportStateItem {
+    New,
+    Exists,
+    Refused { reason: String },
+    Invalid { reason: String },
+}
+
+/// One item of a connections file, as its import preview shows it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionImportItem {
+    pub kind: TransferItemKindItem,
+    pub id: String,
+    pub name: String,
+    pub state: ImportStateItem,
+    pub secrets: u32,
+}
+
+impl From<spelaion_config::ImportItem> for ConnectionImportItem {
+    fn from(item: spelaion_config::ImportItem) -> Self {
+        Self {
+            kind: item.kind.into(),
+            id: item.id,
+            name: item.name,
+            state: match item.state {
+                spelaion_config::ItemState::New => ImportStateItem::New,
+                spelaion_config::ItemState::Exists => ImportStateItem::Exists,
+                spelaion_config::ItemState::Refused(reason) => ImportStateItem::Refused { reason },
+                spelaion_config::ItemState::Invalid(reason) => ImportStateItem::Invalid { reason },
+            },
+            secrets: u32::try_from(item.secrets).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// What happened to an item on import.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ImportOutcomeItem {
+    Added,
+    Replaced,
+    Skipped,
+    NotImported { reason: String },
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionImportResultItem {
+    pub kind: TransferItemKindItem,
+    pub id: String,
+    pub outcome: ImportOutcomeItem,
+}
+
+impl From<spelaion_config::ImportResult> for ConnectionImportResultItem {
+    fn from(result: spelaion_config::ImportResult) -> Self {
+        Self {
+            kind: result.kind.into(),
+            id: result.id,
+            outcome: match result.outcome {
+                spelaion_config::ItemOutcome::Added => ImportOutcomeItem::Added,
+                spelaion_config::ItemOutcome::Replaced => ImportOutcomeItem::Replaced,
+                spelaion_config::ItemOutcome::Skipped => ImportOutcomeItem::Skipped,
+                spelaion_config::ItemOutcome::NotImported(reason) => {
+                    ImportOutcomeItem::NotImported { reason }
+                }
+                spelaion_config::ItemOutcome::Failed(reason) => {
+                    ImportOutcomeItem::Failed { reason }
+                }
+            },
+        }
+    }
+}
+
 /// One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
 /// app's registry and the keys it now has, as the registry writes them, or none.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

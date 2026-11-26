@@ -2815,6 +2815,40 @@ select {
   font-family: var(--font-code);
   font-size: var(--text-sm);
 }
+/* Settings › Connections: moving personal connections in an encrypted file (ADR-088). */
+.connection-transfer-actions {
+  display: flex;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+.connection-transfer-form {
+  margin: var(--space-md) 0;
+  padding: 0;
+  border: none;
+}
+.connection-transfer-form legend {
+  margin-bottom: var(--space-sm);
+  font-weight: 600;
+}
+.connection-transfer-list {
+  margin: var(--space-sm) 0;
+  padding: 0;
+  list-style: none;
+}
+.connection-transfer-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-md);
+  align-items: baseline;
+  padding: var(--space-xs) 0;
+  border-bottom: 1px solid var(--line);
+}
+.connection-transfer-name {
+  overflow-wrap: anywhere;
+}
+.connection-transfer-result {
+  overflow-wrap: anywhere;
+}
 /* Settings › Keyboard shortcuts (SDB-447): every command with its keys, by place and category. */
 .shortcut-toolbar {
   display: flex;

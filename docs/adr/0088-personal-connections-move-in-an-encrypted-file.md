@@ -96,8 +96,14 @@ keychain.
    preview lists each item: new, or replacing one with the same id (the user chooses to skip it,
    the default, or to replace it). As with a pasted connection (ADR-030) and a network profile's
    program (ADR-076), **an import never brings anything that runs a program**: a connection whose
-   password is `cmd:…`, that names a `sqlite3` program, or whose profile has a hop `command`, is
-   listed as not imported with the reason, and the user adds it again on this machine.
+   password is `cmd:…`, that names a `sqlite3` or `kubectl` program, or whose profile has a hop
+   `command`, a `cmd:` password or names an `aws` or `kubectl` program, is listed as not
+   imported with the reason, and the user adds it again on this machine. Nor does it bring
+   anything that could send a secret from somewhere else to a server the file chooses: a
+   password read from `env:` or `op://`, a `keychain:<name>` that is another connection's or
+   profile's entry (`repo:…`, `~/…`), or a `${…}` variable other than `${user.…}` (which could
+   put the environment into a host name, as ADR-030 refuses for a paste). An export never carries
+   another connection's entry either.
 
 9. **Secrets go to the keychain, never to a file.** Each item is written whole or not at all: its
    secrets first, each through `secrets::store` (written and read back), then its file through

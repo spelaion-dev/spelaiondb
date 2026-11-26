@@ -61,6 +61,16 @@
   columns added, a connection type added only when none of that id is defined here), so it never
   loosens a safeguard; it writes through the Settings writers and puts the files back when a
   later step of the import fails.
+  Moving personal connections between computers (ADR-088) is two files, both in CODEOWNERS:
+  `connections_file.rs` seals and opens the format (Argon2id and AES-256-GCM, the header as
+  associated data, the cost bounded before anything is derived; a wrong password and a changed
+  file are one error) and `connection_transfer.rs` gathers the export (personal connections, the
+  personal profiles they name, the keychain values their files name) and writes the import: every
+  item checked as a file on disk first, nothing that runs a program (`cmd:`, `sqlite3`, a hop
+  `command`, an `aws` or `kubectl` path), each item's secrets through `secrets::store` and then
+  its file, the keychain put back when a step fails. Any change there needs tests that try to get
+  around it (`tests/connection_transfer.rs` and the format's own tests). Argon2 and blake2 build
+  optimized in dev (the workspace's `Cargo.toml`): unoptimized, one key takes minutes.
   Importing connections from other clients (ADR-039): `import.rs` is the flow every client
   shares (the `ImportedConnection` model, drafts, duplicates found by name or by the database
   they reach, replace in place, target folder, what was not mapped, passwords read from another

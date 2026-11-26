@@ -443,6 +443,18 @@ fn id_from_path(base: &Path, path: &Path) -> String {
         .join("/")
 }
 
+/// A file's text that did not come from disk (an import), read as [`parse_file`] reads one:
+/// unknown keys refused, errors with their line and column against `path`.
+pub(crate) fn parse_text_checked<T: DeserializeOwned>(
+    path: &Path,
+    text: &str,
+) -> Result<T, ConfigError> {
+    toml::from_str(text).map_err(|e| match e.span() {
+        Some(span) => ConfigError::at(path, text, span.start, e.message()),
+        None => ConfigError::new(path, e.message()),
+    })
+}
+
 pub(crate) fn parse_file<T: DeserializeOwned>(path: &Path) -> Result<T, ConfigError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| ConfigError::new(path, format!("could not read: {e}")))?;
