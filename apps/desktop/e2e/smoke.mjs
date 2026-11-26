@@ -7742,11 +7742,21 @@ try {
     await gis.click({ button: "right" });
     await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "New query", exact: true }).click();
     const gisPanel = page.locator(".tab-panel:not([hidden])");
+    // A run's row count shows when its result ends, a moment before the core says the run
+    // ended; until then the tab is running (its tab shows the spinner, Run is Cancel) and the
+    // next Run pressed is ignored, as on #553 and #570 (SDB-531). The status line also keeps the
+    // last run's count until the next one ends, so each query here returns a count of its own
+    // (1, 2, 3 rows): its count shows that run ended its result, and the spinner going away that
+    // the core ended the run, before the next action.
+    const ran = async (rows) => {
+      await gisPanel.locator(".statusline", { hasText: new RegExp(`(^|[^0-9])${rows} rows?\\b`) }).waitFor();
+      await page.locator(".tabbar .tab.active .tab-running").waitFor({ state: "detached" });
+    };
     await gisPanel.locator(".status-connected").waitFor();
     await gisPanel.locator(".cm-content").click();
     await page.keyboard.insertText("select current_database() where current_database() = 'spelaion_gis';");
     await run(gisPanel);
-    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    await ran(1);
 
     // SDB-505: the tab's database picker. Choosing another is a disconnect and a connect, never
     // a switch: back to the connection's own database, then to spelaion_gis again.
@@ -7756,13 +7766,14 @@ try {
     await picker.selectOption("spelaion");
     await gisPanel.locator(".status-connected").waitFor();
     assert.equal(await picker.inputValue(), "spelaion");
-    await replaceQuery(gisPanel, "select current_database() where current_database() = 'spelaion';");
+    await replaceQuery(gisPanel, "select current_database() from generate_series(1, 2) where current_database() = 'spelaion';");
     await run(gisPanel);
-    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    await ran(2);
     // With a transaction open, choosing another database asks first; Cancel keeps the session.
     await replaceQuery(gisPanel, "begin;");
     await run(gisPanel);
     await gisPanel.locator(".tx-badge").waitFor();
+    await page.locator(".tabbar .tab.active .tab-running").waitFor({ state: "detached" });
     await picker.selectOption("spelaion_gis");
     const changeOpen = page.getByRole("dialog", { name: "Disconnect with an open transaction?" });
     await changeOpen.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -7784,9 +7795,9 @@ try {
     await page.getByLabel("Password", { exact: true }).fill("spelaion");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     await gisPanel.locator(".status-connected").waitFor();
-    await replaceQuery(gisPanel, "select current_database() where current_database() = 'spelaion_gis';");
+    await replaceQuery(gisPanel, "select current_database() from generate_series(1, 3) where current_database() = 'spelaion_gis';");
     await run(gisPanel);
-    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    await ran(3);
     await page.locator(".tabbar .tab.active .close").click();
 
     // SDB-506: backup and restore from a database's row act on that database, and say so.
