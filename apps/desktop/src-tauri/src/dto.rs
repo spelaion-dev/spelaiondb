@@ -2445,6 +2445,11 @@ pub enum ScriptEvent {
     Echo {
         text: String,
     },
+    /// An included file starts (ADR-078, point 7): its name, relative to the script's folder
+    /// tree with `/`.
+    Included {
+        file: String,
+    },
 }
 
 /// How far a stored result got (SDB-367), as the core says it: the page shows it and never
@@ -2708,27 +2713,44 @@ pub struct RunOptionsItem {
     pub on_error: OnErrorItem,
     /// Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run.
     pub timeout_seconds: Option<u32>,
-    /// The run's `@echo` lines (ADR-078), as `resolve_script` gave them: none for any other
-    /// run. Only shown, never a statement.
+    /// The run's `@echo` lines and included files' names (ADR-078), as `resolve_script` gave
+    /// them: none for any other run. Only shown, never a statement.
     #[serde(default)]
     pub echoes: Vec<ScriptEchoItem>,
+    /// The files the run included, with the hash of what was read: the run is refused when one
+    /// of them changed since (ADR-078, point 4). None for any other run.
+    #[serde(default)]
+    pub files: Vec<IncludedFileItem>,
 }
 
-/// A line `@echo` writes to the Messages tab when the run reaches it (ADR-078).
+/// What the Messages tab shows when the run reaches it (ADR-078).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EchoLineItem {
+    /// An `@echo` line's text, as written.
+    Echo { text: String },
+    /// An included file starts: its name.
+    Included { file: String },
+}
+
+/// A line for the Messages tab, by the statement it comes before.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptEchoItem {
     /// The statement of the resolved script it comes before (the number of statements when it
     /// comes after the last one).
     pub before: u32,
-    pub text: String,
+    pub line: EchoLineItem,
 }
 
 impl From<spelaion_core::ScriptEcho> for ScriptEchoItem {
     fn from(echo: spelaion_core::ScriptEcho) -> Self {
         Self {
             before: u32::try_from(echo.before).unwrap_or(u32::MAX),
-            text: echo.text,
+            line: match echo.line {
+                spelaion_core::EchoLine::Echo(text) => EchoLineItem::Echo { text },
+                spelaion_core::EchoLine::Included(file) => EchoLineItem::Included { file },
+            },
         }
     }
 }
@@ -2737,18 +2759,75 @@ impl From<ScriptEchoItem> for spelaion_core::ScriptEcho {
     fn from(echo: ScriptEchoItem) -> Self {
         Self {
             before: echo.before as usize,
-            text: echo.text,
+            line: match echo.line {
+                EchoLineItem::Echo { text } => spelaion_core::EchoLine::Echo(text),
+                EchoLineItem::Included { file } => spelaion_core::EchoLine::Included(file),
+            },
+        }
+    }
+}
+
+/// A file a run included (ADR-078, point 7).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct IncludedFileItem {
+    /// Canonical.
+    pub path: String,
+    /// Relative to the script's folder tree, with `/`.
+    pub name: String,
+    /// SHA-256 of what was read.
+    pub hash: String,
+}
+
+impl From<spelaion_core::IncludedFile> for IncludedFileItem {
+    fn from(file: spelaion_core::IncludedFile) -> Self {
+        Self {
+            path: file.path.to_string_lossy().into_owned(),
+            name: file.name,
+            hash: file.hash,
+        }
+    }
+}
+
+impl From<IncludedFileItem> for spelaion_core::IncludedFile {
+    fn from(file: IncludedFileItem) -> Self {
+        Self {
+            path: std::path::PathBuf::from(file.path),
+            name: file.name,
+            hash: file.hash,
+        }
+    }
+}
+
+/// Where a statement of a resolved script was written.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementOriginItem {
+    /// The included file, relative to the script's tree; `null` for the tab's own text.
+    pub file: Option<String>,
+    /// Its first line in that text, from 1.
+    pub line: u32,
+}
+
+impl From<spelaion_core::StatementOrigin> for StatementOriginItem {
+    fn from(origin: spelaion_core::StatementOrigin) -> Self {
+        Self {
+            file: origin.file,
+            line: u32::try_from(origin.line).unwrap_or(u32::MAX),
         }
     }
 }
 
 /// A script the editor runs, with its client commands resolved by the core (ADR-078): the text
-/// the run sends, which its guard and read-only check read, and its `@echo` lines.
+/// the run sends, which its guard and read-only check read, its `@echo` lines and included
+/// files' names, where each statement comes from, and the files it read.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedScriptItem {
     pub text: String,
     pub echoes: Vec<ScriptEchoItem>,
+    pub origins: Vec<StatementOriginItem>,
+    pub files: Vec<IncludedFileItem>,
 }
 
 /// The answer to a paused run.

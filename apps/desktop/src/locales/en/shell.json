@@ -301,6 +301,7 @@
   "sendCode": "Send code",
   "risk": {
     "title": "Run these statements?",
+    "from": "from {{place}}",
     "explanation": "They can lose or change data on {{connection}}. Nothing has run yet.",
     "deleteAll": "DELETE without WHERE: deletes every row",
     "updateAll": "UPDATE without WHERE: changes every row",

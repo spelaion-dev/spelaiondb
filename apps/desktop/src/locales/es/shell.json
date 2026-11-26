@@ -301,6 +301,7 @@
   "sendCode": "Enviar código",
   "risk": {
     "title": "¿Ejecutar estas sentencias?",
+    "from": "de {{place}}",
     "explanation": "Pueden borrar o cambiar datos en {{connection}}. Todavía no se ha ejecutado nada.",
     "deleteAll": "DELETE sin WHERE: borra todas las filas",
     "updateAll": "UPDATE sin WHERE: cambia todas las filas",

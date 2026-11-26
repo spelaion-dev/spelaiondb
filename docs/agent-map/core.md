@@ -192,14 +192,27 @@
   values given (the tab's, over its connection's in `spelaion-store`'s `connection_variables`):
   never the environment, and `${env:…}` is not a name. Agents have no variables. Like
   `classify.rs`, any change there needs tests that try to get around it (`tests/variables.rs`,
-  on every dialect). `resolve_script` (ADR-078, SDB-467) is the editor's run's reading: it
-  walks the split script, `@set`/`@unset` change a copy of the values from their line on (the
-  values given are never changed), each `@echo` is kept with the statement it comes before, and
-  the command lines leave the text; every other statement is substituted with the values in
-  force there, by the same checks. `missing_variables` is what the page asks for (not a name an
-  earlier `@set` gives or an `@unset` removed). `script.rs`'s `with_echoes` yields each echo
-  just before the statement after it starts (the trailing ones only when the run went through
-  every statement). Any other `@` line stays in the text, for the session to refuse.
+  on every dialect). `resolve.rs`'s `resolve_script` (ADR-078, SDB-467 and SDB-468) is the
+  editor's run's reading: it walks the split script, `@set`/`@unset` change a copy of the values
+  from their line on (the values given are never changed), each `@echo` is kept with the
+  statement it comes before, and the command lines leave the text; every other statement is
+  substituted with the values in force there, by the same checks. `@include` (only with a
+  `ScriptTree`, the tab's file's; `None` is a console and refuses it) puts each statement of the
+  included file in place on its own, closed by the first of `CLOSINGS` that splits back to just
+  that statement, so nothing the file leaves open reaches past it; the whole text is then split
+  again and must give exactly the statements written, or nothing runs. It also returns each
+  statement's origin (file and line, for the guard's question and errors) and the files read
+  with their hashes, which `check_included_files` compares just before the run starts.
+  `include.rs` (in `.github/CODEOWNERS`) is the only place that decides which file an
+  `@include` may read: refused as written first (absolute, `\`, `~`, `:`, `${`, device names,
+  a part ending in a dot or a space), then canonical and inside the tree, still `.sql`, a file;
+  read with `read_sql_file`'s rules, within `MAX_INCLUDE_DEPTH`, `MAX_INCLUDED_FILES` and
+  `MAX_INCLUDED_BYTES`. A change there needs a test in `tests/include.rs` that tries to get
+  around it, on Windows and on Unix. `missing_variables` is what the page asks for (not a name
+  an earlier `@set` gives or an `@unset` removed, included files read too). `script.rs`'s
+  `with_echoes` yields each echo and included file's name just before the statement after it
+  starts (the trailing ones only when the run went through every statement). Any other `@` line
+  stays in the text, for the session to refuse.
   `result_tabs.rs` (SDB-378) is each editor tab's result tabs over the `ResultStore`: which
   results a run replaces is decided there, never in the UI. A run frees the results that are
   not pinned, a run into a new tab frees none, a re-run of one result takes its place when

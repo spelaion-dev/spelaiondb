@@ -45,6 +45,17 @@ pub enum VariableError {
     /// A client command line written otherwise than its command reads (ADR-078).
     #[error("{0}")]
     Command(String),
+    /// An `@include` refused (ADR-078, point 7).
+    #[error(transparent)]
+    Include(#[from] crate::include::IncludeError),
+    /// What went wrong in an included file, with the file (relative to the script's tree) and
+    /// the line.
+    #[error("{file}, line {line}: {error}")]
+    InFile {
+        file: String,
+        line: usize,
+        error: Box<VariableError>,
+    },
 }
 
 /// The distinct variables of `script`'s statements, in order of first appearance.
@@ -108,7 +119,7 @@ pub fn substitute_variables(
 }
 
 /// One statement with its variables' values written in, checked.
-fn substitute_statement(
+pub(crate) fn substitute_statement(
     dialect: &dyn Dialect,
     statement: &str,
     found: &[(Range<usize>, &str)],
@@ -170,179 +181,8 @@ fn substitute_statement(
     Ok(out)
 }
 
-/// A line `@echo` writes to the Messages tab when the run reaches it (ADR-078, point 6).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScriptEcho {
-    /// The statement of the resolved script it comes before, counted from 0; the number of
-    /// statements when it comes after the last one.
-    pub before: usize,
-    /// Its text, as the script wrote it.
-    pub text: String,
-}
-
-/// A script with its client commands resolved (ADR-078): what the editor's run sends and what
-/// its guard and read-only check read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedScript {
-    /// The statements, with each `${name}` written in as the values stood at that statement,
-    /// and the `@set`, `@unset` and `@echo` lines left out.
-    pub text: String,
-    /// The `@echo` lines, by the statement each comes before.
-    pub echoes: Vec<ScriptEcho>,
-}
-
-/// What a client command line of the editor's run does.
-enum Command<'a> {
-    Set(&'a str, &'a str),
-    Unset(&'a str),
-    Echo(&'a str),
-}
-
-/// Reads a `@set`, `@unset` or `@echo` line; `None` for any other statement (an `@include`,
-/// an `@export`, an unknown `@word` or SQL), which the run leaves as it is: the session refuses
-/// a command line that reaches it.
-fn command(statement: &str) -> Option<Result<Command<'_>, VariableError>> {
-    let word = spelaion_dialect::client_command(statement)?;
-    let rest = statement.trim_start()[1 + word.len()..].trim();
-    match word.as_str() {
-        "set" => Some(match rest.split_once('=') {
-            Some((name, value)) if is_variable_name(name.trim()) => {
-                let value = value.trim();
-                if is_variable_value(value) {
-                    Ok(Command::Set(name.trim(), value))
-                } else {
-                    Err(VariableError::InvalidValue(name.trim().to_string()))
-                }
-            }
-            _ => Err(VariableError::Command(
-                "@set is written @set name = value, with a name of letters, digits and _".into(),
-            )),
-        }),
-        "unset" => Some(if is_variable_name(rest) {
-            Ok(Command::Unset(rest))
-        } else {
-            Err(VariableError::Command(
-                "@unset is written @unset name, with a name of letters, digits and _".into(),
-            ))
-        }),
-        "echo" => Some(Ok(Command::Echo(rest))),
-        _ => None,
-    }
-}
-
-/// Resolves the client commands of a script the editor runs (ADR-078, points 4 to 6): walks its
-/// statements in order, sends nothing, and writes each statement's `${name}`s as the values
-/// stand there. The run starts from `values` (the tab's over its connection's); `@set` replaces
-/// a value from its line on and `@unset` removes it, for this run only: `values` itself is never
-/// changed. A value is used exactly as [`substitute_variables`] uses one, with its refusals; a
-/// `@set` value is the rest of its line, trimmed, taken as it is. A dialect without command
-/// lines (one that is not SQL) gets [`substitute_variables`] alone.
-pub fn resolve_script(
-    dialect: &dyn Dialect,
-    script: &str,
-    values: &HashMap<String, String>,
-) -> Result<ResolvedScript, VariableError> {
-    if !dialect.is_sql() {
-        return Ok(ResolvedScript {
-            text: substitute_variables(dialect, script, values)?,
-            echoes: Vec::new(),
-        });
-    }
-    let spans = dialect.split_statements(script);
-    let mut values = values.clone();
-    let mut echoes = Vec::new();
-    let mut out = String::with_capacity(script.len());
-    let mut copied = 0;
-    let mut kept = 0;
-    for span in &spans {
-        let Some(statement) = script.get(span.start..span.end) else {
-            continue;
-        };
-        if span.start < copied {
-            continue;
-        }
-        match command(statement).transpose()? {
-            Some(command) => {
-                match command {
-                    Command::Set(name, value) => {
-                        values.insert(name.to_string(), value.to_string());
-                    }
-                    Command::Unset(name) => {
-                        values.remove(name);
-                    }
-                    Command::Echo(text) => echoes.push(ScriptEcho {
-                        before: kept,
-                        text: text.to_string(),
-                    }),
-                }
-                // The line is the run's, not the server's: it leaves the text.
-                out.push_str(&script[copied..span.start]);
-                copied = span.end;
-            }
-            None => {
-                kept += 1;
-                let found = variables(dialect, statement);
-                if found.is_empty() {
-                    continue;
-                }
-                out.push_str(&script[copied..span.start]);
-                out.push_str(&substitute_statement(dialect, statement, &found, &values)?);
-                copied = span.end;
-            }
-        }
-    }
-    out.push_str(&script[copied..]);
-    // The script as a whole still has the statements it kept.
-    if dialect.split_statements(&out).len() != kept {
-        return Err(VariableError::SplitsStatement(names_of(
-            &script_variables(dialect, script)
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-        )));
-    }
-    Ok(ResolvedScript { text: out, echoes })
-}
-
-/// The variables of `script` that need a value before it can run: used by a statement while
-/// neither `values` nor an earlier `@set` gives one. A name an earlier `@unset` removed is not
-/// asked for: the run is refused there, as the script says (ADR-078, point 5).
-pub fn missing_variables(
-    dialect: &dyn Dialect,
-    script: &str,
-    values: &HashMap<String, String>,
-) -> Vec<String> {
-    let mut known: HashMap<&str, bool> = values.keys().map(|k| (k.as_str(), true)).collect();
-    let mut missing: Vec<String> = Vec::new();
-    for span in dialect.split_statements(script) {
-        let Some(statement) = script.get(span.start..span.end) else {
-            continue;
-        };
-        if dialect.is_sql() {
-            match command(statement) {
-                Some(Ok(Command::Set(name, _))) => {
-                    known.insert(name, true);
-                    continue;
-                }
-                Some(Ok(Command::Unset(name))) => {
-                    known.insert(name, false);
-                    continue;
-                }
-                Some(Ok(Command::Echo(_)) | Err(_)) => continue,
-                None => {}
-            }
-        }
-        for (_, name) in variables(dialect, statement) {
-            if !known.contains_key(name) && !missing.iter().any(|m| m == name) {
-                missing.push(name.to_string());
-            }
-        }
-    }
-    missing
-}
-
 /// `${a}`, or `${a} and ${b}`: the variables an error is about.
-fn names_of(names: &[&str]) -> String {
+pub(crate) fn names_of(names: &[&str]) -> String {
     let mut distinct: Vec<&str> = Vec::new();
     for name in names {
         if !distinct.contains(name) {
@@ -358,7 +198,10 @@ fn names_of(names: &[&str]) -> String {
 
 /// Where each `${name}` of a statement is (the whole `${…}`), in order. Only the statement's
 /// code is searched.
-fn variables<'a>(dialect: &dyn Dialect, statement: &'a str) -> Vec<(Range<usize>, &'a str)> {
+pub(crate) fn variables<'a>(
+    dialect: &dyn Dialect,
+    statement: &'a str,
+) -> Vec<(Range<usize>, &'a str)> {
     let bytes = statement.as_bytes();
     let mut found = Vec::new();
     for code in dialect.code_ranges(statement) {

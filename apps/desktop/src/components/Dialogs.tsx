@@ -384,6 +384,7 @@ function RiskDialog() {
         {request.statements.slice(0, SHOWN_STATEMENTS).map((s, i) => (
           <li key={i}>
             <strong>{t(`risk.${s.risk}`)}</strong>
+            {s.place && <span className="muted small"> {t("risk.from", { place: s.place })}</span>}
             <pre className="mono small">{s.sql.length > SHOWN_SQL ? `${s.sql.slice(0, SHOWN_SQL)}…` : s.sql}</pre>
           </li>
         ))}

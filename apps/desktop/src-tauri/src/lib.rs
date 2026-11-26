@@ -3206,6 +3206,7 @@ pub(crate) async fn start_script(
     results: Option<String>,
 ) -> CmdResult<()> {
     let echoes = std::mem::take(&mut options.echoes);
+    let included = std::mem::take(&mut options.files);
     let (original, page_sort) = match page {
         Some((original, sort)) => (Some(original), Some(sort)),
         None => (None, None),
@@ -3224,6 +3225,16 @@ pub(crate) async fn start_script(
     // is refused by the core, whatever its error mode.
     spelaion_core::check_run(&open.session, &sql, &open.resolved.safeguards(), confirmed)
         .map_err(|e| e.to_string())?;
+    // What runs is what was checked: a file the run included that changed since the guard's
+    // question refuses it before anything runs (ADR-078, point 4). Only hashed, never read again.
+    if !included.is_empty() {
+        let files: Vec<spelaion_core::IncludedFile> =
+            included.into_iter().map(Into::into).collect();
+        tokio::task::spawn_blocking(move || spelaion_core::check_included_files(&files))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+    }
     // Only a run the core accepted replaces results, and the core decides which (SDB-378).
     let mut placed = RunEvents::new(
         state
@@ -3276,7 +3287,12 @@ pub(crate) async fn start_script(
             // completion/error recorded, and later statements must not be silently aborted.
             let event = match item {
                 spelaion_core::RunItem::Event(event) => placed.event(event),
-                spelaion_core::RunItem::Echo(text) => ScriptEvent::Echo { text },
+                spelaion_core::RunItem::Echo(spelaion_core::EchoLine::Echo(text)) => {
+                    ScriptEvent::Echo { text }
+                }
+                spelaion_core::RunItem::Echo(spelaion_core::EchoLine::Included(file)) => {
+                    ScriptEvent::Included { file }
+                }
             };
             let _ = on_event.send(event);
         }
@@ -3562,41 +3578,81 @@ async fn variable_values(
     Ok((open, values))
 }
 
+/// The folder tree a file tab's `@include` lines may read (ADR-078, point 7): the innermost
+/// open folder holding `file`, else its own folder; `None` for a console (no file).
+async fn script_tree(
+    state: &AppState,
+    file: Option<String>,
+) -> CmdResult<Option<spelaion_core::ScriptTree>> {
+    let Some(file) = file else {
+        return Ok(None);
+    };
+    let folders = state.folders.read().await.paths();
+    tokio::task::spawn_blocking(move || {
+        spelaion_core::ScriptTree::for_file(Path::new(&file), &folders)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map(Some)
+    .map_err(|e| e.to_string())
+}
+
 /// The `${name}` variables of a script's statements, in order, and which of them have no
-/// value yet (neither the tab's nor its connection's), so the UI can ask for those.
+/// value yet (neither the tab's nor its connection's, nor an earlier `@set`'s, in the script or
+/// a file it includes), so the UI can ask for those. `file`: the tab's `.sql` file, `null` for
+/// a console.
 #[command]
 async fn script_variables(
     session: String,
     sql: String,
     tab: HashMap<String, String>,
+    file: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<ScriptVariablesItem> {
     let (open, values) = variable_values(&state, &session, tab).await?;
     let dialect = open.session.dialect();
     let names = spelaion_core::script_variables(dialect.as_ref(), &sql);
-    // A name an earlier `@set` gives is not asked for, nor one an `@unset` removed (ADR-078).
-    let missing = spelaion_core::missing_variables(dialect.as_ref(), &sql, &values);
+    let tree = script_tree(&state, file).await?;
+    // A name an earlier `@set` gives is not asked for, nor one an `@unset` removed (ADR-078);
+    // included files are read for it, on a blocking thread.
+    let missing = tokio::task::spawn_blocking(move || {
+        spelaion_core::missing_variables(dialect.as_ref(), &sql, &values, tree.as_ref())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(ScriptVariablesItem { names, missing })
 }
 
 /// The script with its client commands resolved and its variables' values written in, by the
 /// core, before anything else reads it (ADR-078): `@set` and `@unset` change the values from
-/// their line on for this run only (never the tab's or the connection's), `@echo` lines come
-/// back to be shown when the run reaches them. The run sends the text, and its guard and
-/// read-only check read it. Refused as `substitute_variables` refuses a value.
+/// their line on for this run only (never the tab's or the connection's), `@echo` lines and
+/// included files' names come back to be shown when the run reaches them, and `@include` puts
+/// a `.sql` file of the tab's folder tree in place, read here once. The run sends the text, and
+/// its guard and read-only check read it. `file`: the tab's `.sql` file, `null` for a console,
+/// which refuses `@include`. Refused as `substitute_variables` refuses a value, and for what
+/// `@include` refuses.
 #[command]
 async fn resolve_script(
     session: String,
     sql: String,
     tab: HashMap<String, String>,
+    file: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<ResolvedScriptItem> {
     let (open, values) = variable_values(&state, &session, tab).await?;
-    let resolved = spelaion_core::resolve_script(open.session.dialect().as_ref(), &sql, &values)
-        .map_err(|e| e.to_string())?;
+    let dialect = open.session.dialect();
+    let tree = script_tree(&state, file).await?;
+    let resolved = tokio::task::spawn_blocking(move || {
+        spelaion_core::resolve_script(dialect.as_ref(), &sql, &values, tree.as_ref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
     Ok(ResolvedScriptItem {
         text: resolved.text,
         echoes: resolved.echoes.into_iter().map(Into::into).collect(),
+        origins: resolved.origins.into_iter().map(Into::into).collect(),
+        files: resolved.files.into_iter().map(Into::into).collect(),
     })
 }
 

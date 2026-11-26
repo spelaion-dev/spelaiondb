@@ -49,6 +49,7 @@ mod history;
 mod import;
 mod import_cancel;
 mod imported_setup;
+mod include;
 mod kept_results;
 mod kube;
 mod late_cancel;
