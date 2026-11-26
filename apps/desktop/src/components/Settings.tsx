@@ -3,7 +3,7 @@
 // live with each connection in the sidebar, not here.
 
 import { DisplaySettings } from "./DisplaySettings";
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
 import { usePreferences, type PreferenceSetting, type ThemePreference } from "../preferences";
@@ -340,7 +340,21 @@ function MapSettings() {
   const setMap = usePreferences((s) => s.setMap);
   const fromMap = () => ({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution, tileAttributionUrl: map.tileAttributionUrl });
   const [draft, setDraft] = useState(fromMap);
-  useEffect(() => setDraft(fromMap()), [map.tileName, map.tileUrl, map.tileAttribution, map.tileAttributionUrl]);
+  // When a save lands (this page's or another window's), a field takes the saved value only if
+  // the person has not changed it since the value saved before: what they are typing in another
+  // field is never thrown away by a save that was still on its way (SDB-532).
+  const savedBefore = useRef(fromMap());
+  useEffect(() => {
+    const saved = fromMap();
+    const before = savedBefore.current;
+    savedBefore.current = saved;
+    setDraft((current) => ({
+      tileName: current.tileName === before.tileName ? saved.tileName : current.tileName,
+      tileUrl: current.tileUrl === before.tileUrl ? saved.tileUrl : current.tileUrl,
+      tileAttribution: current.tileAttribution === before.tileAttribution ? saved.tileAttribution : current.tileAttribution,
+      tileAttributionUrl: current.tileAttributionUrl === before.tileAttributionUrl ? saved.tileAttributionUrl : current.tileAttributionUrl,
+    }));
+  }, [map.tileName, map.tileUrl, map.tileAttribution, map.tileAttributionUrl]);
   const saved = map.tileUrl !== "";
   const changed = draft.tileName !== map.tileName || draft.tileUrl !== map.tileUrl || draft.tileAttribution !== map.tileAttribution || draft.tileAttributionUrl !== map.tileAttributionUrl;
   const saveServer = () => {
