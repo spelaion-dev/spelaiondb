@@ -171,6 +171,11 @@ mod tests {
         (Store::open(&dir.join("state.db")).unwrap(), dir)
     }
 
+    /// A folder path that is absolute on every system, as a recent folder must be.
+    fn work() -> String {
+        std::env::temp_dir().join("work").display().to_string()
+    }
+
     fn rows(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
             .iter()
@@ -206,7 +211,7 @@ mod tests {
         store.set_theme("dark").unwrap();
         store.set_interface_size(110).unwrap();
         store.set_update_check(false).unwrap();
-        store.add_recent_folder("C:/work").unwrap();
+        store.add_recent_folder(&work()).unwrap();
         store.set_connection_name_pattern(Some("{engine}")).unwrap();
         store
             .set_explorer_preferences(&crate::ExplorerPreferences::default())
@@ -288,7 +293,7 @@ mod tests {
     fn a_replace_is_whole_keeps_this_computer_and_leaves_out_means_default() {
         let (store, dir) = store("replace");
         store.set_theme("dark").unwrap();
-        store.add_recent_folder("C:/work").unwrap();
+        store.add_recent_folder(&work()).unwrap();
         store
             .set_shortcut_overrides(&[crate::ShortcutOverride {
                 command: "tab.new".into(),
@@ -306,7 +311,7 @@ mod tests {
             "left out: the default"
         );
         assert_eq!(store.shortcut_overrides().unwrap(), vec![]);
-        assert_eq!(store.recent_folders().unwrap(), vec!["C:/work".to_string()]);
+        assert_eq!(store.recent_folders().unwrap(), vec![work()]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

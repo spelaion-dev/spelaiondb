@@ -36,15 +36,20 @@ impl Drop for Machine {
     }
 }
 
+/// A folder of the old computer, absolute on every system (a recent folder must be).
+fn old_folder() -> String {
+    std::env::temp_dir()
+        .join("spelaion-old-work")
+        .display()
+        .to_string()
+}
+
 async fn configure(old: &Machine) {
     let history = &old.history;
     history.set_theme("dark".into()).await.unwrap();
     history.set_language("es".into()).await.unwrap();
     history.set_interface_size(110).await.unwrap();
-    history
-        .add_recent_folder("C:/old/work".into())
-        .await
-        .unwrap();
+    history.add_recent_folder(old_folder()).await.unwrap();
     history
         .set_connection_name_pattern(Some("{engine} {host}".into()))
         .await
@@ -100,7 +105,8 @@ async fn settings_exported_on_one_computer_arrive_whole_on_another() {
     assert_eq!(exported.snippets, 1);
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(
-        !text.contains("C:/old/work"),
+        !text.contains(&old_folder().replace(std::path::MAIN_SEPARATOR, "/"))
+            && !text.contains(&old_folder()),
         "a folder of this computer moved"
     );
 
