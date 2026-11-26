@@ -449,5 +449,33 @@
       "export": "No se pudieron exportar los ajustes: {{detail}}",
       "import": "No se pudieron importar los ajustes: {{detail}}. No se cambió nada."
     }
+  },
+  "logs": {
+    "title": "Registro",
+    "hint": "Qué falló y cuándo: conexiones que fallaron, problemas al arrancar y errores dentro de la aplicación. El registro nunca guarda SQL, datos ni contraseñas, y lo que parezca una contraseña se enmascara.",
+    "show": "Mostrar",
+    "levels": {
+      "info": "Todo",
+      "warning": "Avisos y errores",
+      "error": "Solo errores"
+    },
+    "level": {
+      "info": "Info",
+      "warning": "Aviso",
+      "error": "Error"
+    },
+    "refresh": "Actualizar",
+    "export": "Exportar registro…",
+    "exportTitle": "Exportar registro",
+    "fileType": "Archivos de registro",
+    "exporting": "Exportando el registro…",
+    "exported": "Se exportaron {{total}} entradas a {{path}}.",
+    "exportFailed": "No se pudo exportar el registro: {{detail}}",
+    "loading": "Cargando el registro…",
+    "loadFailed": "No se pudo leer el registro: {{detail}}",
+    "counts": "{{errors}} errores, {{warnings}} avisos y {{infos}} entradas más en {{path}}",
+    "empty": "El registro está vacío: todavía no ha fallado nada.",
+    "noneAtLevel": "No hay entradas para «{{level}}».",
+    "entries": "Entradas del registro"
   }
 }

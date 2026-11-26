@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::time::SystemTime;
 
-use spelaion_core::{AppLog, StartupAction, StartupDialog, StartupFailure};
+use spelaion_core::{AppLog, LogLevel, StartupAction, StartupDialog, StartupFailure};
 
 /// The smoke test (`e2e/smoke.mjs`) answers the dialog with this instead of a click, so its
 /// window never appears on the user's screen: `start-over` or `quit`. The failure is still
@@ -22,7 +22,7 @@ pub(crate) fn ask(failure: &StartupFailure, log: &AppLog) -> StartupAction {
     let entry = failure.log_entry();
     // Also on the console, for a start from a terminal.
     eprintln!("{entry}");
-    let written = match log.append(&entry) {
+    let written = match log.append(LogLevel::Error, &entry) {
         Ok(()) => Some(log.path()),
         Err(e) => {
             eprintln!("could not write the log {}: {e}", log.path().display());
@@ -39,6 +39,7 @@ pub(crate) fn ask(failure: &StartupFailure, log: &AppLog) -> StartupAction {
         };
         note(
             log,
+            LogLevel::Info,
             &format!(
                 "startup dialog answered by {CHOICE_SWITCH}: {}",
                 action.label()
@@ -52,7 +53,11 @@ pub(crate) fn ask(failure: &StartupFailure, log: &AppLog) -> StartupAction {
                 if let Some(folder) = &dialog.folder
                     && let Err(e) = open_folder(folder)
                 {
-                    note(log, &format!("could not open {}: {e}", folder.display()));
+                    note(
+                        log,
+                        LogLevel::Warning,
+                        &format!("could not open {}: {e}", folder.display()),
+                    );
                 }
             }
             action @ (StartupAction::Quit | StartupAction::StartOver) => return action,
@@ -63,7 +68,7 @@ pub(crate) fn ask(failure: &StartupFailure, log: &AppLog) -> StartupAction {
 /// Tells the user that what they chose could not be done (it is logged too), and quits: starting
 /// SpelaionDB again shows the first dialog again.
 pub(crate) fn fail(log: &AppLog, message: &str) -> ! {
-    note(log, message);
+    note(log, LogLevel::Error, message);
     if std::env::var_os(CHOICE_SWITCH).is_none() {
         show(&StartupDialog {
             title: "SpelaionDB could not start".into(),
@@ -78,10 +83,10 @@ pub(crate) fn fail(log: &AppLog, message: &str) -> ! {
     std::process::exit(1);
 }
 
-/// Adds `message` to the log, and to the console.
-pub(crate) fn note(log: &AppLog, message: &str) {
+/// Adds `message` to the log at `level`, and to the console.
+pub(crate) fn note(log: &AppLog, level: LogLevel, message: &str) {
     eprintln!("{message}");
-    if let Err(e) = log.append(message) {
+    if let Err(e) = log.append(level, message) {
         eprintln!("could not write the log {}: {e}", log.path().display());
     }
 }

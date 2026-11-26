@@ -44,7 +44,7 @@ pub fn install_panic_log(log: Option<AppLog>) {
         let entry = panic_entry(info);
         eprintln!("{entry}");
         if let Some(log) = &log
-            && let Err(e) = log.append(&entry)
+            && let Err(e) = log.append(crate::LogLevel::Error, &entry)
         {
             eprintln!("could not write the log {}: {e}", log.path().display());
         }

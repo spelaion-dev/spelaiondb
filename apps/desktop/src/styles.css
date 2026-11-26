@@ -2754,6 +2754,67 @@ select {
 .transfer-result {
   overflow-wrap: anywhere;
 }
+/* Settings › Logs (SDB-31): the app log, newest first, filtered by level. */
+.log-toolbar {
+  display: flex;
+  gap: var(--space-md);
+  align-items: flex-end;
+  margin-bottom: var(--space-md);
+}
+.log-path {
+  overflow-wrap: anywhere;
+}
+.log-entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.log-entries li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2xs) var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--line);
+}
+.log-entries li:last-child {
+  border-bottom: none;
+}
+.log-level {
+  align-self: start;
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.log-level-error {
+  background: var(--tone-red-soft);
+  color: var(--tone-red-fg);
+}
+.log-level-warning {
+  background: var(--tone-amber-soft);
+  color: var(--tone-amber-fg);
+}
+.log-level-info {
+  background: var(--tone-neutral-soft);
+  color: var(--tone-neutral-fg);
+}
+.log-time {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-family: var(--font-code);
+}
+.log-message {
+  grid-column: 1 / -1;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+}
 /* Settings › Keyboard shortcuts (SDB-447): every command with its keys, by place and category. */
 .shortcut-toolbar {
   display: flex;

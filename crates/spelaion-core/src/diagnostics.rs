@@ -702,9 +702,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("spelaion-diag-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let log = AppLog::in_user_dir(&dir);
-        log.append("first").unwrap();
-        log.append("second").unwrap();
-        log.append("third").unwrap();
+        log.append(crate::LogLevel::Info, "first").unwrap();
+        log.append(crate::LogLevel::Info, "second").unwrap();
+        log.append(crate::LogLevel::Info, "third").unwrap();
         let tail = log_tail(&log, 2);
         assert_eq!(tail.len(), 2);
         assert!(

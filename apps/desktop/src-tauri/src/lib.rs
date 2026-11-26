@@ -17,6 +17,7 @@ mod interaction;
 mod jobs;
 mod launch;
 mod library;
+mod log_viewer;
 mod mcp;
 mod open_folders;
 mod panics;
@@ -43,7 +44,7 @@ use spelaion_config::{
     TrustStore, default_user_dir, load,
 };
 use spelaion_core::{
-    AppLog, Engines, ExportFormat, ExportOptions, FindQuery, GenericDialect, JobCancel,
+    AppLog, Engines, ExportFormat, ExportOptions, FindQuery, GenericDialect, JobCancel, LogLevel,
     OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth,
     StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
     start_over,
@@ -63,6 +64,9 @@ use spelaion_driver_api::NameFilter;
 /// for metadata per connection (ADR-004).
 struct AppState {
     user_dir: PathBuf,
+    /// The app log (SDB-283), which Settings › Logs shows (SDB-31): what the app chooses to
+    /// write, scrubbed by the core, never SQL, data or secrets.
+    log: AppLog,
     /// The folders the window holds open, each with its own configuration (ADR-075, SDB-500).
     /// The page shows one at a time (`config()`): the last one opened.
     folders: RwLock<open_folders::OpenFolders>,
@@ -220,6 +224,14 @@ fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
 type CmdResult<T> = Result<T, String>;
 
 impl AppState {
+    /// Adds an entry to the app log; a log that cannot be written is not the user's problem
+    /// here (the console says so).
+    fn log(&self, level: LogLevel, message: &str) {
+        if let Err(e) = self.log.append(level, message) {
+            eprintln!("could not write the log {}: {e}", self.log.path().display());
+        }
+    }
+
     /// The engines a connection opened now uses (ADR-055: they change when the plugins do).
     fn engines(&self) -> Arc<Engines> {
         self.engines.read().expect("lock poisoned").clone()
@@ -2326,12 +2338,23 @@ async fn connect(
                 message,
                 ..
             })) if code.starts_with("28") => {
+                state.log(
+                    LogLevel::Warning,
+                    &format!("the server refused the login of {id}: {message}"),
+                );
                 return Ok(ConnectOutcome::AuthFailed {
                     message,
                     can_remember: save_to.is_some(),
                 });
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => {
+                let message = e.to_string();
+                state.log(
+                    LogLevel::Warning,
+                    &format!("could not connect to {id}: {message}"),
+                );
+                return Err(message);
+            }
         };
     // Remember in the keychain only if it was asked for and the connection worked.
     if remember && let (Some(account), Some(secret)) = (save_to, &password) {
@@ -2387,6 +2410,7 @@ async fn connect(
     if let Some(old) = old.and_then(|o| Arc::try_unwrap(o.open).ok()) {
         old.close().await;
     }
+    state.log(LogLevel::Info, &format!("connected to {id}"));
     Ok(ConnectOutcome::Connected {
         server_version,
         engine_mark,
@@ -7039,6 +7063,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             settings_transfer::export_settings,
             settings_transfer::preview_settings_import,
             settings_transfer::import_settings,
+            log_viewer::read_log,
+            log_viewer::export_log,
             list_connections,
             list_history,
             library::history_page,
@@ -7283,6 +7309,7 @@ fn open_history(user_dir: &Path, log: &AppLog) -> QueryHistory {
             StartupAction::StartOver => match start_over(&failure, std::time::SystemTime::now()) {
                 Ok(moved) => startup::note(
                     log,
+                    LogLevel::Info,
                     &format!(
                         "moved the local store to {}; starting with a new one",
                         moved.display()
@@ -7336,12 +7363,13 @@ pub fn run() {
     // From here on, where any panic happens goes to the log (SDB-163).
     panics::install(log.clone());
     if let Some(message) = copy_failed {
-        startup::note(&log, &message);
+        startup::note(&log, LogLevel::Warning, &message);
     }
     // Query history and audit live there: other local users must not read them.
     if let Err(e) = spelaion_config::ensure_private_dir(&user_dir) {
         startup::note(
             &log,
+            LogLevel::Warning,
             &format!("could not make the personal folder private: {e}"),
         );
     }
@@ -7356,6 +7384,7 @@ pub fn run() {
         spelaion_core::instance::Claim::Alone(why) => {
             startup::note(
                 &log,
+                LogLevel::Info,
                 &format!("a second launch will open another window: {why}"),
             );
             None
@@ -7410,6 +7439,7 @@ pub fn run() {
         .unwrap_or(spelaion_core::DEFAULT_INTERFACE_SIZE);
     let tile_cache = Arc::new(tiles::cache(&user_dir));
     let state = AppState {
+        log: log.clone(),
         user_dir,
         folders: RwLock::new(folders),
         folder: app_lifecycle::Folder::default(),
@@ -7467,6 +7497,16 @@ pub fn run() {
                 startup::ask(&StartupFailure::window(&e), &setup_log);
                 std::process::exit(1);
             }
+            // Where each session of the log starts, with what was running (SDB-31).
+            let _ = setup_log.append(
+                LogLevel::Info,
+                &format!(
+                    "SpelaionDB {} started on {} {}",
+                    app.package_info().version,
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                ),
+            );
             Ok(())
         })
         .build(tauri::generate_context!());

@@ -1105,6 +1105,13 @@ export const commands = {
 	 *  preferences.
 	 */
 	importSettings: (path: string) => typedError<SettingsSummaryItem_Serialize, string>(__TAURI_INVOKE("import_settings", { path })),
+	/**  The log's entries of `level` or more important, newest first, with where the file is. */
+	readLog: (level: LogLevelItem) => typedError<LogPageItem, string>(__TAURI_INVOKE("read_log", { level })),
+	/**
+	 *  Writes the entries of `level` or more important to `path`, which the user chose in the save
+	 *  dialog; how many were written.
+	 */
+	exportLog: (level: LogLevelItem, path: string) => typedError<number, string>(__TAURI_INVOKE("export_log", { level, path })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
 	historyPage: (filter: HistoryFilterItem_Deserialize, limit: number, offset: number) => typedError<HistoryPageItem_Serialize, string>(__TAURI_INVOKE("history_page", { filter, limit, offset })),
@@ -4685,6 +4692,29 @@ export type LockSnapshotItem_Serialize = {
 export type LockWaitItem = {
 	waiting: string,
 	blocking: string,
+};
+
+/**  One entry of the app log, scrubbed by the core. */
+export type LogEntryItem = {
+	/**  When it was written (UTC, ISO 8601); empty for a line the log did not write. */
+	time: string,
+	level: LogLevelItem,
+	message: string,
+};
+
+/**  How much a log entry matters (SDB-31); as a filter, the least important level shown. */
+export type LogLevelItem = "error" | "warning" | "info";
+
+/**
+ *  What Settings › Logs shows: the entries a filter keeps, newest first, how many of each
+ *  level the log has, and where its file is.
+ */
+export type LogPageItem = {
+	path: string,
+	entries: LogEntryItem[],
+	errors: number,
+	warnings: number,
+	infos: number,
 };
 
 /**  What a column loses on its way, for the page to word. */

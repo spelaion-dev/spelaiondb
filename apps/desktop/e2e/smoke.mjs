@@ -517,7 +517,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14, shortcuts: 15, transfer: 16 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14, shortcuts: 15, transfer: 16, logs: 17 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -3587,6 +3587,28 @@ try {
     await page.keyboard.press("Control+w");
     await page.waitForFunction((count) => document.querySelectorAll('[role="tab"]').length === count, tabsWithSnippets);
     await replaceQuery(panel, "select 'unterminated");
+  }
+
+  step("Settings › Logs shows the app log by level and exports it (SDB-31)");
+  {
+    const logFile = join(userDir, "exported.log");
+    await withSettings("logs", async (settings) => {
+      const entries = settings.getByRole("list", { name: "Log entries" });
+      await entries.locator('li[data-level="info"]', { hasText: /SpelaionDB .* started on windows/ }).first().waitFor();
+      await shot("05e-logs");
+      await settings.getByRole("combobox", { name: "Show" }).selectOption("error");
+      await settings.locator('li[data-level="info"]').first().waitFor({ state: "detached" });
+      assert.equal(await settings.locator('li[data-level="warning"]').count(), 0, "only errors at that level");
+      await settings.getByRole("combobox", { name: "Show" }).selectOption("info");
+      await entries.locator('li[data-level="info"]').first().waitFor();
+      await page.evaluate((target) => (window.__spelaionSavePath = target), logFile);
+      await settings.getByRole("button", { name: "Export log…" }).click();
+      await settings.getByRole("status").filter({ hasText: `entries to ${logFile}` }).waitFor();
+      await page.evaluate(() => delete window.__spelaionSavePath);
+    });
+    const exportedLog = readFileSync(logFile, "utf8");
+    assert.match(exportedLog, /Z INFO SpelaionDB .* started on windows/);
+    assert.doesNotMatch(exportedLog, /password\s*[=:]\s*(?!\*\*\*)\S/i, "no password in the log");
   }
 
   step("Settings › Keyboard shortcuts lists every command and finds one by its name or by its keys (SDB-447)");

@@ -449,5 +449,33 @@
       "export": "Could not export settings: {{detail}}",
       "import": "Could not import settings: {{detail}}. Nothing was changed."
     }
+  },
+  "logs": {
+    "title": "Logs",
+    "hint": "What went wrong and when: connection failures, problems at startup and errors inside the app. The log never holds SQL, data or passwords, and anything that looks like a password is masked.",
+    "show": "Show",
+    "levels": {
+      "info": "Everything",
+      "warning": "Warnings and errors",
+      "error": "Errors only"
+    },
+    "level": {
+      "info": "Info",
+      "warning": "Warning",
+      "error": "Error"
+    },
+    "refresh": "Refresh",
+    "export": "Export log…",
+    "exportTitle": "Export log",
+    "fileType": "Log files",
+    "exporting": "Exporting the log…",
+    "exported": "Exported {{total}} entries to {{path}}.",
+    "exportFailed": "Could not export the log: {{detail}}",
+    "loading": "Loading the log…",
+    "loadFailed": "Could not read the log: {{detail}}",
+    "counts": "{{errors}} errors, {{warnings}} warnings and {{infos}} other entries in {{path}}",
+    "empty": "The log is empty: nothing has gone wrong yet.",
+    "noneAtLevel": "No entries for “{{level}}”.",
+    "entries": "Log entries"
   }
 }
