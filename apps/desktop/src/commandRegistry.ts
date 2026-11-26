@@ -110,6 +110,7 @@ export const COMMANDS = [
   { id: "window.close", category: "general", label: "app:detach.closeWindow" },
   { id: "file.open", category: "file", label: "app:files.open", shortcut: "Ctrl+O", scope: "global", menus: ["file", "welcome"] },
   { id: "file.openPlan", category: "file", label: "editor:plan.open", menus: ["file"] },
+  { id: "file.newNotebook", category: "file", label: "app:files.newNotebook", menus: ["file"] },
   { id: "file.save", category: "file", label: "app:tabs.saveFile", shortcut: "Ctrl+S", scope: "global", menus: ["tab"] },
   { id: "file.saveAs", category: "file", label: "app:tabs.saveFileAs", shortcut: "Ctrl+Shift+S", scope: "global", menus: ["tab"] },
   { id: "file.reload", category: "file", label: "app:tabs.reloadFile", menus: ["tab"] },

@@ -7413,6 +7413,9 @@ pub struct OpenTabItem {
     pub timeout_seconds: Option<u32>,
     pub snippet_name: Option<String>,
     pub file: Option<OpenTabFileItem>,
+    /// A notebook tab (ADR-087): `text` is the notebook's document as its file holds it.
+    #[serde(default)]
+    pub notebook: bool,
 }
 
 impl From<OpenTabItem> for spelaion_core::SavedTab {
@@ -7435,7 +7438,7 @@ impl From<OpenTabItem> for spelaion_core::SavedTab {
             }),
             // Its place in the window is the core's to give (`window_sets`).
             window_position: None,
-            notebook: false,
+            notebook: t.notebook,
         }
     }
 }
@@ -7461,6 +7464,7 @@ impl From<spelaion_core::SavedTab> for OpenTabItem {
                 },
                 modified: f.modified,
             }),
+            notebook: t.notebook,
         }
     }
 }

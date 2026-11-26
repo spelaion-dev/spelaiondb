@@ -6799,6 +6799,98 @@ try {
     await fileTab("copy.sql").waitFor({ state: "detached" });
   }
 
+  step("SQL notebooks (ADR-087): a cell referencing another runs as a CTE, Run all stops at an error and sums up, saved, reopened without running, exported as HTML");
+  {
+    const notebookDir = join(userDir, "notebooks");
+    mkdirSync(notebookDir, { recursive: true });
+    const notebookPath = join(notebookDir, "orders.md");
+    const htmlPath = join(notebookDir, "orders.html");
+    const notebookLabel = page.locator(".tabbar .tab .tab-label", { hasText: /^orders\.md$/ });
+    // A query on Shop first: a new notebook takes the active tab's connection, unconnected.
+    await newQuery("Shop (SQLite)", "select 1;");
+    await page.getByRole("button", { name: "Open a file or a recent one" }).click();
+    await page.getByRole("menu", { name: "Open a file or a recent one" }).getByRole("menuitem", { name: "New notebook" }).click();
+    const notebook = page.locator(".tab-panel:not([hidden]) .notebook-tab");
+    await notebook.waitFor();
+    assert.equal(await notebook.locator(".status-connected").count(), 0, "a new notebook connects only when a cell runs");
+    const cell = (name) => notebook.locator(`section.notebook-cell[data-cell="${name}"]`);
+    await cell("cell_1").locator(".cm-content").click();
+    await page.keyboard.insertText("select id, total from orders where total > 100");
+    // A Markdown cell: drawn by the core's blocks, its raw HTML shown as text.
+    await notebook.getByRole("button", { name: "Add a Markdown cell at the end" }).click();
+    await notebook.getByLabel("Markdown text").fill("# Big orders\n\nThe **largest** ones, see <b>notes</b>.");
+    await notebook.getByRole("button", { name: "Done", exact: true }).click();
+    await notebook.locator(".notebook-markdown h1", { hasText: "Big orders" }).waitFor();
+    assert.equal(await notebook.locator(".notebook-markdown b").count(), 0);
+    assert.match(await notebook.locator(".notebook-markdown").innerText(), /<b>notes<\/b>/);
+    // A SQL cell that references the first: the core runs cell_1's SQL inside it, as a CTE.
+    await notebook.getByRole("button", { name: "Add a SQL cell at the end" }).click();
+    await cell("cell_2").locator(".cm-content").click();
+    await page.keyboard.insertText("select count(*) as n from {{cell_1}}");
+    await cell("cell_2").getByText("Uses cell_1").waitFor();
+    await page.keyboard.press("Control+Enter");
+    await cell("cell_2").locator(".notebook-result .statusline", { hasText: "1 row" }).waitFor();
+    assert.equal(await cell("cell_1").locator(".notebook-output").count(), 0, "running cell_2 shows no result in cell_1");
+    await cell("cell_2").getByRole("button", { name: "Cell actions" }).click();
+    await page.getByRole("menu", { name: "Cell actions" }).getByRole("menuitem", { name: "Show the SQL that runs" }).click();
+    await cell("cell_2").locator(".notebook-expanded pre", { hasText: /WITH "?cell_1"? AS \(/ }).waitFor();
+    // Run all: every SQL cell from the top, then a summary.
+    await notebook.getByRole("button", { name: "Run all", exact: true }).click();
+    await notebook.locator(".notebook-summary", { hasText: "Ran 2 of 2 SQL cells" }).waitFor();
+    await cell("cell_1").locator(".notebook-result .statusline", { hasText: /\d rows?/ }).waitFor();
+    await cell("cell_1").getByRole("button", { name: "Show as a chart" }).click();
+    await cell("cell_1").locator(".notebook-chart svg.chart-svg").waitFor();
+    await shot("sdb-36-notebook");
+    // A cell that fails stops Run all, and the summary says where and why.
+    await notebook.getByRole("button", { name: "Add a SQL cell at the end" }).click();
+    await cell("cell_3").locator(".cm-content").click();
+    await page.keyboard.insertText("select * from no_such_notebook_table");
+    await notebook.getByRole("button", { name: "Run all", exact: true }).click();
+    await notebook.locator(".notebook-summary", { hasText: /Stopped at cell_3 .*no such table/ }).waitFor();
+    await shot("sdb-36-notebook-stopped");
+    await cell("cell_3").getByRole("button", { name: "Cell actions" }).click();
+    await page.getByRole("menu", { name: "Cell actions" }).getByRole("menuitem", { name: "Delete cell" }).click();
+    const deleting = page.getByRole("dialog", { name: "Delete cell?" });
+    await deleting.getByRole("button", { name: "Delete cell" }).click();
+    await cell("cell_3").waitFor({ state: "detached" });
+    // Saved as a Markdown file with the cells and no results; Ctrl+S asks where the first time.
+    await page.evaluate((path) => { window.__spelaionSavePath = path; }, notebookPath);
+    await cell("cell_2").locator(".cm-content").click();
+    await page.keyboard.press("Control+s");
+    await notebookLabel.waitFor();
+    const saved = readFileSync(notebookPath, "utf8");
+    assert.match(saved, /^---\r?\nspelaion-notebook: 1\r?\nconnection: /);
+    assert.match(saved, /```sql cell=cell_2\r?\nselect count\(\*\) as n from \{\{cell_1\}\}\r?\n```/);
+    assert.match(saved, /# Big orders/);
+    assert.ok(!saved.includes("no_such_notebook_table"), "the deleted cell is not saved");
+    // Export as HTML: the results on screen, the chart as an image, no script, nothing linked.
+    await page.evaluate((path) => { window.__spelaionSavePath = path; }, htmlPath);
+    await notebook.getByRole("button", { name: "Export as HTML…" }).click();
+    await notebook.getByText(/^Exported to /).waitFor();
+    const html = readFileSync(htmlPath, "utf8");
+    assert.match(html, /Content-Security-Policy/);
+    assert.match(html, /<h1>Big orders<\/h1>/);
+    assert.match(html, /&lt;b&gt;notes&lt;\/b&gt;/);
+    assert.match(html, /data:image\/svg\+xml;base64,/);
+    assert.ok(!/<script/i.test(html), "the export has no script");
+    await page.evaluate(() => { delete window.__spelaionSavePath; });
+    // Closed and opened again: its cells come back, nothing runs and nothing connects.
+    await page.keyboard.press("Control+w");
+    await notebookLabel.waitFor({ state: "detached" });
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, notebookPath);
+    await page.keyboard.press("Control+o");
+    await notebookLabel.waitFor();
+    await cell("cell_2").waitFor();
+    assert.equal(await notebook.locator(".notebook-output").count(), 0, "a reopened notebook shows no result");
+    assert.equal(await notebook.locator(".status-connected").count(), 0, "a reopened notebook is not connected");
+    await shot("sdb-36-notebook-reopened");
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    await page.keyboard.press("Control+w");
+    await notebookLabel.waitFor({ state: "detached" });
+    // The query tab on Shop that the notebook took its connection from.
+    await page.keyboard.press("Control+w");
+  }
+
   step("direct PostgreSQL: password asked in a dialog");
   panel = await newQuery(
     "Postgres (Docker)",

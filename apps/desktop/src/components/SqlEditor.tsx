@@ -861,3 +861,6 @@ export function SqlEditor({ handle, onFormatError, onActionError, value, revisio
     {menu && <EditorMenu {...menu} runName={runName} onClose={() => { setMenu(null); view.current?.focus(); }} />}
   </>;
 }
+
+/** The SQL editor's look and its syntax colors, for a notebook's SQL cells (ADR-087). */
+export { theme as sqlEditorTheme, sqlColors as sqlEditorColors };

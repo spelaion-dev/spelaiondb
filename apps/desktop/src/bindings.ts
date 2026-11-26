@@ -298,6 +298,28 @@ export const commands = {
 	 *  it first in the recent files.
 	 */
 	openSqlFile: (path: string) => typedError<SqlFileItem, string>(__TAURI_INVOKE("open_sql_file", { path })),
+	/**  Reads a notebook from its text (a file the page opened as a `.sql` file is, or a kept tab). */
+	parseNotebook: (text: string) => typedError<Notebook_Serialize, string>(__TAURI_INVOKE("parse_notebook", { text })),
+	/**  The notebook's text, as its file holds it: what a save writes and a kept tab keeps. */
+	notebookText: (notebook: Notebook_Deserialize) => typedError<string, string>(__TAURI_INVOKE("notebook_text", { notebook })),
+	/**  A Markdown cell's blocks, drawn by the page as text (ADR-087, point 18). */
+	notebookMarkdown: (text: string) => typedError<Block_Serialize[], string>(__TAURI_INVOKE("notebook_markdown", { text })),
+	/**  The name a new SQL cell gets. */
+	newNotebookCellName: (notebook: Notebook_Deserialize) => typedError<string, string>(__TAURI_INVOKE("new_notebook_cell_name", { notebook })),
+	/**  Whether the SQL cell at `index` may be called `name`. */
+	checkNotebookCellName: (notebook: Notebook_Deserialize, index: number, name: string) => typedError<null, string>(__TAURI_INVOKE("check_notebook_cell_name", { notebook, index, name })),
+	expandNotebookCell: (session: string, notebook: Notebook_Deserialize, index: number) => typedError<ExpandedCellItem, string>(__TAURI_INVOKE("expand_notebook_cell", { session, notebook, index })),
+	/**
+	 *  Runs a cell's expanded SQL on the notebook tab's session, as the editor runs a script: the
+	 *  same `check_run` (the read-only barrier, then the guard's confirmations), the history, the
+	 *  tab's run options. Its results go to the cell's own result tabs (`cell_results_key`),
+	 *  replacing the cell's previous ones.
+	 */
+	runNotebookCell: (session: string, cell: string, sql: string, confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_notebook_cell", { session, cell, sql, confirmed, options, onEvent })),
+	/**  Frees one cell's results (the cell was deleted, or its results cleared). */
+	releaseNotebookCell: (session: string, cell: string) => typedError<null, string>(__TAURI_INVOKE("release_notebook_cell", { session, cell })),
+	/**  Writes the notebook as one self-contained HTML file to `path` (ADR-087, point 17). */
+	exportNotebookHtml: (path: string, title: string, connection: string | null, notebook: Notebook_Deserialize, outputs: CellOutputItem_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("export_notebook_html", { path, title, connection, notebook, outputs })),
 	/**
 	 *  Saves a tab's text to `path`. `format` is the file's (`None`: a new file, UTF-8 and the
 	 *  platform's line break); `expected_hash` is what the tab last read or saved (`None`: write
@@ -1424,6 +1446,9 @@ export type AddedFolderItem = {
 	folders: OpenFolderItem[],
 };
 
+/**  A table column's alignment. */
+export type Align = "none" | "left" | "center" | "right";
+
 /**  The script a structure form would run, written by the core, to show before it does. */
 export type AlterationPreviewItem = {
 	/**  The whole script, as shown and as sent back to apply it. */
@@ -1632,12 +1657,25 @@ export type BackupToolsItem_Serialize = {
 	tools: ToolItem_Serialize[],
 };
 
+/**  A block of a Markdown cell. */
+export type Block = Block_Serialize | Block_Deserialize;
+
 /**  A rectangle of the page: rows `firstRow..=lastRow` of the shown `columns`, in order. */
 export type BlockItem = {
 	firstRow: number,
 	lastRow: number,
 	columns: number[],
 };
+
+/**  A block of a Markdown cell. */
+export type Block_Deserialize = { kind: "heading"; level: number; content: Inline[] } | { kind: "paragraph"; content: Inline[] } | { kind: "quote"; blocks: Block_Deserialize[] } | { kind: "list"; ordered: boolean; 
+/**  The first item's number, for a numbered list. */
+start: number; items: Inline[][] } | { kind: "code"; language?: string | null; text: string } | { kind: "rule" } | { kind: "table"; align: Align[]; header: Inline[][]; rows: Inline[][][] };
+
+/**  A block of a Markdown cell. */
+export type Block_Serialize = { kind: "heading"; level: number; content: Inline[] } | { kind: "paragraph"; content: Inline[] } | { kind: "quote"; blocks: Block_Serialize[] } | { kind: "list"; ordered: boolean; 
+/**  The first item's number, for a numbered list. */
+start: number; items: Inline[][] } | { kind: "code"; language: string | null; text: string } | { kind: "rule" } | { kind: "table"; align: Align[]; header: Inline[][]; rows: Inline[][][] };
 
 /**  Why a column cannot be copied as it is. */
 export type BlockedItem = "binary" | "masked";
@@ -1699,6 +1737,13 @@ export type BulkActionItem = { kind: "set"; value: CellInputItem } | { kind: "fi
 
 export type CardinalityItem = "one" | "zeroOrOne" | "zeroOrMany";
 
+/**  One cell. */
+export type Cell = 
+/**  SQL, run as a script on the notebook's session; `name` is what references use. */
+{ kind: "sql"; name: string; sql: string } | 
+/**  Markdown text, drawn from [`markdown::read`]'s blocks. */
+{ kind: "markdown"; text: string };
+
 /**  A value typed in the grid for a result column (`None` is NULL). */
 export type CellEditItem = CellEditItem_Serialize | CellEditItem_Deserialize;
 
@@ -1733,6 +1778,24 @@ export type CellEditViewItem_Serialize = {
 export type CellInputItem = { kind: "text"; text: string } | { kind: "null" } | { kind: "default" };
 
 /**
+ *  What a SQL cell shows when the notebook is exported. The rows are read from the stored
+ *  results here, never sent by the page.
+ */
+export type CellOutputItem = CellOutputItem_Serialize | CellOutputItem_Deserialize;
+
+/**
+ *  What a SQL cell shows when the notebook is exported. The rows are read from the stored
+ *  results here, never sent by the page.
+ */
+export type CellOutputItem_Deserialize = { kind: "notRun" } | { kind: "ran"; messages: string[]; results: CellResultItem_Deserialize[] } | { kind: "failed"; error: string };
+
+/**
+ *  What a SQL cell shows when the notebook is exported. The rows are read from the stored
+ *  results here, never sent by the page.
+ */
+export type CellOutputItem_Serialize = { kind: "notRun" } | { kind: "ran"; messages: string[]; results: CellResultItem_Serialize[] } | { kind: "failed"; error: string };
+
+/**
  *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
  *  out the columns it hides).
  */
@@ -1758,6 +1821,23 @@ export type CellRange_Serialize = {
 	rows: number,
 	columns: number[],
 	selectedRows: number[] | null,
+};
+
+/**  A shown result of a cell, as the export reads it. */
+export type CellResultItem = CellResultItem_Serialize | CellResultItem_Deserialize;
+
+/**  A shown result of a cell, as the export reads it. */
+export type CellResultItem_Deserialize = {
+	result: number,
+	/**  The chart the page shows for it, as SVG; the core checks it before embedding it. */
+	chartSvg?: string | null,
+};
+
+/**  A shown result of a cell, as the export reads it. */
+export type CellResultItem_Serialize = {
+	result: number,
+	/**  The chart the page shows for it, as SVG; the core checks it before embedding it. */
+	chartSvg: string | null,
 };
 
 /**
@@ -3518,6 +3598,17 @@ export type ExistingItem = {
 	name: string,
 };
 
+/**
+ *  A cell ready to run on the notebook tab's session: its references expanded into CTEs by the
+ *  session's own dialect (ADR-087, points 8 and 9).
+ */
+export type ExpandedCellItem = {
+	/**  What runs, and what the guard and the history see. */
+	sql: string,
+	/**  The referenced cells, in the order their CTEs are written. */
+	references: string[],
+};
+
 export type ExplainCheck = {
 	sql: string,
 	risks: RiskyItem[],
@@ -4411,6 +4502,13 @@ export type IndexDetails = {
 	definition: string,
 };
 
+/**  A span of text inside a block. */
+export type Inline = { kind: "text"; text: string } | { kind: "strong"; content: Inline[] } | { kind: "emphasis"; content: Inline[] } | { kind: "code"; text: string } | 
+/**  Shown as its text and its address; never followed. */
+{ kind: "link"; content: Inline[]; url: string } | 
+/**  Shown as its alternative text and address; never fetched. */
+{ kind: "image"; alt: string; url: string } | { kind: "lineBreak" };
+
 /**  Where installing an update stands. */
 export type InstallStatus = InstallStatus_Serialize | InstallStatus_Deserialize;
 
@@ -5285,6 +5383,29 @@ export type NotScriptedItem = {
 	reason: string,
 };
 
+/**  A notebook as the page edits it: cells in order and the connection it was last run on. */
+export type Notebook = Notebook_Serialize | Notebook_Deserialize;
+
+/**  A notebook as the page edits it: cells in order and the connection it was last run on. */
+export type Notebook_Deserialize = {
+	/**
+	 *  The id of the connection it was last run on: a suggestion when it opens, never a
+	 *  connection opened by reading it (ADR-087, point 11).
+	 */
+	connection?: string | null,
+	cells: Cell[],
+};
+
+/**  A notebook as the page edits it: cells in order and the connection it was last run on. */
+export type Notebook_Serialize = {
+	/**
+	 *  The id of the connection it was last run on: a suggestion when it opens, never a
+	 *  connection opened by reading it (ADR-087, point 11).
+	 */
+	connection: string | null,
+	cells: Cell[],
+};
+
 export type NoticeItem = {
 	severity: string,
 	message: string,
@@ -5493,6 +5614,8 @@ export type OpenTabItem_Deserialize = {
 	timeoutSeconds?: number | null,
 	snippetName?: string | null,
 	file?: OpenTabFileItem_Deserialize | null,
+	/**  A notebook tab (ADR-087): `text` is the notebook's document as its file holds it. */
+	notebook?: boolean,
 };
 
 /**  An editor tab as kept between runs: text and settings, never results or session state. */
@@ -5512,6 +5635,8 @@ export type OpenTabItem_Serialize = {
 	timeoutSeconds: number | null,
 	snippetName: string | null,
 	file: OpenTabFileItem_Serialize | null,
+	/**  A notebook tab (ADR-087): `text` is the notebook's document as its file holds it. */
+	notebook: boolean,
 };
 
 /**  One statement of a script in the editor's outline. */
