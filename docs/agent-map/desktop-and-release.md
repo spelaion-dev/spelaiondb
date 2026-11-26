@@ -155,6 +155,13 @@
   (`src/runState.ts`), and Cancel is offered again only once the core no longer says it is
   cancelling. A statement's ending is `StatementEndItem`; `ScriptFinished` carries only its
   summary.
+  A Run the user presses (the editor's runs and Explain, by button, shortcut or palette) goes
+  through `pressRun` in `EditorTab.tsx`, never straight to `run` (SDB-525): `src/runWait.ts`
+  decides from what blocks the tab, read live (`blockNow`). The session opening, the database
+  list after connecting, the history saving and a view being restored make one run wait, said
+  in the toolbar with Don't run, and it runs once, the text as pressed; a folder change is said,
+  never waited for; the session closing drops it with a word (ADR-028). Internal runs (a
+  result's rerun, pages, refreshes) keep calling `run`. `scripts/run-wait.test.mjs` tests it.
   SDB-377: the update's state is `src-tauri/src/update_state.rs` (unknown, switched off, up to
   date, available with its install ready, downloading or failed, or not installed by the app),
   so a failed download is installed again without a new check and its progress reaches the page

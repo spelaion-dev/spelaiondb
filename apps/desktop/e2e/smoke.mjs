@@ -9755,6 +9755,33 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.getByText("INFO: hello from the smoke test").waitFor();
   await panel.getByText("INFO: a low severity message").waitFor();
   await shot("12a4-sqlserver");
+  step("a Run pressed right after connecting to SQL Server waits for the connection and its database list, then runs (SDB-525)");
+  {
+    // A new query connects at once; its password is asked every time.
+    await page.locator('.connection-row:has-text("SQL Server (Docker)") > .label').dblclick();
+    const fresh = page.locator(".tab-panel:not([hidden])");
+    await page.getByRole("dialog").getByText("Password for SQL Server (Docker)").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("Spelaion-test-1");
+    // Whether the tab said it waits: the notice may be gone before the result arrives.
+    await page.evaluate(() => {
+      window.__runWaited = false;
+      const seen = () => { if (document.querySelector(".tab-panel:not([hidden])")?.textContent.includes("Waiting to run:")) window.__runWaited = true; };
+      window.__runWaitObserver = new MutationObserver(seen);
+      window.__runWaitObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    // Typed and run at once, while the tab connects or lists its databases: never dropped.
+    await fresh.locator(".cm-content").click();
+    await page.keyboard.insertText("select 'pressed while connecting' as w");
+    await page.keyboard.press("Control+Enter");
+    await fresh.locator(".statusline", { hasText: "1 row" }).waitFor();
+    // Nothing waits any more.
+    assert.equal(await fresh.getByText(/^Waiting to run:/).count(), 0);
+    const waited = await page.evaluate(() => { window.__runWaitObserver.disconnect(); return window.__runWaited; });
+    console.log(`  the run ${waited ? "waited, as the tab said" : "found the tab ready"}`);
+    await page.keyboard.press("Control+w");
+    await panel.locator(".cm-content").waitFor();
+  }
   step("process monitor: SQL Server sessions and supported actions");
   await activities.getByRole("button", { name: "Processes", exact: true }).click();
   await page.locator("#processes-sidebar").getByRole("button", { name: "SQL Server (Docker)", exact: true }).click();
