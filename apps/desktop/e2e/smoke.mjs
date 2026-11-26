@@ -517,7 +517,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14, shortcuts: 15 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14, shortcuts: 15, transfer: 16 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -3647,6 +3647,45 @@ try {
     await page.keyboard.press("Control+Shift+Enter");
     await resultTab("old keys").waitFor();
     await replaceQuery(panel, "select 'unterminated");
+  }
+
+  step("Settings › Export and import: the settings move in one file, checked before anything changes (SDB-31)");
+  {
+    const settingsFile = join(userDir, "smoke.spelaion-settings");
+    await page.evaluate((target) => (window.__spelaionSavePath = target), settingsFile);
+    await withSettings("transfer", async (settings) => {
+      await settings.getByRole("button", { name: "Export settings…" }).click();
+      await settings.getByRole("status").filter({ hasText: `settings to ${settingsFile}` }).waitFor();
+    });
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    const exported = JSON.parse(readFileSync(settingsFile, "utf8"));
+    assert.equal(exported.format, "spelaiondb-settings");
+    assert.equal(exported.settings.theme, "light");
+    assert.equal(exported.settings.recent_folders, undefined, "this computer's folders stay here");
+    assert.ok(!JSON.stringify(exported).toLowerCase().includes("password"), "no password in the settings file");
+    // Another theme here; the import brings the file's back, after showing what it changes.
+    await setTheme("dark", "dark");
+    await page.evaluate((target) => (window.__spelaionOpenPath = target), settingsFile);
+    await withSettings("transfer", async (settings) => {
+      await settings.getByRole("button", { name: "Import settings…" }).click();
+      const preview = settings.getByRole("region", { name: "Import these settings?" });
+      await preview.waitFor();
+      assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "dark", "nothing changes before the import");
+      await shot("05g-settings-import-preview");
+      await preview.getByRole("button", { name: "Import settings" }).click();
+      await settings.getByRole("heading", { name: "Settings imported" }).waitFor();
+      await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
+    });
+    await page.evaluate(() => delete window.__spelaionOpenPath);
+    // A file that is not a settings file is refused, and says nothing changed.
+    const notSettings = join(userDir, "not.spelaion-settings");
+    writeFileSync(notSettings, "{}");
+    await page.evaluate((target) => (window.__spelaionOpenPath = target), notSettings);
+    await withSettings("transfer", async (settings) => {
+      await settings.getByRole("button", { name: "Import settings…" }).click();
+      await settings.getByRole("alert").filter({ hasText: "Could not import settings: this is not a SpelaionDB settings file. Nothing was changed." }).waitFor();
+    });
+    await page.evaluate(() => delete window.__spelaionOpenPath);
   }
 
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab goes back to the previous tab");

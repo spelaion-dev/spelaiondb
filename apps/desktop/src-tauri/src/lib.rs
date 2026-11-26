@@ -23,6 +23,7 @@ mod panics;
 mod plans;
 mod plugins;
 mod schema_compare;
+mod settings_transfer;
 mod startup;
 mod table_copy;
 mod tiles;
@@ -492,7 +493,7 @@ fn size_steps() -> SizeStepsItem {
 }
 
 /// The webview's zoom factor for an interface size in percent.
-fn interface_scale(size: u16) -> f64 {
+pub(crate) fn interface_scale(size: u16) -> f64 {
     f64::from(size) / 100.0
 }
 
@@ -7022,6 +7023,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_tunnel_ports,
             user_masking,
             set_user_masking,
+            settings_transfer::export_settings,
+            settings_transfer::preview_settings_import,
+            settings_transfer::import_settings,
             list_connections,
             list_history,
             library::history_page,

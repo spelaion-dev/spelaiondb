@@ -2740,6 +2740,20 @@ select {
   margin-bottom: 8px;
   font-weight: 600;
 }
+/* Settings › Export and import (SDB-31): the settings file, and what an import changes. */
+.transfer-actions {
+  display: flex;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+.transfer-summary {
+  margin: var(--space-sm) 0;
+  padding-left: var(--space-xl);
+  overflow-wrap: anywhere;
+}
+.transfer-result {
+  overflow-wrap: anywhere;
+}
 /* Settings › Keyboard shortcuts (SDB-447): every command with its keys, by place and category. */
 .shortcut-toolbar {
   display: flex;

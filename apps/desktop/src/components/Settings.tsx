@@ -18,14 +18,15 @@ import { PluginsSettings } from "./PluginsSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { SnippetSettings } from "./SnippetSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
+import { TransferSettings } from "./TransferSettings";
 import { ScreenBoundary } from "./ScreenBoundary";
 import { Icon } from "./Icons";
 import { copyDiagnostics, openIssuePage } from "../diagnostics";
 import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
 import { commandShortcut, keyText } from "../shortcuts";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map" | "shortcuts";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "snippets", "map", "shortcuts"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map" | "shortcuts" | "transfer";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "snippets", "map", "shortcuts", "transfer"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -88,6 +89,7 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "snippets" && <SnippetSettings />}
         {category === "map" && <MapSettings />}
         {category === "shortcuts" && <ShortcutSettings />}
+        {category === "transfer" && <TransferSettings />}
       </section>
     </div>
   );

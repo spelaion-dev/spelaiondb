@@ -590,3 +590,13 @@
   `JobRegistry` (SDB-369) lists a program's running jobs under ids it makes: `start(kind)` gives
   a `JobHandle` whose drop removes the entry (a panic too), and `cancel(id, kind)` refuses an id
   of another kind. The desktop names its kinds in `src-tauri/src/jobs.rs`.
+  The settings file (SDB-31) is `settings_transfer.rs`: one JSON file (`format`
+  `spelaiondb-settings`, `version`) of the store's portable rows and the personal `user.toml` and
+  `connection-types.toml`, written through `AtomicWriter`. Never a connection or a secret: those
+  move in ADR-088's encrypted file. An import checks the whole file before it writes anything:
+  the rows go into a store in memory (`Store::open_in_memory`, the same triggers), then the
+  core's own checks run over them (shortcut keys, snippets, the script template, the name pattern
+  of new connections, the tile server, read from the rows themselves because the readers drop
+  what they cannot use). Then the personal files, then the rows in one transaction; when the rows
+  fail the files are put back. A setting this version does not know is left out and listed.
+  Tested in `tests/settings_transfer.rs`.

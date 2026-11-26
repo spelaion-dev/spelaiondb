@@ -39,6 +39,7 @@ mod pgadmin;
 mod relocate;
 mod resolve;
 mod secrets;
+mod settings_files;
 mod tableplus;
 mod trust;
 mod tunnel_draft;
@@ -107,6 +108,10 @@ pub use resolve::{
 pub use secrets::{
     KEYCHAIN_NOT_KEPT, KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef,
     SystemBackend,
+};
+pub use settings_files::{
+    PERSONAL_FILE_MAX, PersonalFiles, PersonalFilesBefore, PersonalFilesPlan, apply_personal_files,
+    plan_personal_files, read_personal_files,
 };
 pub use tableplus::{TableplusError, read_tableplus, tableplus_dir};
 pub use trust::{

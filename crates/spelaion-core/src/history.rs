@@ -201,6 +201,14 @@ enum Request {
     GetShortcuts {
         reply: Reply<Vec<spelaion_store::ShortcutOverride>>,
     },
+    /// The personal settings that move with the settings file (SDB-31).
+    PortableSettings {
+        reply: Reply<Vec<(String, String)>>,
+    },
+    ReplacePortableSettings {
+        rows: Vec<(String, String)>,
+        reply: Reply<spelaion_store::PortableReplace>,
+    },
     /// The reply is why the changes were refused, if they were.
     SetShortcuts {
         overrides: Vec<spelaion_store::ShortcutOverride>,
@@ -532,6 +540,12 @@ impl QueryHistory {
                         }
                         Request::GetShortcuts { reply } => {
                             let _ = reply.send(crate::shortcuts::shortcut_overrides(&store));
+                        }
+                        Request::PortableSettings { reply } => {
+                            let _ = reply.send(store.portable_settings());
+                        }
+                        Request::ReplacePortableSettings { rows, reply } => {
+                            let _ = reply.send(store.replace_portable_settings(&rows));
                         }
                         Request::SetShortcuts { overrides, reply } => {
                             let _ = reply
@@ -1101,6 +1115,22 @@ impl QueryHistory {
             None => Ok(()),
             Some(refused) => Err(HistoryError::Shortcut(refused)),
         }
+    }
+
+    /// The personal settings that move to another computer (SDB-31), by key.
+    pub async fn portable_settings(&self) -> Result<Vec<(String, String)>, HistoryError> {
+        self.request(|reply| Request::PortableSettings { reply })
+            .await
+    }
+
+    /// Replaces the portable settings whole, in one transaction (`settings_transfer.rs` has
+    /// checked the rows first). The MCP read-only mode stays on when it is on.
+    pub async fn replace_portable_settings(
+        &self,
+        rows: Vec<(String, String)>,
+    ) -> Result<spelaion_store::PortableReplace, HistoryError> {
+        self.request(|reply| Request::ReplacePortableSettings { rows, reply })
+            .await
     }
 
     /// The text a new script starts with; empty when there is none.

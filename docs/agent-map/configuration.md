@@ -55,6 +55,12 @@
   the umask's in the repository, `edit::new_file_mode`); never `std::fs::write` over a user's file.
   The core's exports (audit, history, plans, data files) stream through its `AtomicWriter`
   (a uniquely named temporary file, the same guarantees).
+  The settings file's share of the personal configuration (SDB-31) is `settings_files.rs`:
+  `user.toml` and the personal `connection-types.toml` travel as their text, are read with the
+  same checks as when they load, and an import only adds (variables set, the port range, masked
+  columns added, a connection type added only when none of that id is defined here), so it never
+  loosens a safeguard; it writes through the Settings writers and puts the files back when a
+  later step of the import fails.
   Importing connections from other clients (ADR-039): `import.rs` is the flow every client
   shares (the `ImportedConnection` model, drafts, duplicates found by name or by the database
   they reach, replace in place, target folder, what was not mapped, passwords read from another

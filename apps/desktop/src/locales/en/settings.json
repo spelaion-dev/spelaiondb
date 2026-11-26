@@ -416,5 +416,38 @@
     "move": "Move keys",
     "save": "Save",
     "saving": "Saving…"
+  },
+  "transfer": {
+    "title": "Export and import",
+    "hint": "Move your settings to another computer: appearance, editor, grid, scripts, map, keyboard shortcuts, editor snippets, the MCP server's settings, your variables, masked columns and connection types. The file holds no connections and no passwords.",
+    "export": "Export settings…",
+    "import": "Import settings…",
+    "fileType": "SpelaionDB settings",
+    "exportTitle": "Export settings",
+    "importTitle": "Import settings",
+    "working": {
+      "export": "Exporting settings…",
+      "preview": "Reading the file…",
+      "import": "Importing settings…"
+    },
+    "exported": "Exported {{total}} settings to {{path}}.",
+    "previewTitle": "Import these settings?",
+    "from": "Exported by SpelaionDB {{version}} on {{at}}.",
+    "counts": "{{settings}} settings, {{shortcuts}} changed shortcuts and {{snippets}} editor snippets",
+    "variables": "Variables set: {{names}}",
+    "tunnelPorts": "Local ports for SSH tunnels: {{min}} to {{max}}",
+    "maskingAdded": "Masked columns added: {{patterns}}",
+    "typesAdded": "Connection types added: {{types}}",
+    "typesKept": "Connection types kept as they are here: {{types}}",
+    "mcpReadOnlyKept": "Read-only mode for agents stays on here, though the file has it off.",
+    "skipped": "Left out, unknown to this version: {{names}}",
+    "replaceNote": "The file's settings replace yours here, and a setting it does not have goes back to its default. Variables, masked columns and connection types are only added. Nothing changes until you import.",
+    "cancel": "Cancel",
+    "importAction": "Import settings",
+    "importedTitle": "Settings imported",
+    "failed": {
+      "export": "Could not export settings: {{detail}}",
+      "import": "Could not import settings: {{detail}}. Nothing was changed."
+    }
   }
 }
