@@ -20,6 +20,7 @@ mod shortcuts;
 mod side_panel;
 mod table_filters;
 mod tabs;
+mod tasks;
 #[cfg(test)]
 mod typed_values_tests;
 pub use aside::{aside_path, set_aside};
@@ -52,6 +53,11 @@ pub use side_panel::{
 pub use table_filters::{FilteredTable, TABLE_FILTER_HISTORY, TABLE_FILTER_MAX_CHARS};
 pub use tabs::{
     FileEncoding, LineEnding, MAX_RECENT_FILES, RecentFile, SavedFile, SavedTab, SavedTabs,
+};
+pub use tasks::{
+    MAX_TASKS, StoredTask, StoredTaskLog, StoredTaskRun, TASK_DOCUMENT_MAX, TASK_FOLDER_MAX,
+    TASK_LOG_MAX, TASK_NAME_MAX, TASK_RUNS_KEPT, TASK_SUMMARY_MAX, TaskEnding, TaskOrigin,
+    TaskSave,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -317,6 +323,8 @@ const MIGRATIONS: &[&str] = &["create table audit (
     // A kept notebook tab (ADR-087): its text is the notebook's document. Rows written before
     // have none and are editor tabs, as they were.
     "alter table open_tabs add column notebook integer check (notebook = 1);",
+    // Saved tasks and their runs (ADR-089).
+    tasks::MIGRATION,
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.

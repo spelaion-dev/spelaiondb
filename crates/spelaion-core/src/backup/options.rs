@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 /// `pg_dump`'s output format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PgFormat {
     /// A SQL script (`psql` restores it).
     Plain,
@@ -26,7 +27,8 @@ impl PgFormat {
 }
 
 /// What a dump holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum DumpContent {
     #[default]
     SchemaAndData,
@@ -34,7 +36,9 @@ pub enum DumpContent {
     DataOnly,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct PgDumpOptions {
     /// Only these schemas (names, not patterns); empty: all of them.
     pub schemas: Vec<String>,
@@ -75,7 +79,8 @@ impl Default for PgDumpOptions {
 }
 
 /// How `mysqldump` keeps the dump consistent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MysqlConsistency {
     /// One `REPEATABLE READ` transaction (InnoDB): nothing is locked.
     #[default]
@@ -88,7 +93,8 @@ pub enum MysqlConsistency {
 
 /// `mysqldump`'s column statistics query, which MySQL 8's client runs and older servers and
 /// MariaDB do not have.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ColumnStatistics {
     /// Off against MariaDB, the tool's default otherwise.
     #[default]
@@ -97,7 +103,9 @@ pub enum ColumnStatistics {
     On,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct MysqlDumpOptions {
     /// The databases; empty: the connection's.
     pub databases: Vec<String>,
@@ -145,14 +153,16 @@ impl Default for MysqlDumpOptions {
 }
 
 /// A dump of one of the engines with native tools.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum DumpOptions {
     Postgres(PgDumpOptions),
     Mysql(MysqlDumpOptions),
 }
 
 /// What a restore's input file is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RestoreFormat {
     /// Read from the file: a custom or tar archive, a dump folder, or SQL.
     Auto,
@@ -163,7 +173,8 @@ pub enum RestoreFormat {
     Tar,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PgRestoreOptions {
     /// Drop each object before creating it (`--clean --if-exists`).
     pub clean: bool,
@@ -172,7 +183,8 @@ pub struct PgRestoreOptions {
     pub create: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MysqlRestoreOptions {
     /// The database the file runs in; `None`: the connection's (a file made with `--databases`
     /// chooses its own).
@@ -181,7 +193,8 @@ pub struct MysqlRestoreOptions {
     pub disable_foreign_keys: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RestoreOptions {
     Postgres(PgRestoreOptions),
     Mysql(MysqlRestoreOptions),

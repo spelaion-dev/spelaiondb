@@ -12,6 +12,8 @@ use spelaion_config::{
 };
 use spelaion_store::{Decision, Store};
 
+mod task;
+
 #[derive(Parser)]
 #[command(
     name = "spelaiondb",
@@ -81,6 +83,13 @@ enum Command {
     Audit {
         #[arg(long, default_value_t = 20)]
         limit: usize,
+    },
+    /// Tasks saved in the app: list them, run one now, or show its runs (ADR-089). Nothing
+    /// runs on its own: to repeat a task, call `spelaiondb task run NAME` from cron or the
+    /// Windows Task Scheduler.
+    Task {
+        #[command(subcommand)]
+        action: task::TaskCommand,
     },
 }
 
@@ -259,6 +268,10 @@ async fn main() -> Result<()> {
                 );
             }
             Ok(())
+        }
+        Command::Task { action } => {
+            spelaion_core::install_panic_log(Some(spelaion_core::AppLog::in_user_dir(&user_dir)));
+            task::command(&user_dir, action).await
         }
         Command::Audit { limit } => {
             let store = Store::open(&spelaion_config::state_db(&user_dir))?;

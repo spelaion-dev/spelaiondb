@@ -5723,6 +5723,7 @@ dependencies = [
  "spelaion-core",
  "spelaion-driver-api",
  "spelaion-mcp",
+ "spelaion-ssh",
  "spelaion-store",
  "tokio",
 ]

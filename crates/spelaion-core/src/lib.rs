@@ -92,6 +92,7 @@ mod table_data;
 mod table_filters;
 mod table_pages;
 mod table_stats;
+pub mod task;
 mod temporal;
 #[cfg(all(test, unix))]
 mod test_files;

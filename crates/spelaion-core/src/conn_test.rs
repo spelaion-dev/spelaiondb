@@ -1221,6 +1221,26 @@ impl Redactor {
         }
     }
 
+    /// Stops treating `text` as a secret (a password that is also the connection's user name,
+    /// which its configuration writes as plain text).
+    pub fn forget(&self, text: &str) {
+        self.secrets
+            .lock()
+            .expect("lock poisoned")
+            .retain(|secret| secret != text);
+    }
+
+    /// Whether `text` holds one of the secrets learned, as [`Redactor::redact`] would find it
+    /// (a very short one only as a whole word). The other rules (URLs, headers, `key=value`)
+    /// are not asked.
+    pub fn holds_secret(&self, text: &str) -> bool {
+        self.secrets
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .any(|secret| replace_secret(text, secret) != text)
+    }
+
     pub fn redact(&self, text: &str) -> String {
         let mut out = text.to_string();
         for secret in self.secrets.lock().expect("lock poisoned").iter() {

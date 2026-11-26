@@ -16,7 +16,8 @@ use crate::job::JobCancel;
 use crate::{CoreEvent, Session};
 
 /// DuckDB's export format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum DuckdbExportFormat {
     #[default]
     Parquet,

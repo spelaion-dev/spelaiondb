@@ -1,7 +1,11 @@
 # Mcp and cli
 
 - `crates/spelaion-mcp` + `apps/cli`: `spelaiondb mcp` and utilities (`connections`, `trust`,
-  `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes
+  `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022;
+  `task list|run|history`, ADR-089: `apps/cli/src/task.rs` only prints and maps Ctrl+C to the
+  run's cancel, everything else is `spelaion-core::task`; it never asks: `NonInteractive`
+  dialogs, `Questions::Refuse`, a yes only from `--yes`; its tests are `apps/cli/tests/task.rs`,
+  with PostgreSQL). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes
   (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions. What agents may
   do on a connection is `spelaion-core::agent_access` (`write.rs`): the user's read-only mode
   for every agent (ADR-033, `mcp.read_only` in the store, read on every call, failing closed)
