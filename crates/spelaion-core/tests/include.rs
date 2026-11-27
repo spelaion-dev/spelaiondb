@@ -220,7 +220,14 @@ fn a_path_written_to_leave_the_tree_is_refused_before_anything_is_read() {
     let tree = folder.tree();
     let inside = folder.write("root/in.sql", "select 1");
     let verbatim = format!("\\\\?\\{}", inside.display());
-    let forward = inside.display().to_string().replace('\\', "/");
+    // The long form of the path: a temporary folder may be named by its 8.3 short name
+    // (`C:\Users\RUNNER~1\…` on CI), and its `~` would be refused before the `:` this checks.
+    let long = std::fs::canonicalize(&inside).expect("the file exists");
+    let long = long.display().to_string();
+    let forward = long
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(&long)
+        .replace('\\', "/");
     for (written, reason) in [
         ("/etc/passwd.sql", PathRefusal::Absolute),
         (
