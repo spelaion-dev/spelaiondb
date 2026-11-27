@@ -263,7 +263,7 @@ export function dropSchema(connection: ConnectionKey, session: string, schema: s
 export function schemaEditorTab(connection: ConnectionKey): string | null {
   const app = useApp.getState();
   const tab = app.tabs.find((t) => t.id === app.activeTab);
-  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && tabOnConnection(tab, connection) && isConnected(tab) && !isRunning(tab)
+  return tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && !tab.notebook && tabOnConnection(tab, connection) && isConnected(tab) && !isRunning(tab)
     ? tab.id
     : null;
 }

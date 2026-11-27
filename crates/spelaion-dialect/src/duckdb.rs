@@ -1,6 +1,6 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
-use crate::{is_white_space_at, trimmed};
+use crate::scanner::{self, RegionKind, SemicolonScanner};
 
 /// DuckDB dialect. Its parser comes from PostgreSQL's, and so do the lexical rules the splitter
 /// follows: quotes, `E'…'`, nested block comments and `$tag$` bodies.
@@ -11,12 +11,17 @@ impl Dialect for DuckdbDialect {
         "duckdb"
     }
 
+    /// A client command line (ADR-078) is resolved only by the editor's run: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        crate::refuse_client_command(statement)
+    }
+
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         split(script)
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, skip_non_code)
+        scanner::code_ranges(SemicolonScanner::new(script, opening))
     }
 
     fn quote_identifier(&self, ident: &str) -> String {
@@ -120,63 +125,7 @@ fn is_ident_byte(c: u8) -> bool {
 }
 
 fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut has_code = false;
-    let mut i = 0;
-
-    while i < b.len() {
-        match b[i] {
-            b'\'' => {
-                // E'…' supports backslash escapes.
-                i = skip_quoted(b, i, b'\'', escape_string(b, i));
-                has_code = true;
-            }
-            b'"' => {
-                i = skip_quoted(b, i, b'"', false);
-                has_code = true;
-            }
-            b'-' if b.get(i + 1) == Some(&b'-') => {
-                i = b[i..]
-                    .iter()
-                    .position(|&c| c == b'\n')
-                    .map_or(b.len(), |p| i + p + 1);
-            }
-            b'/' if b.get(i + 1) == Some(&b'*') => i = block_comment_end(b, i),
-            b'$' if i == 0 || !is_ident_byte(b[i - 1]) => match dollar_tag(b, i) {
-                Some(tag_end) => {
-                    let tag = &script[i..=tag_end];
-                    i = script[tag_end + 1..]
-                        .find(tag)
-                        .map_or(b.len(), |p| tag_end + 1 + p + tag.len());
-                    has_code = true;
-                }
-                None => {
-                    i += 1;
-                    has_code = true;
-                }
-            },
-            b';' => {
-                if has_code {
-                    spans.extend(trimmed(script, start, i));
-                }
-                i += 1;
-                start = i;
-                has_code = false;
-            }
-            _ => {
-                if !is_white_space_at(script, i) {
-                    has_code = true;
-                }
-                i += 1;
-            }
-        }
-    }
-    if has_code {
-        spans.extend(trimmed(script, start, b.len()));
-    }
-    spans
+    scanner::statements(SemicolonScanner::new(script, opening))
 }
 
 /// The byte after a block comment that starts at `i` (`/*`); block comments nest.
@@ -204,28 +153,34 @@ fn escape_string(b: &[u8], i: usize) -> bool {
     i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !is_ident_byte(b[i - 2]))
 }
 
-/// The byte after the string, quoted name, comment or `$tag$` body that starts at `i`, read as
-/// the splitter reads it; `None` when none starts there.
-fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+/// The string, quoted name, comment or `$tag$` body that starts at byte `i`, with the byte after
+/// it; `None` when none starts there. The scanner's one reading of them (DuckDB's statements end
+/// at a `;` outside them: [`SemicolonScanner`]).
+fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
     match *b.get(i)? {
-        b'\'' => Some(skip_quoted(b, i, b'\'', escape_string(b, i))),
-        b'"' => Some(skip_quoted(b, i, b'"', false)),
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(
+        b'\'' => Some((
+            RegionKind::String,
+            skip_quoted(b, i, b'\'', escape_string(b, i)),
+        )),
+        b'"' => Some((RegionKind::QuotedName, skip_quoted(b, i, b'"', false))),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((
+            RegionKind::Comment,
             b[i..]
                 .iter()
                 .position(|&c| c == b'\n')
                 .map_or(b.len(), |p| i + p + 1),
-        ),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i)),
+        )),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((RegionKind::Comment, block_comment_end(b, i))),
         b'$' if i == 0 || !is_ident_byte(b[i - 1]) => {
             let tag_end = dollar_tag(b, i)?;
             let tag = &script[i..=tag_end];
-            Some(
+            Some((
+                RegionKind::QuotedBody,
                 script[tag_end + 1..]
                     .find(tag)
                     .map_or(b.len(), |p| tag_end + 1 + p + tag.len()),
-            )
+            ))
         }
         _ => None,
     }

@@ -28,6 +28,9 @@ interface UpdateStore {
   /** Open the latest release's page (a fixed address chosen by the core). */
   openReleasesPage(): Promise<void>;
   setCheckAtStartup(enabled: boolean): Promise<void>;
+  /** Reads whether to check at startup from the core: in a window other than the main one,
+   *  and whenever any window saves it or a settings file is imported (SDB-535). */
+  readCheckAtStartup(): Promise<void>;
   dismiss(): void;
   showNotes(): void;
   hideNotes(): void;
@@ -87,6 +90,13 @@ export const useUpdate = create<UpdateStore>((set, get) => ({
       set({ request: { kind: "idle" } });
     } catch (e) {
       set({ request: { kind: "failed", action: "openReleasesPage", message: errorText(e) } });
+    }
+  },
+  async readCheckAtStartup() {
+    try {
+      set({ checkAtStartup: await call(commands.getUpdateCheck()) });
+    } catch {
+      // What it shows stays.
     }
   },
   async setCheckAtStartup(enabled) {

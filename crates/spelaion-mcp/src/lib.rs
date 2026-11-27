@@ -63,7 +63,7 @@ use spelaion_core::{
     AgentAccess, AgentFailure, AgentView, Engines, Liveness, OpenConnection, OpenError,
     OpenOptions, ReadError, ReadLimits, ResultStore, ToolOutput, TunnelPool, WriteError,
     WriteLimits, access_code, agent_access_with_override, agent_view, agent_workspace,
-    all_agents_read_only, open_connection,
+    all_agents_read_only, open_connection, statement_database::statement_database,
 };
 use spelaion_ssh::{KnownHosts, NonInteractive};
 use spelaion_store::{AuditEntry, Decision, Store};
@@ -923,7 +923,7 @@ impl SpelaionMcp {
         let limits = WriteLimits {
             timeout: self.state.options.timeout,
         };
-        let (result, lost) = {
+        let (result, lost, database) = {
             let open = open.lock().await;
             // The override may have changed while opening or waiting for this session.
             if let AgentAccess::ReadOnly(because) =
@@ -935,7 +935,9 @@ impl SpelaionMcp {
                 ));
             }
             let result = open.session.run_write(sql, &limits).await;
-            (result, lost(&open))
+            // The database it ran in (SDB-32), read from the session without running SQL.
+            let database = statement_database(&open).await;
+            (result, lost(&open), database)
         };
         match result {
             Ok(done) => {
@@ -943,22 +945,33 @@ impl SpelaionMcp {
                     e.rows = done.rows_affected.map(|n| n as i64);
                     e.duration_ms = Some(done.elapsed.as_millis() as i64);
                     e.detail = Some("write".into());
+                    e.database = database.clone();
                 });
                 text(match done.rows_affected {
                     Some(n) => format!("Done: {n} row(s) affected, committed."),
                     None => "Done, committed.".into(),
                 })
             }
-            Err(WriteError::Rejected(reason)) => refuse(Failure::new(
-                AgentFailure::from_write(&WriteError::Rejected(reason.clone()), false),
-                format!("Write rejected: {reason}."),
-            )),
+            Err(WriteError::Rejected(reason)) => {
+                // As `refuse` records it, with the database it was refused in.
+                let failure = Failure::new(
+                    AgentFailure::from_write(&WriteError::Rejected(reason.clone()), false),
+                    format!("Write rejected: {reason}."),
+                );
+                self.audit(client, connection, sql, Decision::Rejected, |e| {
+                    e.code = Some(failure.failure.code());
+                    e.detail = Some(format!("write: {}", failure.message));
+                    e.database = database.clone();
+                });
+                Ok(failure.result())
+            }
             Err(other) => {
                 let message = other.to_string();
                 let failure = AgentFailure::from_write(&other, lost.is_some());
                 self.audit(client, connection, sql, Decision::Failed, |e| {
                     e.code = Some(failure.code());
-                    e.detail = Some(format!("write: {message}"))
+                    e.detail = Some(format!("write: {message}"));
+                    e.database = database.clone();
                 });
                 // Never retried: with the connection gone, the commit may or may not have
                 // reached the server, and the code says not to run it again.
@@ -1016,16 +1029,19 @@ impl SpelaionMcp {
             max_rows,
             timeout: self.state.options.timeout,
         };
-        let (result, lost) = {
+        let (result, lost, database) = {
             let open = open.lock().await;
             let result = open.session.run_read_only(sql, &limits).await;
-            (result, lost(&open))
+            // The database it ran in (SDB-32), read from the session without running SQL.
+            let database = statement_database(&open).await;
+            (result, lost(&open), database)
         };
         match result {
             Ok(result) => {
                 self.audit(client, connection, sql, Decision::Executed, |e| {
                     e.rows = Some(result.rows.len() as i64);
                     e.duration_ms = Some(result.elapsed.as_millis() as i64);
+                    e.database = database.clone();
                 });
                 text(format::result(&result, format))
             }
@@ -1033,7 +1049,8 @@ impl SpelaionMcp {
                 let failure = AgentFailure::from_read(&ReadError::Rejected(reason.clone()), false);
                 self.audit(client, connection, sql, Decision::Rejected, |e| {
                     e.code = Some(failure.code());
-                    e.detail = Some(reason.clone())
+                    e.detail = Some(reason.clone());
+                    e.database = database.clone();
                 });
                 tool_error(
                     failure,
@@ -1047,7 +1064,8 @@ impl SpelaionMcp {
                 let failure = AgentFailure::from_read(&other, lost.is_some());
                 self.audit(client, connection, sql, Decision::Failed, |e| {
                     e.code = Some(failure.code());
-                    e.detail = Some(message.clone())
+                    e.detail = Some(message.clone());
+                    e.database = database.clone();
                 });
                 tool_error(
                     failure,

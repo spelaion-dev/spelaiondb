@@ -3,7 +3,7 @@
 // live with each connection in the sidebar, not here.
 
 import { DisplaySettings } from "./DisplaySettings";
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { LanguagePreference } from "../i18n";
 import { usePreferences, type PreferenceSetting, type ThemePreference } from "../preferences";
@@ -18,14 +18,17 @@ import { PluginsSettings } from "./PluginsSettings";
 import { TunnelEditor, type TunnelEditorMode } from "./TunnelEditor";
 import { SnippetSettings } from "./SnippetSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
+import { ConnectionTransferSettings } from "./ConnectionTransferSettings";
+import { TransferSettings } from "./TransferSettings";
+import { LogSettings } from "./LogSettings";
 import { ScreenBoundary } from "./ScreenBoundary";
 import { Icon } from "./Icons";
 import { copyDiagnostics, openIssuePage } from "../diagnostics";
 import { initialPortRange, portRangeReady, portRangeReducer, typedRange, type PortRange } from "../portRange";
 import { commandShortcut, keyText } from "../shortcuts";
 
-type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map" | "shortcuts";
-const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "snippets", "map", "shortcuts"];
+type Category = "appearance" | "language" | "explorer" | "connections" | "types" | "masking" | "history" | "network" | "updates" | "plugins" | "scripts" | "editor" | "snippets" | "map" | "shortcuts" | "transfer" | "logs";
+const CATEGORIES: Category[] = ["appearance", "language", "explorer", "connections", "types", "masking", "history", "network", "updates", "plugins", "scripts", "editor", "snippets", "map", "shortcuts", "transfer", "logs"];
 
 export function SettingsDialog({ onClose }: { onClose(): void }) {
   const { t } = useTranslation("settings");
@@ -76,7 +79,12 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "appearance" && <AppearanceSettings />}
         {category === "language" && <LanguageSettings />}
         {category === "explorer" && <ExplorerSettings />}
-        {category === "connections" && <ConnectionSettings />}
+        {category === "connections" && (
+          <>
+            <ConnectionSettings />
+            <ConnectionTransferSettings />
+          </>
+        )}
         {category === "types" && <ConnectionTypesSettings />}
         {category === "masking" && <MaskingSettings />}
         {category === "history" && <HistorySettings />}
@@ -88,6 +96,8 @@ function Settings({ category, onCategory: setCategory }: { category: Category; o
         {category === "snippets" && <SnippetSettings />}
         {category === "map" && <MapSettings />}
         {category === "shortcuts" && <ShortcutSettings />}
+        {category === "transfer" && <TransferSettings />}
+        {category === "logs" && <LogSettings />}
       </section>
     </div>
   );
@@ -330,7 +340,21 @@ function MapSettings() {
   const setMap = usePreferences((s) => s.setMap);
   const fromMap = () => ({ tileName: map.tileName, tileUrl: map.tileUrl, tileAttribution: map.tileAttribution, tileAttributionUrl: map.tileAttributionUrl });
   const [draft, setDraft] = useState(fromMap);
-  useEffect(() => setDraft(fromMap()), [map.tileName, map.tileUrl, map.tileAttribution, map.tileAttributionUrl]);
+  // When a save lands (this page's or another window's), a field takes the saved value only if
+  // the person has not changed it since the value saved before: what they are typing in another
+  // field is never thrown away by a save that was still on its way (SDB-532).
+  const savedBefore = useRef(fromMap());
+  useEffect(() => {
+    const saved = fromMap();
+    const before = savedBefore.current;
+    savedBefore.current = saved;
+    setDraft((current) => ({
+      tileName: current.tileName === before.tileName ? saved.tileName : current.tileName,
+      tileUrl: current.tileUrl === before.tileUrl ? saved.tileUrl : current.tileUrl,
+      tileAttribution: current.tileAttribution === before.tileAttribution ? saved.tileAttribution : current.tileAttribution,
+      tileAttributionUrl: current.tileAttributionUrl === before.tileAttributionUrl ? saved.tileAttributionUrl : current.tileAttributionUrl,
+    }));
+  }, [map.tileName, map.tileUrl, map.tileAttribution, map.tileAttributionUrl]);
   const saved = map.tileUrl !== "";
   const changed = draft.tileName !== map.tileName || draft.tileUrl !== map.tileUrl || draft.tileAttribution !== map.tileAttribution || draft.tileAttributionUrl !== map.tileAttributionUrl;
   const saveServer = () => {

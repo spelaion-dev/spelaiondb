@@ -191,9 +191,7 @@ async fn page(engine: &Engine) -> ResultId {
 }
 
 fn scratch(label: &str, name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("spelaion-values-{}-{label}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join(name)
+    crate::support::run_dir(&format!("spelaion-values-{label}")).join(name)
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1,5 +1,6 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
+use crate::scanner::{self, Region, RegionKind};
 use crate::{is_white_space_at, trimmed};
 
 /// Oracle's dialect, as SQL*Plus and SQL Developer read a script (ADR-059):
@@ -22,12 +23,17 @@ impl Dialect for OracleDialect {
         "oracle"
     }
 
+    /// A client command line (ADR-078) is resolved only by the editor's run: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        crate::refuse_client_command(statement)
+    }
+
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         split(script)
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, skip_non_code)
+        scanner::code_ranges(OracleScanner::new(script))
     }
 
     /// Always in double quotes: an unquoted name is folded to upper case by Oracle, so quoting
@@ -39,14 +45,21 @@ impl Dialect for OracleDialect {
 }
 
 /// The byte after the string, quoted name or comment that starts at `i`; `None` when none
-/// starts there.
+/// starts there. The scanner's reading ([`opening`]), without the region's kind.
 pub fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+    opening(script, i).map(|(_, end)| end)
+}
+
+/// The string, quoted name or comment that starts at byte `i`, with the byte after it; `None`
+/// when none starts there. The scanner's one reading of them: the splitter, `code_ranges` and
+/// the PL/SQL check's words all read it.
+fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
     match *b.get(i)? {
-        b'\'' => Some(skip_string(b, i)),
-        b'"' => Some(skip_name(b, i)),
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(line_end(b, i)),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(block_comment_end(b, i)),
+        b'\'' => Some((RegionKind::String, skip_string(b, i))),
+        b'"' => Some((RegionKind::QuotedName, skip_name(b, i))),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((RegionKind::Comment, line_end(b, i))),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((RegionKind::Comment, block_comment_end(b, i))),
         // `q'…'`, `nq'…'` and `n'…'`, only where a word starts.
         c @ (b'q' | b'Q' | b'n' | b'N') if !(i > 0 && is_ident_byte(b[i - 1])) => {
             let quote = if matches!(c, b'n' | b'N') && matches!(b.get(i + 1), Some(b'q' | b'Q')) {
@@ -58,9 +71,9 @@ pub fn skip_non_code(script: &str, i: usize) -> Option<usize> {
                 return None;
             }
             if matches!(b.get(quote - 1), Some(b'q' | b'Q')) {
-                Some(skip_q_quote(b, quote))
+                Some((RegionKind::String, skip_q_quote(b, quote)))
             } else {
-                Some(skip_string(b, quote))
+                Some((RegionKind::String, skip_string(b, quote)))
             }
         }
         _ => None,
@@ -166,9 +179,9 @@ fn first_words(script: &str, start: usize, count: usize) -> Vec<String> {
     let mut words = Vec::new();
     let mut i = start;
     while i < b.len() && words.len() < count {
-        if let Some(end) = skip_non_code(script, i) {
+        if let Some((kind, end)) = opening(script, i) {
             // A string or name before the unit's words: not a PL/SQL unit.
-            if matches!(b[i], b'-' | b'/') {
+            if kind == RegionKind::Comment {
                 i = end;
                 continue;
             }
@@ -221,58 +234,157 @@ pub fn is_plsql(script: &str, start: usize) -> bool {
     }
 }
 
-fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut has_code = false;
-    let mut plsql = false;
-    let mut i = 0;
+/// Oracle's lexical scanner (ADR-065): the script as regions, read as SQL*Plus reads it.
+/// Strings, names and comments are read by [`opening`]; a line holding only `/` ends any
+/// statement (a statement end of its own, code); a `;` ends a statement unless the statement is
+/// a PL/SQL unit, which the scanner decides at the statement's first code ([`is_plsql`]). The
+/// splitter and `code_ranges` read it.
+struct OracleScanner<'a> {
+    script: &'a str,
+    /// Where the next region starts.
+    i: usize,
+    /// Where the current statement starts.
+    start: usize,
+    /// Whether the current statement holds code yet: anything but white space and comments.
+    has_code: bool,
+    /// The current statement is a PL/SQL unit: only a `/` line or the end of the script ends it.
+    plsql: bool,
+    /// The end of the script was reached.
+    ended: bool,
+}
 
-    while i < b.len() {
-        if let Some(end) = slash_line(b, i) {
-            if has_code {
-                spans.extend(trimmed(script, start, i));
-            }
-            i = end;
-            start = i;
-            has_code = false;
-            plsql = false;
-            continue;
-        }
-        let comment = matches!(b[i], b'-' | b'/') && skip_non_code(script, i).is_some();
-        if !has_code && !comment && !is_white_space_at(script, i) {
-            // The statement's first code: is it a PL/SQL unit?
-            plsql = is_plsql(script, i);
-        }
-        if let Some(end) = skip_non_code(script, i) {
-            if !comment {
-                has_code = true;
-            }
-            i = end.max(i + 1);
-            continue;
-        }
-        match b[i] {
-            b';' if !plsql => {
-                if has_code {
-                    spans.extend(trimmed(script, start, i));
-                }
-                i += 1;
-                start = i;
-                has_code = false;
-            }
-            _ => {
-                if !is_white_space_at(script, i) {
-                    has_code = true;
-                }
-                i += 1;
-            }
+impl<'a> OracleScanner<'a> {
+    fn new(script: &'a str) -> Self {
+        Self {
+            script,
+            i: 0,
+            start: 0,
+            has_code: false,
+            plsql: false,
+            ended: false,
         }
     }
-    if has_code {
-        spans.extend(trimmed(script, start, b.len()));
+
+    /// Ends the current statement at `at`, the next one starting at `next`: the statement, if it
+    /// held code.
+    fn end_statement(&mut self, at: usize, next: usize) -> Option<StatementSpan> {
+        let statement = trimmed(self.script, self.start, at).filter(|_| self.has_code);
+        self.start = next;
+        self.has_code = false;
+        self.plsql = false;
+        statement
     }
-    spans
+}
+
+impl Iterator for OracleScanner<'_> {
+    type Item = Region;
+
+    fn next(&mut self) -> Option<Region> {
+        let script = self.script;
+        let b = script.as_bytes();
+        let len = b.len();
+        let code = self.i;
+        while self.i < len {
+            let i = self.i;
+            if let Some(end) = slash_line(b, i) {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                let statement = self.end_statement(i, end);
+                self.i = end;
+                return Some(Region {
+                    kind: RegionKind::StatementEnd { statement },
+                    range: i..end,
+                });
+            }
+            if !self.has_code
+                && let Some(end) = scanner::command_line(script, i)
+            {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                // A client command line (ADR-078): a statement of its own, which the session
+                // refuses wherever nothing resolves it. Its newline is white space of what
+                // follows.
+                let statement = trimmed(script, i, end);
+                self.i = end;
+                self.start = end;
+                self.plsql = false;
+                return Some(Region {
+                    kind: RegionKind::MetaLine { statement },
+                    range: i..end,
+                });
+            }
+            let open = opening(script, i);
+            let comment = matches!(open, Some((RegionKind::Comment, _)));
+            if !self.has_code && !comment && !is_white_space_at(script, i) {
+                // The statement's first code: is it a PL/SQL unit?
+                self.plsql = is_plsql(script, i);
+            }
+            if let Some((kind, end)) = open {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                if !comment {
+                    self.has_code = true;
+                }
+                self.i = end.max(i + 1);
+                return Some(Region {
+                    kind,
+                    range: i..self.i,
+                });
+            }
+            if b[i] == b';' && !self.plsql {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                let statement = self.end_statement(i, i + 1);
+                self.i = i + 1;
+                return Some(Region {
+                    kind: RegionKind::StatementEnd { statement },
+                    range: i..i + 1,
+                });
+            }
+            if !is_white_space_at(script, i) {
+                self.has_code = true;
+            }
+            self.i += 1;
+        }
+        if code < len {
+            return Some(Region {
+                kind: RegionKind::Code,
+                range: code..len,
+            });
+        }
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        // The end of the script ends the last statement.
+        let statement = trimmed(script, self.start, len).filter(|_| self.has_code)?;
+        Some(Region {
+            kind: RegionKind::StatementEnd {
+                statement: Some(statement),
+            },
+            range: len..len,
+        })
+    }
+}
+
+fn split(script: &str) -> Vec<StatementSpan> {
+    scanner::statements(OracleScanner::new(script))
 }
 
 #[cfg(test)]

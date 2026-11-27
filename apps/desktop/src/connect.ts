@@ -116,6 +116,7 @@ export function tabLabel(tab: Tab): string {
 /** What a tab is called before the user renames it. */
 export function defaultTabLabel(tab: Tab): string {
   if (tab.file) return tab.file.name;
+  if (tab.notebook) return i18n.t("editor:notebook.tabName", { number: tab.number });
   if (tab.tableDetails) return `${tab.tableDetails.name} · ${i18n.t(`shell:folders.${tab.tableDetails.kind}`)}`;
   if (tab.table) return tab.table.name;
   if (tab.savedDiagram) return tab.savedDiagram.name;

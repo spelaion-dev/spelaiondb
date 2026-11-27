@@ -15,10 +15,12 @@ mod er_diagrams;
 mod export;
 mod library;
 mod map;
+mod portable;
 mod shortcuts;
 mod side_panel;
 mod table_filters;
 mod tabs;
+mod tasks;
 #[cfg(test)]
 mod typed_values_tests;
 pub use aside::{aside_path, set_aside};
@@ -39,6 +41,10 @@ pub use map::{
     MapPreferences, TILE_ATTRIBUTION_MAX, TILE_NAME_MAX, TILE_URL_MAX, TileServerError,
     check_attribution_link, check_tile_server,
 };
+pub use portable::{
+    PORTABLE_KEY_MAX, PORTABLE_VALUE_MAX, PortableReplace, is_portable_setting,
+    is_this_computer_setting,
+};
 pub use shortcuts::{SHORTCUT_COMMAND_MAX, ShortcutOverride, is_command_id};
 pub use side_panel::{
     SIDE_PANEL_DEFAULT_WIDTH, SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, SidePanelPreferences,
@@ -47,6 +53,11 @@ pub use side_panel::{
 pub use table_filters::{FilteredTable, TABLE_FILTER_HISTORY, TABLE_FILTER_MAX_CHARS};
 pub use tabs::{
     FileEncoding, LineEnding, MAX_RECENT_FILES, RecentFile, SavedFile, SavedTab, SavedTabs,
+};
+pub use tasks::{
+    MAX_TASKS, StoredTask, StoredTaskLog, StoredTaskRun, TASK_DOCUMENT_MAX, TASK_FOLDER_MAX,
+    TASK_LOG_MAX, TASK_NAME_MAX, TASK_RUNS_KEPT, TASK_SUMMARY_MAX, TaskEnding, TaskOrigin,
+    TaskSave,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -309,6 +320,15 @@ const MIGRATIONS: &[&str] = &["create table audit (
     // tabs are kept under it, and the window's order is put back from this. Rows written before
     // have none and keep their order within their folder.
     "alter table open_tabs add column window_position integer check (window_position >= 0);",
+    // A kept notebook tab (ADR-087): its text is the notebook's document. Rows written before
+    // have none and are editor tabs, as they were.
+    "alter table open_tabs add column notebook integer check (notebook = 1);",
+    // Saved tasks and their runs (ADR-089).
+    tasks::MIGRATION,
+    // The database an agent's statement ran in (SDB-32), where the engine has one to tell apart
+    // from the connection: the session's current database on engines that switch it, the
+    // connection's own on PostgreSQL. Rows written before have none.
+    "alter table audit add column database text check (length(database) > 0);",
 ];
 
 /// The longest name of an editor variable (SDB-383), in bytes.
@@ -451,6 +471,10 @@ pub struct AuditEntry {
     /// The folder of `connection` (ADR-075): the repository's canonical root as the MCP server
     /// serves it; `None` for a personal connection, and for entries written before 0.17.
     pub folder: Option<String>,
+    /// The database the statement ran in (SDB-32), where the engine has one to tell apart from
+    /// the connection; `None` otherwise, for a call that never reached a session, and for
+    /// entries written before 0.18.
+    pub database: Option<String>,
 }
 
 /// Why an agent's call was refused or failed, as a stable code agents and the Activity tab can
@@ -553,6 +577,7 @@ impl AuditEntry {
             tool: None,
             code: None,
             folder: None,
+            database: None,
         }
     }
 }
@@ -669,6 +694,7 @@ fn audit_row(r: &rusqlite::Row) -> rusqlite::Result<AuditRecord> {
             tool: r.get(10)?,
             code: code.as_deref().map(FailureCode::parse),
             folder: r.get(12)?,
+            database: r.get(13)?,
         },
     })
 }
@@ -1208,6 +1234,17 @@ impl Store {
         Ok(store)
     }
 
+    /// A store that lives only in memory, with every migration: for checking rows from outside
+    /// (a settings file, SDB-31) with the same triggers and readers before the user's store is
+    /// touched.
+    pub fn open_in_memory() -> Result<Self, StoreError> {
+        let mut store = Self {
+            conn: Connection::open_in_memory()?,
+        };
+        store.migrate()?;
+        Ok(store)
+    }
+
     fn migrate(&mut self) -> Result<(), StoreError> {
         // Re-read the version only after taking the writer lock: another process may
         // have migrated while this connection waited for the lock.
@@ -1257,8 +1294,8 @@ impl Store {
             })?),
         };
         self.conn.execute(
-            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code, folder)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "insert into audit (at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code, folder, database)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 entry.at_ms,
                 entry.client,
@@ -1271,7 +1308,8 @@ impl Store {
                 entry.session,
                 entry.tool,
                 code,
-                entry.folder
+                entry.folder,
+                entry.database.as_deref().filter(|database| !database.is_empty())
             ],
         )?;
         Ok(())
@@ -1297,7 +1335,7 @@ impl Store {
         params.push(limit.min(i64::MAX as usize).to_string());
         params.push(offset.min(i64::MAX as usize).to_string());
         let sql = format!(
-            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code, folder
+            "select id, at_ms, client, connection, statement, decision, rows, duration_ms, detail, session, tool, code, folder, database
              from audit {clause} order by id desc limit cast(?{} as integer) offset cast(?{} as integer)",
             params.len() - 1,
             params.len()
@@ -3931,13 +3969,73 @@ mod tests {
         assert!(store.mcp_read_only().unwrap());
     }
 
+    /// SDB-32: an entry keeps the database its statement ran in; a store from before the column
+    /// opens with its entries intact, without one, and an empty database is kept as none.
+    #[test]
+    fn audit_entries_keep_their_database_and_older_entries_survive_the_migration() {
+        let path = temp("audit-database");
+        let before = MIGRATIONS
+            .iter()
+            .position(|m| m.contains("alter table audit add column database text"))
+            .unwrap();
+        {
+            let conn = Connection::open(&path).unwrap();
+            for migration in &MIGRATIONS[..before] {
+                conn.execute_batch(migration).unwrap();
+            }
+            conn.pragma_update(None, "user_version", before as i64)
+                .unwrap();
+            conn.execute(
+                "insert into audit (at_ms, client, connection, statement, decision, session, tool, folder)
+                 values (1, 'claude-code', 'prod/orders', 'select 1', 'executed', 's0', 'run_query', '/work/a')",
+                [],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let mut sales = AuditEntry::now("claude-code", "~/mysql", "select 2", Decision::Executed);
+        sales.database = Some("sales".into());
+        let mut empty = AuditEntry::now("claude-code", "~/mysql", "select 3", Decision::Failed);
+        empty.database = Some(String::new());
+        store.record(&sales).unwrap();
+        store.record(&empty).unwrap();
+        let entries = store.audit_events(&AuditFilter::default(), 10, 0).unwrap();
+        let databases: Vec<(&str, Option<&str>)> = entries
+            .iter()
+            .rev()
+            .map(|r| (r.entry.statement.as_str(), r.entry.database.as_deref()))
+            .collect();
+        assert_eq!(
+            databases,
+            [
+                ("select 1", None),
+                ("select 2", Some("sales")),
+                ("select 3", None)
+            ]
+        );
+        // The old entry is whole: its folder, session and tool are still there.
+        let old = &entries.last().unwrap().entry;
+        assert_eq!(
+            (
+                old.folder.as_deref(),
+                old.session.as_deref(),
+                old.tool.as_deref()
+            ),
+            (Some("/work/a"), Some("s0"), Some("run_query"))
+        );
+    }
+
     /// ADR-075 (SDB-495): an entry keeps its connection's folder, so two repositories'
     /// `prod/orders` are told apart; a store from before the column opens with its entries
     /// intact, without a folder.
     #[test]
     fn audit_entries_keep_their_folder_and_older_entries_survive_the_migration() {
         let path = temp("audit-folder");
-        let before = MIGRATIONS.len() - 1;
+        // Found by its text, never as "the last one" (later migrations follow it).
+        let before = MIGRATIONS
+            .iter()
+            .position(|m| m.contains("alter table audit add column folder text"))
+            .unwrap();
         {
             let conn = Connection::open(&path).unwrap();
             for migration in &MIGRATIONS[..before] {

@@ -20,7 +20,15 @@
   russh): `auth.rs` asks for its passphrase (three attempts) when russh says it is encrypted
   or, for a `.ppk`, when its `Encryption` header does, since russh reports that case with an
   error of its own (SDB-528); the agent filter reads a `.ppk`'s public key from its unencrypted
-  public lines. The `.ppk` test keys are committed in `tests/fixtures/ppk` (made with puttygen;
+  public lines. A key's passphrase may be remembered (ADR-090): `load_key` asks the interaction
+  for one remembered under the key file's canonical path before asking the person, forgets one
+  that no longer decrypts the key, and remembers a typed one only after it decrypted the key and
+  only when the answer asks (`ask_key_passphrase`'s `remember`; the box is offered when
+  `passphrases_kept`). Those methods default to nothing: only the desktop's interaction reads and
+  writes the keychain (`spelaion-config`'s `remembered_key_passphrase` and the rest, entry
+  `key:<canonical path>`), so the MCP server and the CLI never read one. Every wrapper of an
+  `Interaction` (`tunnel.rs`'s `Timed`, the connection test's `Recording`, which redacts a
+  remembered passphrase too) forwards all of them. The `.ppk` test keys are committed in `tests/fixtures/ppk` (made with puttygen;
   `gen-keys.sh` lets their public keys into the bastions). Tests against the
   Docker bastions with `SPELAION_TEST_SSH=127.0.0.1:2221`. A tunnel may go through a
   SOCKS5 or HTTP proxy (`proxy.rs`, ADR-027): its first hop, or the database itself with no

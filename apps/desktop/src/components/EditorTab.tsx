@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { call, commands, type CellEditItem, type CellInputItem, type ColumnFilterItem, type PendingEditItem, type PendingEdits, type ScriptEvent } from "../api";
 import { startJob, type Job } from "../jobs";
+import type { IncludedFileItem, ResolvedScriptItem, ScriptEchoItem, StatementOriginItem } from "../bindings";
 import type { ExplorerDatabaseItem_Serialize as ExplorerDatabaseItem, KeyTableItem, LoadEstimateItem_Serialize as LoadEstimateItem, LoadSourceItem, PlanSummary_Serialize as PlanSummary, PlanCapabilities_Serialize as PlanCapabilities, ResultPlacementItem, StatementEndItem } from "../bindings";
 import { byteSize } from "../plugins";
 import { PlanViewer } from "./PlanViewer";
@@ -28,7 +29,8 @@ import { TransposedView } from "./TransposedView";
 import { RunOptionsButton, runOptionsOf } from "./RunOptions";
 import { showsSummary, summaryMessages, summaryShort } from "../scriptRun";
 import { runStatus } from "../runState";
-import { CONNECTING, DISCONNECTED, cancelling, connectFailed, connectFailure, connectedWith, isRunning, lostSession, runStateOf, serverVersion, sessionReadOnly, statusName } from "../tabState";
+import { NOT_WAITING, notRunKey, press, runBlock, settle, waitingKey, type RunBlock, type SessionNow, type WaitingRun } from "../runWait";
+import { CONNECTING, DISCONNECTED, cancelling, connectFailed, connectFailure, connectedWith, isRunning, isConnecting, lostSession, runStateOf, serverVersion, sessionReadOnly, statusName } from "../tabState";
 import { saveTab, saveTabAs } from "../sqlFiles";
 import { notifyFinished } from "../notify";
 import { EditorActionsButton } from "./EditorMenu";
@@ -104,6 +106,11 @@ function translatedError(error: NonNullable<RunState["error"]>, t: TFunction<"ed
   if (diagnostic.code) parts.push(t("messages.code", { code: diagnostic.code }));
   return parts.join("\n");
 }
+
+/** A run the user pressed, as it was then (SDB-525): its text and where its results go. */
+type PressedRun =
+  | { kind: "run"; request: RunRequest; placement: ResultPlacementItem }
+  | { kind: "explain"; request: RunRequest };
 
 export function EditorTab({ tab }: { tab: Tab }) {
   // Its connection, as the status line, the buttons and the effects below read it (SDB-371).
@@ -184,17 +191,21 @@ export function EditorTab({ tab }: { tab: Tab }) {
    *  (SDB-383), before the parameters, the guard and the run read it. A variable without a
    *  value is asked for and kept for this tab. `null` when the user cancels; throws what the
    *  core refuses (a value that would change how the statement is split or read). */
-  async function withVariables(text: string): Promise<string | null> {
+  async function withVariables(text: string): Promise<ResolvedScriptItem | null> {
     let values = tabNow()?.variables ?? {};
-    const used = await call(commands.scriptVariables(tab.id, text, values));
-    if (used.names.length === 0) return text;
+    // A file tab's `@include` paths are relative to its file; a console has none (ADR-078).
+    const file = tabNow()?.file?.path ?? null;
+    const used = await call(commands.scriptVariables(tab.id, text, values, file));
     if (used.missing.length > 0) {
       const asked = await useDialogs.getState().askParams(used.missing, {}, true);
       if (!asked) return null;
       values = { ...values, ...asked };
       updateTab(tab.id, { variables: values });
     }
-    return call(commands.substituteVariables(tab.id, text, values));
+    // The core resolves the script's `@set`, `@unset` and `@echo` lines too (ADR-078): what it
+    // returns is what runs and what the guard reads. A script's `@set` never changes the tab's
+    // values.
+    return call(commands.resolveScript(tab.id, text, values, file));
   }
 
   /** `text` with its `:name` parameters written in as literals by the core. Each parameter's
@@ -217,6 +228,11 @@ export function EditorTab({ tab }: { tab: Tab }) {
   const explainAction = useRef<() => Promise<void>>(async () => undefined);
   // A short message in the toolbar: a formatting error or "saved as …".
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  /** A Run the user pressed while the tab could not start one (SDB-525): it waits, said in the
+   *  toolbar, and runs once. The ref is what a press in the same moment reads. */
+  const [waitingRun, setWaitingRunState] = useState<WaitingRun<PressedRun>>(NOT_WAITING);
+  const waitingRef = useRef<WaitingRun<PressedRun>>(NOT_WAITING);
+  const setWaitingRun = (next: WaitingRun<PressedRun>) => { waitingRef.current = next; setWaitingRunState(next); };
   const [runLabel, setRunLabel] = useState<RunLabel | null>(null);
   /** The outline of the script, beside the editor (Ctrl+Shift+O). */
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -899,19 +915,21 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const onCommand = (e: Event) => {
       const { tab: target, command } = (e as CustomEvent<{ tab: string; command: EditorCommand }>).detail;
       if (target !== tab.id) return;
-      const { running, runBlocked } = actionState.current;
+      const { running } = actionState.current;
       switch (command) {
+        // A Run pressed while the tab cannot start one waits or says why (SDB-525): the
+        // editor's run reaches `pressRun`, never dropped here.
         case "runCurrent":
-          if (!running && !runBlocked) editor.current?.runCurrent();
+          if (!running) editor.current?.runCurrent();
           break;
         case "runScript":
-          if (!running && !runBlocked) editor.current?.runScript();
+          if (!running) editor.current?.runScript();
           break;
         case "runFromCursor":
-          if (!running && !runBlocked) editor.current?.action(command);
+          if (!running) editor.current?.action(command);
           break;
         case "explain":
-          if (!running && !runBlocked) void explainAction.current();
+          if (!running) void explainAction.current();
           break;
         case "variables":
           setVariablesOpen(true);
@@ -926,7 +944,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
           editor.current?.format();
           break;
         case "runNewTab":
-          if (!running && !runBlocked) editor.current?.action(command);
+          if (!running) editor.current?.action(command);
           break;
         case "resultRerun":
         case "resultPin":
@@ -1241,6 +1259,102 @@ export function EditorTab({ tab }: { tab: Tab }) {
     editor.current.runScript();
   }, [tab.id, runOnOpenReady]);
 
+  // A waiting run (SDB-525) runs once the tab can run, or is dropped with a word. Read live:
+  // the database list may have started loading in this same commit.
+  useEffect(() => {
+    if (waitingRef.current.kind === "none") return;
+    const outcome = settle(waitingRef.current, blockNow(), sessionNow());
+    switch (outcome.kind) {
+      case "keep":
+        if (outcome.waiting !== waitingRef.current) setWaitingRun(outcome.waiting);
+        return;
+      case "start":
+        setWaitingRun(NOT_WAITING);
+        startPressed(outcome.run);
+        return;
+      case "drop":
+        setWaitingRun(NOT_WAITING);
+        setNotice({ text: t(notRunKey(outcome.because, true)), error: true });
+        return;
+      default: {
+        const unknown: never = outcome;
+        return unknown;
+      }
+    }
+  }, [waitingRun, tabStatus, databaseBusy, historySaving, workspaceChanging, refreshRestoring]);
+
+  /** What keeps the tab from starting a run right now, read live: a press and the effect above
+   *  may come in the same commit as what changed. */
+  function blockNow(): RunBlock {
+    const app = useApp.getState();
+    const own = tabConnection(tab);
+    const current = app.tabs.find((item) => item.id === tab.id);
+    return runBlock({
+      folder: app.workspaceChanging,
+      connecting: !!current && isConnecting(current),
+      databases: databaseBusyRef.current,
+      history: !!own && app.historySaving.includes(connectionTag(own)),
+      restoring: restoringView.current,
+    });
+  }
+
+  function sessionNow(): SessionNow {
+    const current = useApp.getState().tabs.find((item) => item.id === tab.id);
+    const status = current ? statusName(current) : "disconnected";
+    return status === "disconnected" ? "none" : status;
+  }
+
+  /** A Run the user pressed (the editor's Run, Run script, Run from cursor, Run in a new tab, and
+   *  Explain): started now, waiting for what blocks the tab and ends on its own, or refused with
+   *  the reason; never dropped without a word (SDB-525). */
+  function pressRun(pressed: PressedRun) {
+    // A press already starting a run (connecting for it, or asking its parameters) covers this
+    // one: a second press never makes a second run.
+    if (startingRun.current) return;
+    const outcome = press(blockNow(), waitingRef.current, pressed, sessionNow());
+    switch (outcome.kind) {
+      case "start":
+        startPressed(pressed);
+        return;
+      case "wait":
+        setNotice(null);
+        setWaitingRun(outcome.waiting);
+        return;
+      case "alreadyWaiting":
+        // One run waits, and the toolbar says so.
+        return;
+      case "refused":
+        setNotice({ text: t(notRunKey(outcome.because, false)), error: true });
+        return;
+      default: {
+        const unknown: never = outcome;
+        return unknown;
+      }
+    }
+  }
+
+  function startPressed(pressed: PressedRun) {
+    switch (pressed.kind) {
+      case "run":
+        void run(pressed.request, false, queryPageSize, [], pressed.placement);
+        return;
+      case "explain":
+        void explainCurrent(pressed.request);
+        return;
+      default: {
+        const unknown: never = pressed;
+        return unknown;
+      }
+    }
+  }
+
+  /** Explain pressed: started now, or waiting with the statement as it is now (SDB-525). */
+  async function explainPressed() {
+    if (blockNow().kind === "free") return explainCurrent();
+    const request = await editor.current?.currentRequest();
+    if (request?.text.trim()) pressRun({ kind: "explain", request });
+  }
+
   /** Runs the query of one result again, into that result's tab (SDB-378): a new run the
    *  user asked for, through the parameters, the guard and the confirmations like any other
    *  (ADR-028). The core keeps the old rows until the new ones start. A query read in the
@@ -1324,12 +1438,18 @@ export function EditorTab({ tab }: { tab: Tab }) {
     // `${name}` variables first, written in as they are, then `:name` placeholders, written
     // in as literals: the core does both, and everything after reads the text that runs.
     let text: string;
+    let echoes: ScriptEchoItem[];
+    let origins: StatementOriginItem[];
+    let files: IncludedFileItem[];
     try {
       const written = await withVariables(request.text);
       if (written === null) return;
-      const bound = await withParams(written);
+      const bound = await withParams(written.text);
       if (bound === null) return;
       text = bound;
+      echoes = written.echoes;
+      origins = written.origins;
+      files = written.files;
     } catch (e) {
       const detail = message(e);
       updateTab(tab.id, { run: failedRun(detail, { key: "messages.runFailed", values: { detail } }) });
@@ -1343,10 +1463,15 @@ export function EditorTab({ tab }: { tab: Tab }) {
     const risky = await call(commands.scriptRisks(tab.id, sent.text)).catch(() => []);
     let confirmed = false;
     if (risky.length > 0) {
-      const statements = risky.map((r) => ({
-        sql: sent.text.slice(byteToIndex(sent.text, r.start), byteToIndex(sent.text, r.end)),
-        risk: r.risk,
-      }));
+      // A statement of an included file is named with its file and line (ADR-078).
+      const statements = risky.map((r) => {
+        const place = placeOf(origins[r.index]);
+        return {
+          sql: sent.text.slice(byteToIndex(sent.text, r.start), byteToIndex(sent.text, r.end)),
+          risk: r.risk,
+          ...(place ? { place } : {}),
+        };
+      });
       if (!(await useDialogs.getState().askRisks(connection?.name ?? "", statements))) return;
       confirmed = true;
     }
@@ -1363,10 +1488,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
       if (event.kind === "runStarted" && event.pageSort != null) {
         queryPage = { sql: sent.text, pageSize, ...(event.pageSort.length ? { sort: event.pageSort } : {}) };
       }
-      handle(event, sent, started.startedAt, queryPage, failures, started.run);
+      handle(event, sent, started.startedAt, queryPage, failures, started.run, origins);
       if (event.kind === "scriptFinished") finishEvent?.();
     };
-    const options = runOptionsOf(tab);
+    // The script's `@echo` lines and included files' names, shown when the run reaches each,
+    // and the files it included, which the core checks are still what it read (ADR-078).
+    const options = { ...runOptionsOf(tab), echoes, files };
     try {
       if (tab.table) await call(commands.runScript(tab.id, sent.text, confirmed, options, placement, channel));
       else await call(commands.runQueryPage(tab.id, sent.text, pageSize, sort, confirmed, options, placement, channel));
@@ -1401,8 +1528,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     return { run, startedAt };
   }
 
-  async function explainCurrent() {
-    if (startingRun.current || queryPageBusy.current || actionState.current.running || actionState.current.runBlocked) return;
+  async function explainCurrent(given?: RunRequest) {
+    if (startingRun.current || queryPageBusy.current || actionState.current.running || blockNow().kind !== "free") return;
     if (pendingCount > 0 || saving.now()) { setNotice({ text: t("edit.applyFirst"), error: true }); return; }
     startingRun.current = true;
     let runStarted = false;
@@ -1412,11 +1539,12 @@ export function EditorTab({ tab }: { tab: Tab }) {
       setCapabilities(support); setPlanOpen(true);
       if (!support.analyze) setAnalyzePlan(false);
       if (!support.estimated) { setNotice({ text: t("plan.unsupported", { engine: connection?.engine }), error: true }); return; }
-      const request = await editor.current?.currentRequest();
+      // A waiting Explain explains the statement as it was when pressed (SDB-525).
+      const request = given ?? await editor.current?.currentRequest();
       if (!request?.text.trim()) return;
       const written = await withVariables(request.text);
       if (written === null) return;
-      const text = await withParams(written);
+      const text = await withParams(written.text);
       if (text === null) return;
       const analyze = analyzePlan && support.analyze;
       let options = { analyze, buffers: analyze && planBuffers && support.buffers, analyzeConfirmed: false, confirmed: false, timeoutSeconds: runOptionsOf(tab).timeoutSeconds };
@@ -1447,9 +1575,14 @@ export function EditorTab({ tab }: { tab: Tab }) {
       setNotice({ text: t("plan.runFailed", { reason: message(e) }), error: true });
     } finally { startingRun.current = false; }
   }
-  explainAction.current = explainCurrent;
+  explainAction.current = explainPressed;
 
-  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number; sort?: SortState[] } | null, failures: Map<number, string>, runId: number) {
+  /** "sub/a.sql, line 3" for a statement of an included file; `null` for the tab's own. */
+  function placeOf(origin: StatementOriginItem | undefined): string | null {
+    return origin?.file ? t("messages.inFile", { file: origin.file, line: origin.line }) : null;
+  }
+
+  function handle(event: ScriptEvent, request: RunRequest & { bound: boolean }, startedAt: number, page: { sql: string; pageSize: number; sort?: SortState[] } | null, failures: Map<number, string>, runId: number, origins: StatementOriginItem[] = []) {
     switch (event.kind) {
       case "runStarted":
         // What the core freed as the run started: every result that was not pinned, or none.
@@ -1484,6 +1617,14 @@ export function EditorTab({ tab }: { tab: Tab }) {
       case "notice":
         updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: `${event.severity}: ${event.message}` }] }));
         break;
+      case "echo":
+        // A script's `@echo` line: its own text, as written (ADR-078).
+        updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "info", text: event.text }] }));
+        break;
+      case "included":
+        // An included file starts (ADR-078).
+        updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "info", text: "", translation: { key: "messages.included", values: { file: event.file } } }] }));
+        break;
       case "historyWarning":
         updateRun(tab.id, (r) => ({ ...r, messages: [...r.messages, { kind: "notice", text: event.message, translation: { key: "messages.historySaveFailed", values: { detail: event.message } } }] }));
         break;
@@ -1502,12 +1643,15 @@ export function EditorTab({ tab }: { tab: Tab }) {
         const offset =
           event.scriptOffset == null || request.bound ? null : request.from + byteToIndex(request.text, event.scriptOffset);
         const diagnostic = { message: event.message, detail: event.detail, hint: event.hint, code: event.code, cancelled: event.end === "cancelled" };
-        failures.set(event.index, event.message);
+        // A statement of an included file says which file and line it came from (ADR-078).
+        const place = placeOf(origins[event.index]);
+        const reason = place ? `${place}: ${event.message}` : event.message;
+        failures.set(event.index, reason);
         const key = statementEndKey(event.end);
         updateRun(tab.id, (r) => ({
           ...r,
           error: { message: event.message, offset, diagnostic },
-          messages: [...r.messages, { kind: "error", text: event.message, translation: { key, values: { index: event.index + 1, reason: event.message } } }],
+          messages: [...r.messages, { kind: "error", text: reason, translation: { key, values: { index: event.index + 1, reason } } }],
         }));
         break;
       }
@@ -1579,7 +1723,8 @@ export function EditorTab({ tab }: { tab: Tab }) {
     : runPicks ? t("runSelectionPick") : t("runSelection");
   // The names the table tab's filter box completes from: the columns of the page on screen.
   const tableColumns = tab.table ? (tab.run?.results[0]?.columns ?? []).map((column) => column.name) : [];
-  actionState.current = { running, runBlocked: historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging || refreshRestoring };
+  // What disables the run buttons; a Run pressed meanwhile reads the same causes live (SDB-525).
+  actionState.current = { running, runBlocked: runBlock({ folder: workspaceChanging, connecting: tabStatus === "connecting", databases: databaseBusy, history: historySaving, restoring: refreshRestoring }).kind !== "free" };
   // A result tab's menu (SDB-378), on the active result. The pin and the name are the core's:
   // it answers what the tab is now, and that is what is drawn.
   resultCommand.current = (command) => {
@@ -1712,7 +1857,7 @@ export function EditorTab({ tab }: { tab: Tab }) {
       setNotice({ text: t("detach.failed", { reason: message(e) }), error: true });
     }
   };
-  const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainCurrent()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} title={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
+  const planControls = <div className="plan-run-controls"><label className="check"><input type="checkbox" checked={analyzePlan} disabled={running || capabilities?.analyze === false} onChange={e => setAnalyzePlan(e.target.checked)} />ANALYZE</label><label className="check"><input type="checkbox" checked={planBuffers && capabilities?.buffers !== false} disabled={running || !analyzePlan || capabilities?.buffers === false} onChange={e => setPlanBuffers(e.target.checked)} />BUFFERS</label><button disabled={running || actionState.current.runBlocked} onClick={() => void explainPressed()}>{t("plan.explain")}</button><span className="muted small">{t(analyzePlan ? "plan.executesHelp" : "plan.estimatedHelp")}</span>{capabilities?.analyzeUnavailable && capabilities.estimated && <span className="muted small">{t(capabilities.analyzeUnavailable === "engine" ? "plan.noAnalyzeHelp" : "plan.readOnlyHelp")}</span>}<button className="ghost" aria-label={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} title={t(maximized ? "restoreResults" : "maximizeResults", { shortcut: commandShortcut("results.maximize") })} onClick={() => toggleResultsMaximized(tab.id)}><Icon name={maximized ? "minimize" : "maximize"} /></button>{tab.run?.messages.length ? <details className="plan-run-messages"><summary>{t("results.messages")}</summary>{tab.run.messages.map((item, index) => <p key={index}>{item.translation ? translated(item.translation, t, numbers) : item.text}</p>)}</details> : null}</div>;
   return (
     <div className="editor-tab">
       <span className="sr-only" role="status">{runStatusLine}</span>
@@ -1802,6 +1947,12 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
           >
             {t("session.readOnlyChip")}
           </button>
+        )}
+        {waitingRun.kind === "waiting" && (
+          <span className="small muted" role="status">
+            {t(waitingKey(waitingRun.waitFor))}{" "}
+            <button className="ghost small" onClick={() => setWaitingRun(NOT_WAITING)}>{t("runWait.dontRun")}</button>
+          </span>
         )}
         {notice && (
           <span className={`small format-error ${notice.error ? "error" : "muted"}`} role={notice.error ? "alert" : "status"}>
@@ -1894,7 +2045,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
               <Icon name="runScript" />
             </button>
             <RunOptionsButton tab={tab} disabled={running} />
-            <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => void explainCurrent()}><Icon name="plan" /></button>
+            <button className="editor-action" aria-label={t("plan.explain")} title={t("plan.explain")} disabled={running || historySaving || databaseBusy || tabStatus === "connecting" || workspaceChanging} onClick={() => void explainPressed()}><Icon name="plan" /></button>
             <EditorActionsButton runName={runName} />
             <span className="editor-actions-divider" aria-hidden="true" />
             <button className="editor-action" aria-label={t("format")} title={t("formatHint", { shortcut: commandShortcut("editor.format") })} onClick={() => editor.current?.format()}>
@@ -1925,7 +2076,7 @@ ${t("transaction.lostWithTransaction")}` : lost.reason}>
             }}
             engine={connection?.engine ?? null}
             catalog={completion.catalog}
-            onRun={(r, newTab) => void run(r, false, queryPageSize, [], newTab ? { kind: "newTab" } : { kind: "replace" })}
+            onRun={(r, newTab) => pressRun({ kind: "run", request: r, placement: newTab ? { kind: "newTab" } : { kind: "replace" } })}
             onRunLabel={(next) => setRunLabel((before) => (before?.kind === next.kind && before.statements === next.statements ? before : next))}
             onName={showName}
             onOutline={() => setOutlineOpen((open) => !open)}

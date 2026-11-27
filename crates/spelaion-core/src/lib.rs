@@ -39,6 +39,7 @@ mod health;
 mod history;
 mod idle_transaction;
 mod import;
+mod include;
 pub mod instance;
 mod job;
 pub mod kube;
@@ -47,6 +48,7 @@ mod load_rows;
 mod locks;
 pub mod masking;
 mod mongodb_srv;
+pub mod notebook;
 pub(crate) mod objects;
 mod observe;
 mod open;
@@ -62,6 +64,7 @@ mod progress;
 mod query_page;
 mod readonly;
 mod references;
+mod resolve;
 #[cfg(test)]
 mod result_end_tests;
 mod result_tabs;
@@ -79,17 +82,20 @@ mod session;
 mod session_read_only;
 mod session_setup;
 pub mod session_source;
+mod settings_transfer;
 mod shortcuts;
 mod shown;
 mod sort;
 mod sql_file;
 mod sql_mode;
 mod startup;
+pub mod statement_database;
 pub mod table_copy;
 mod table_data;
 mod table_filters;
 mod table_pages;
 mod table_stats;
+pub mod task;
 mod temporal;
 #[cfg(all(test, unix))]
 mod test_files;
@@ -104,7 +110,9 @@ mod write;
 
 pub use agent_folders::{AgentFolder, ConnectionAgents, FolderAgents, agents_by_folder};
 pub use agent_state::{AgentFailure, FailureCode, access_code, all_agents_read_only};
-pub use app_log::{AppLog, MAX_LOG_BYTES};
+pub use app_log::{
+    AppLog, LogEntry, LogLevel, LogPage, MAX_LOG_BYTES, MAX_LOG_ENTRIES, scrub as scrub_log,
+};
 pub use catalog::{EngineAccess, EngineCategory, EngineInfo, engine_catalog};
 pub use chart::{
     ChartAggregate, ChartData, ChartError, ChartImageFormat, ChartKind, ChartLabel, ChartReduction,
@@ -206,6 +214,10 @@ pub use import::{
     SourceEncoding, check_sql_type, format_for_path, guess_options, plan_import, preview,
     run_import, suggested_table, text_format,
 };
+pub use include::{
+    IncludeError, IncludedFile, MAX_INCLUDE_DEPTH, MAX_INCLUDED_BYTES, MAX_INCLUDED_FILES,
+    PathRefusal, ScriptTree, check_included_files,
+};
 pub use job::{CancelRefused, JobCancel, JobEnd, JobHandle, JobRegistry, Refusal, TablesStopped};
 pub use load_rows::{
     LOAD_PAGE_ROWS, LoadCancel, LoadEstimate, LoadOutcome, LoadedRows, MAX_LOADED_ROWS,
@@ -262,9 +274,12 @@ pub use references::{
     ReferenceOutcome, RowReference, TableKey, check_key_table, find_key, follow, key_rows,
     query_key_table, read_references, reference_targets, table_keys,
 };
+pub use resolve::{
+    EchoLine, ResolvedScript, ScriptEcho, StatementOrigin, missing_variables, resolve_script,
+};
 pub use result_tabs::{
     DEFAULT_RESULT_TABS, MAX_RESULT_NAME, MAX_RESULT_TABS, Placed, Placement, ResultTab,
-    ResultTabs, ResultTabsError, RunResults, statement_title,
+    ResultTabs, ResultTabsError, RunResults, cell_results_key, statement_title,
 };
 pub use results::{
     PartialReason, ResultEnd, ResultFreed, ResultId, ResultSource, ResultStore, ResultTable,
@@ -279,6 +294,7 @@ pub use schema_compare::{
     SchemaSnapshot, TableSnapshot, ViewSnapshot, compare, compare_schemas, compare_support,
     migration_script, read_snapshot,
 };
+pub use script::{RunItem, with_echoes};
 pub use selection_stats::{
     CellBlock, MAX_DISTINCT, MAX_MEDIAN_VALUES, STAT_TEXT_CHARS, SelectionStats, StatsTicket,
 };
@@ -292,6 +308,10 @@ pub use session_read_only::{SessionReadOnlyError, set_session_read_only};
 pub use session_setup::{
     SetupError, SetupReport, SkippedSetup, check_file_setup, check_session_setup,
     isolation_statement, read_only_statement, setup_is_restricted, vet_imported_setup,
+};
+pub use settings_transfer::{
+    SETTINGS_FILE_MAX, SETTINGS_FILE_VERSION, SettingsSummary, SettingsTransferError,
+    export_settings, import_settings, preview_settings,
 };
 pub use shortcuts::{MAX_SHORTCUT_LENGTH, MAX_SHORTCUT_OVERRIDES, ShortcutError, check_shortcut};
 pub use sort::{MAX_SORT_KEYS, SortKey, ViewError};

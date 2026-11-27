@@ -1,7 +1,11 @@
 # Mcp and cli
 
 - `crates/spelaion-mcp` + `apps/cli`: `spelaiondb mcp` and utilities (`connections`, `trust`,
-  `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes
+  `audit`, `check`: the team repository's CI check, from `spelaion-config::check`, ADR-022;
+  `task list|run|history`, ADR-089: `apps/cli/src/task.rs` only prints and maps Ctrl+C to the
+  run's cancel, everything else is `spelaion-core::task`; it never asks: `NonInteractive`
+  dialogs, `Questions::Refuse`, a yes only from `--yes`; its tests are `apps/cli/tests/task.rs`,
+  with PostgreSQL). In `spelaiondb mcp`, stdout is the protocol: no `println!`. Reads and writes
   (`execute_write`, only with `[mcp] writes = "allow"`) use separate sessions. What agents may
   do on a connection is `spelaion-core::agent_access` (`write.rs`): the user's read-only mode
   for every agent (ADR-033, `mcp.read_only` in the store, read on every call, failing closed)
@@ -48,7 +52,14 @@
   `ConnectionKey`); the app's Activity tab reads it through `spelaion-core::audit`, which masks
   secrets (`redact_secrets`) before anything is shown or exported. The Activity tab filters by
   folder (`AuditFilter.folder`: `AuditFolder::Folder(root)` or `NoFolder`, a store query) and
-  lists the recorded folders (`audit_folders`); both exports end with a `folder` column. The
+  lists the recorded folders (`audit_folders`); both exports end with a `folder` column, then a
+  `database` one. A read or write records the database it ran in (`audit.database`, SDB-32):
+  `spelaion-core::statement_database` after the statement, inside the same session lock (the
+  session's current one on MySQL, MariaDB, SQL Server and DuckDB, read from the driver's
+  snapshot without SQL; the connection's own on PostgreSQL; none elsewhere), the same rule the
+  query history uses. The tab shows each call's kind from its tool (`audit::action`: read,
+  write, catalog), so a refused write reads as one, and opens a read or write's masked statement
+  in a new editor tab on its own folder's connection, never run. The
   Security tab's rows come from `spelaion_core::agents_by_folder` (`agent_folders.rs`, SDB-503):
   each open repository folder's connections under it, decided with that folder's trust, types
   and override scope, then the personal ones; `set_mcp_connection_read_only` finds the

@@ -14,6 +14,8 @@ pub mod atomic_file;
 mod beekeeper;
 mod check;
 mod conn_url;
+mod connection_transfer;
+mod connections_file;
 mod copy;
 mod datagrip;
 mod dbeaver;
@@ -39,6 +41,7 @@ mod pgadmin;
 mod relocate;
 mod resolve;
 mod secrets;
+mod settings_files;
 mod tableplus;
 mod trust;
 mod tunnel_draft;
@@ -47,10 +50,17 @@ mod types_edit;
 mod vars;
 mod workbench;
 
-pub use accounts::{connection_account, proxy_account, tunnel_account};
+pub use accounts::{connection_account, key_passphrase_account, proxy_account, tunnel_account};
 pub use beekeeper::{BeekeeperError, beekeeper_dir, read_beekeeper};
 pub use check::{Finding, Severity, check_workspace};
 pub use conn_url::{UrlConnection, UrlError, parse_connection_url};
+pub use connection_transfer::{
+    ConnectionsExported, ImportItem, ImportResult, ItemKind, ItemOutcome, ItemState, TransferError,
+    export_connections, import_connections, preview_connections_import, read_connections_file,
+};
+pub use connections_file::{
+    CONNECTIONS_FILE_MAX, CONNECTIONS_FILE_VERSION, ConnectionsFileError, EXPORT_PASSWORD_MIN,
+};
 pub use copy::{
     ClipboardConnection, Duplicated, MAX_CLIPBOARD_TEXT, Pasted, connection_clipboard_text,
     duplicate_connection, paste_connection,
@@ -106,7 +116,12 @@ pub use resolve::{
 };
 pub use secrets::{
     KEYCHAIN_NOT_KEPT, KEYCHAIN_SERVICE, KEYCHAIN_UNAVAILABLE, SecretBackend, SecretRef,
-    SystemBackend,
+    SystemBackend, forget_key_passphrase, key_passphrase_remembered, remember_key_passphrase,
+    remembered_key_passphrase,
+};
+pub use settings_files::{
+    PERSONAL_FILE_MAX, PersonalFiles, PersonalFilesBefore, PersonalFilesPlan, apply_personal_files,
+    plan_personal_files, read_personal_files,
 };
 pub use tableplus::{TableplusError, read_tableplus, tableplus_dir};
 pub use trust::{
@@ -116,8 +131,8 @@ pub use trust::{
 pub use tunnel_draft::{
     HopDraft, KubernetesProfileDraft, ProxyDraft, SsmDraft, StoredTunnelPasswords,
     TUNNEL_SCHEMA_URL, TunnelDraft, TunnelDraftOptions, TunnelPasswords, add_tunnel, delete_tunnel,
-    tunnel_passwords_stored, tunnel_revision, tunnel_users, tunnels_dir, update_tunnel,
-    update_tunnel_at_revision,
+    hop_key_path, tunnel_passwords_stored, tunnel_revision, tunnel_users, tunnels_dir,
+    update_tunnel, update_tunnel_at_revision,
 };
 pub use types::{ConnectionType, ConnectionTypes, PRODUCTION, Safeguards, type_id};
 pub use types_edit::{remove_personal_type, set_personal_type};

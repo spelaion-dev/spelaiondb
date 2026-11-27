@@ -683,7 +683,9 @@ function ChartSvg({
 
 /** The chart as a standalone SVG document: every color and font the theme gives it written on
  *  the elements (a file has no stylesheet), on the chart's own background. */
-function standaloneSvg(svg: SVGSVGElement): string {
+/** The chart on screen as a standalone SVG document: what Save image… writes, and what a
+ *  notebook's HTML export embeds (ADR-087). */
+export function standaloneSvg(svg: SVGSVGElement): string {
   const clone = svg.cloneNode(true) as SVGSVGElement;
   const source = svg.querySelectorAll<SVGElement>("*");
   const target = clone.querySelectorAll<SVGElement>("*");

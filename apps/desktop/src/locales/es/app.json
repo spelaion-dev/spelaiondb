@@ -75,7 +75,8 @@
     "noRecent": "Aún no hay archivos recientes.",
     "missing": "{{path}} (ya no está en el disco)",
     "missingShort": "no está",
-    "forget": "Quitar {{name}} de los archivos recientes"
+    "forget": "Quitar {{name}} de los archivos recientes",
+    "newNotebook": "Nuevo cuaderno"
   },
   "screenFailed": {
     "title": "Esta pantalla ha dejado de funcionar",

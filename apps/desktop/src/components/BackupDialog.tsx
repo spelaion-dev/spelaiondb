@@ -32,6 +32,8 @@ import { errorText as message, loadedValue, type Loaded } from "../dialogState";
 import { useJobPhase } from "../useDialogState";
 import type { ConnectionKey } from "../connectionKey";
 import { formatBytes } from "./ServerObservation";
+import { useSaveTask } from "./SaveTaskDialog";
+import type { TaskRequestItem } from "../bindings";
 
 export type BackupFamily = "postgres" | "mysql" | "sqlite" | "duckdb";
 
@@ -112,6 +114,7 @@ interface MysqlState {
 
 function BackupForm({ request }: { request: BackupRequest }) {
   const { t, i18n } = useTranslation("editor");
+  const { t: ts } = useTranslation("shell");
   const close = useBackup((s) => s.close);
   const restoring = request.mode === "restore";
   /** SQLite and DuckDB: their own commands, no client tools. */
@@ -490,6 +493,23 @@ function BackupForm({ request }: { request: BackupRequest }) {
   const canBackup = !running && !!folder.trim() && !!preview && !previewError;
   const canRestore = !running && !!input.trim();
 
+  /** "Save as task…": the backup or restore as it would run now (ADR-089). */
+  function saveAsTask() {
+    const task: TaskRequestItem = restoring
+      ? request.family === "duckdb"
+        ? { kind: "duckdbImport", folder: input.trim() }
+        : { kind: "restore", request: restoreRequest() }
+      : embedded
+        ? { kind: "embeddedDump", request: embeddedRequest() }
+        : { kind: "dump", request: backupRequest() };
+    useSaveTask.getState().open({
+      session: request.session,
+      name: restoring ? ts("tasks.defaultRestoreName", { name: request.connectionName }) : ts("tasks.defaultBackupName", { name: request.connectionName }),
+      needsFolder: false,
+      request: () => task,
+    });
+  }
+
   return (
     <div className="modal-backdrop">
       <div className="modal backup-dialog" role="dialog" aria-modal="true" aria-label={title}>
@@ -855,6 +875,9 @@ function BackupForm({ request }: { request: BackupRequest }) {
           ) : (
             <>
               <button onClick={close}>{t("backup.close")}</button>
+              <button disabled={restoring ? !canRestore : !canBackup} onClick={saveAsTask}>
+                {ts("tasks.saveAs")}
+              </button>
               {restoring ? (
                 <button className="primary" disabled={!canRestore} onClick={() => void askRestore()}>
                   {t("restoreDb.start")}

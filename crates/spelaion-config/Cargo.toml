@@ -19,6 +19,14 @@ path = "tests/main.rs"
 # its exports in RNCryptor's format: PBKDF2-SHA1, AES-256-CBC, HMAC-SHA256 (tableplus.rs).
 # All already in the tree.
 aes = "0.8"
+# The encrypted connections file (ADR-088, connections_file.rs): Argon2id and AES-256-GCM from
+# RustCrypto, the versions russh already brings through ssh-key and ssh-cipher, so no crate is
+# added to the build; the salt and nonce from the system's random source, as uuid already does;
+# keys and plaintexts wiped when dropped.
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+getrandom = "0.4"
+zeroize = "1"
 cbc = "0.1"
 hmac = "0.13"
 pbkdf2 = "0.13"

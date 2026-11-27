@@ -25,6 +25,16 @@ pub const MAX_RESULT_TABS: usize = spelaion_store::MAX_RESULT_TABS as usize;
 /// The longest name of a result tab, in characters.
 pub const MAX_RESULT_NAME: usize = 60;
 
+/// What separates a notebook tab's key from a cell's id in [`cell_results_key`]: a control
+/// character no tab key holds.
+const CELL_SEPARATOR: char = '\u{1f}';
+
+/// The key a notebook cell keeps its results under (ADR-087, point 13): its notebook tab's key
+/// and the cell's id. [`ResultTabs::close_editor`] of the tab frees them with its own.
+pub fn cell_results_key(editor: &str, cell: &str) -> String {
+    format!("{editor}{CELL_SEPARATOR}{cell}")
+}
+
 /// Where the results of a run go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
@@ -242,11 +252,24 @@ impl ResultTabs {
         self.store.remove(result)
     }
 
-    /// Closes every result tab of an editor tab (the editor tab was closed) and frees them.
-    /// A result that a run still going there starts later is freed as it starts.
+    /// Closes every result tab of an editor tab (the editor tab was closed) and frees them,
+    /// with the results of its notebook cells ([`cell_results_key`]). A result that a run still
+    /// going there starts later is freed as it starts.
     pub fn close_editor(&self, editor: &str) -> usize {
-        let removed = self.lock().editors.remove(editor);
-        let kept = removed.map(|results| results.kept).unwrap_or_default();
+        let cells = format!("{editor}{CELL_SEPARATOR}");
+        let removed: Vec<EditorResults> = {
+            let mut state = self.lock();
+            let keys: Vec<String> = state
+                .editors
+                .keys()
+                .filter(|key| key.as_str() == editor || key.starts_with(&cells))
+                .cloned()
+                .collect();
+            keys.iter()
+                .filter_map(|key| state.editors.remove(key))
+                .collect()
+        };
+        let kept: Vec<Kept> = removed.into_iter().flat_map(|r| r.kept).collect();
         for k in &kept {
             self.store.remove(k.result);
         }
@@ -748,6 +771,28 @@ mod tests {
         assert_eq!(f.tabs.close_editor("a"), 1);
         assert!(f.results(&mut run, "select 2").is_empty());
         assert!(f.store.is_empty());
+    }
+
+    #[test]
+    fn closing_a_notebook_tab_frees_its_cells_results_and_no_other_tabs() {
+        let f = Fixture::new();
+        let cell = cell_results_key("a", "c1");
+        let other = cell_results_key("ab", "c1");
+        f.run(&cell, Placement::Replace, "select 1", 20);
+        f.run(
+            &cell_results_key("a", "c2"),
+            Placement::Replace,
+            "select 2",
+            20,
+        );
+        f.run(&other, Placement::Replace, "select 3", 20);
+        f.run("ab", Placement::Replace, "select 4", 20);
+        assert_eq!(f.store.len(), 4);
+        assert_eq!(f.tabs.close_editor("a"), 2);
+        assert!(f.ids(&cell).is_empty());
+        assert_eq!(f.ids(&other).len(), 1);
+        assert_eq!(f.ids("ab").len(), 1);
+        assert_eq!(f.store.len(), 2);
     }
 
     #[test]

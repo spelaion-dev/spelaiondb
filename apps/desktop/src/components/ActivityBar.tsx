@@ -40,6 +40,7 @@ export function ActivityBar() {
       <div className="activity-bottom">
         <ActivityButton command="view.history" icon="history" pressed={historyOpen} controls="query-history" />
         <ActivityButton command="view.savedQueries" icon="saved" pressed={snippetsOpen} controls="saved-queries" />
+        <ActivityButton command="view.tasks" icon="tasks" pressed={section === "tasks"} />
         <ActivityButton command="view.mcp" icon="mcp" pressed={section === "mcp"} />
         <ActivityButton command="view.settings" icon="settings" pressed={settingsActive} className="settings-button" />
       </div>

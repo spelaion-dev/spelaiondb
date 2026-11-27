@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { call, commands, type ExplorerPreferences, type GridPreferences, type ScriptPreferencesItem } from "./api";
-import type { EditorPreferencesItem, MapPreferencesItem, SidePanelItem, SizeStepsItem } from "./bindings";
+import type { EditorPreferencesItem, MapPreferencesItem, PreferenceKind, SidePanelItem, SizeStepsItem } from "./bindings";
 import { applyLanguage, type LanguagePreference } from "./i18n";
 import { createSaveQueue, savedSetting } from "./saveQueue";
 
@@ -113,6 +113,8 @@ interface PreferencesStore {
   setGrid(next: GridPreferences): Promise<void>;
   setScript(next: ScriptPreferencesItem): Promise<void>;
   setReconnectOnStart(next: boolean): Promise<void>;
+  /** Reads `kind` again: the core stored it, saved in any window or imported (SDB-535). */
+  changedElsewhere(kind: StoredPreference): Promise<void>;
   clearError(): void;
 }
 
@@ -138,6 +140,12 @@ const saved = {
   map: savedSetting(DEFAULT_MAP),
   reconnectOnStart: savedSetting(false),
 };
+
+/** The preferences this store keeps, of those the core says changed (SDB-535). */
+export type StoredPreference = Extract<PreferenceKind, "language" | "theme" | "interfaceSize" | "explorer" | "grid" | "script" | "editor" | "map" | "reconnectOnStart">;
+
+const languageOf = (value: string): LanguagePreference => (value === "en" || value === "es" ? value : "system");
+const themeOf = (value: string): ThemePreference => (value === "light" || value === "dark" ? value : "system");
 
 export const usePreferences = create<PreferencesStore>((set, get) => ({
   language: "system",
@@ -187,14 +195,14 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
     if (explorer.status === "fulfilled") { saved.explorer.loaded(explorer.value); set({ explorer: explorer.value }); }
     else error = { setting: "explorer", phase: "load", detail: errorText(explorer.reason) };
     if (theme.status === "fulfilled") {
-      const selected: ThemePreference = theme.value === "light" || theme.value === "dark" ? theme.value : "system";
+      const selected = themeOf(theme.value);
       set({ theme: selected });
       applyTheme(selected);
     } else {
       error = { setting: "theme", phase: "load", detail: errorText(theme.reason) };
     }
     if (language.status === "fulfilled") {
-      const selected: LanguagePreference = language.value === "en" || language.value === "es" ? language.value : "system";
+      const selected = languageOf(language.value);
       set({ language: selected });
       await applyLanguage(selected);
     } else {
@@ -293,12 +301,16 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
     set({ error: null, ...(optimistic ? { map: next } : {}) });
     return enqueue("map", async () => {
       try {
-        await call(commands.setMapPreferences(next));
-        saved.map.succeeded(next);
-        set({ map: next });
+        // What the core stored is shown, not what was asked for.
+        const stored = await call(commands.setMapPreferences(next));
+        saved.map.succeeded(stored);
+        set({ map: stored });
         return true;
       } catch (e) {
-        const back = optimistic ? saved.map.failed(ticket) : undefined;
+        // Every change ends in `succeeded` or `failed`, also one that was not shown at once:
+        // otherwise it stays pending and no value saved in another window shows here again.
+        const fallback = saved.map.failed(ticket);
+        const back = optimistic ? fallback : undefined;
         set({ ...(back ? { map: back } : {}), error: { setting: "map", phase: "save", detail: errorText(e) } });
         return false;
       }
@@ -340,6 +352,67 @@ export const usePreferences = create<PreferencesStore>((set, get) => ({
         set({ ...(back ? { grid: back } : {}), error: { setting: "grid", phase: "save", detail: errorText(e) } });
       }
     });
+  },
+  async changedElsewhere(kind) {
+    // A setting this window is still saving keeps what it shows: that change is saved after
+    // the one read here (`savedSetting.changedElsewhere`).
+    try {
+      switch (kind) {
+        case "language": {
+          const language = languageOf(await call(commands.getLanguage()));
+          if (language !== get().language) {
+            set({ language });
+            await applyLanguage(language);
+          }
+          return;
+        }
+        case "theme": {
+          const theme = themeOf(await call(commands.getTheme()));
+          set({ theme });
+          applyTheme(theme);
+          return;
+        }
+        case "interfaceSize":
+          set({ interfaceSize: await call(commands.getInterfaceSize()) });
+          return;
+        case "explorer": {
+          const explorer = saved.explorer.changedElsewhere(await call(commands.getExplorerPreferences()));
+          if (explorer) set({ explorer });
+          return;
+        }
+        case "grid": {
+          const grid = saved.grid.changedElsewhere(await call(commands.getGridPreferences()));
+          if (grid) set({ grid });
+          return;
+        }
+        case "script": {
+          const script = saved.script.changedElsewhere(await call(commands.getScriptPreferences()));
+          if (script) set({ script });
+          return;
+        }
+        case "editor": {
+          const editor = saved.editor.changedElsewhere(await call(commands.getEditorPreferences()));
+          if (editor) set({ editor });
+          return;
+        }
+        case "map": {
+          const map = saved.map.changedElsewhere(await call(commands.getMapPreferences()));
+          if (map) set({ map });
+          return;
+        }
+        case "reconnectOnStart": {
+          const reconnectOnStart = saved.reconnectOnStart.changedElsewhere(await call(commands.getReconnectOnStart()));
+          if (reconnectOnStart !== undefined) set({ reconnectOnStart });
+          return;
+        }
+        default: {
+          const unknown: never = kind;
+          return unknown;
+        }
+      }
+    } catch {
+      // What it shows stays; the core still has the value, read again at the next start.
+    }
   },
   clearError: () => set({ error: null }),
 }));

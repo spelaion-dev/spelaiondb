@@ -1,6 +1,6 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
-use crate::{is_white_space_at, trimmed};
+use crate::scanner::{self, RegionKind, SemicolonScanner};
 
 /// Trino's dialect, and Presto's (the same grammar): standard SQL's lexical rules. `'…'`
 /// strings and `"…"` names with doubled quotes and no backslash escapes, `--` comments and
@@ -13,12 +13,17 @@ impl Dialect for TrinoDialect {
         "trino"
     }
 
+    /// A client command line (ADR-078) is resolved only by the editor's run: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        crate::refuse_client_command(statement)
+    }
+
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         split(script)
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, skip_non_code)
+        code_ranges(script)
     }
 
     /// Always in double quotes, a `"` doubled: names keep their case, and many words are
@@ -29,48 +34,27 @@ impl Dialect for TrinoDialect {
 }
 
 pub(crate) fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut has_code = false;
-    let mut i = 0;
-    while i < b.len() {
-        if let Some(end) = skip_non_code(script, i) {
-            if matches!(b[i], b'\'' | b'"') {
-                has_code = true;
-            }
-            i = end.max(i + 1);
-            continue;
-        }
-        match b[i] {
-            b';' => {
-                if has_code {
-                    spans.extend(trimmed(script, start, i));
-                }
-                i += 1;
-                start = i;
-                has_code = false;
-            }
-            _ => {
-                if !is_white_space_at(script, i) {
-                    has_code = true;
-                }
-                i += 1;
-            }
-        }
-    }
-    if has_code {
-        spans.extend(trimmed(script, start, b.len()));
-    }
-    spans
+    scanner::statements(SemicolonScanner::new(script, opening))
 }
 
-/// The byte after the string, quoted name or comment that starts at `i`; `None` when none
-/// starts there.
-pub(crate) fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+/// What lies outside strings, names and comments, read by the scanner.
+pub(crate) fn code_ranges(script: &str) -> Vec<std::ops::Range<usize>> {
+    scanner::code_ranges(SemicolonScanner::new(script, opening))
+}
+
+/// The string, quoted name or comment that starts at byte `i`, with the byte after it; `None`
+/// when none starts there. The scanner's one reading of standard SQL's: `'…'` and `"…"` with
+/// doubled quotes, `--` and block comments that do not nest (Trino's statements, and the
+/// standard dialect's, end at a `;` outside them: [`SemicolonScanner`]).
+pub(crate) fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
     match *b.get(i)? {
         q @ (b'\'' | b'"') => {
+            let kind = if q == b'\'' {
+                RegionKind::String
+            } else {
+                RegionKind::QuotedName
+            };
             let mut j = i + 1;
             while j < b.len() {
                 if b[j] == q {
@@ -78,23 +62,25 @@ pub(crate) fn skip_non_code(script: &str, i: usize) -> Option<usize> {
                         j += 2;
                         continue;
                     }
-                    return Some(j + 1);
+                    return Some((kind, j + 1));
                 }
                 j += 1;
             }
-            Some(b.len())
+            Some((kind, b.len()))
         }
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((
+            RegionKind::Comment,
             b[i..]
                 .iter()
                 .position(|&c| c == b'\n')
                 .map_or(b.len(), |p| i + p + 1),
-        ),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(
+        )),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((
+            RegionKind::Comment,
             script[i + 2..]
                 .find("*/")
                 .map_or(b.len(), |p| i + 2 + p + 2),
-        ),
+        )),
         _ => None,
     }
 }

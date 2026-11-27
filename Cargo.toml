@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/cli", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.17.0"
+version = "0.18.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/spelaion-dev/spelaiondb"
@@ -51,4 +51,13 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# The encrypted connections file's key derivation (ADR-088): Argon2id over 64 MiB takes minutes
+# unoptimized, in tests and in a debug build of the app; optimized it takes a fraction of a
+# second, as in a release.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
 

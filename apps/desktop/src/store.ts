@@ -157,6 +157,9 @@ export interface Tab {
   diagramModified?: boolean;
   /** A local saved plan, opened without executing SQL. */
   plan?: { path: string };
+  /** A SQL notebook (ADR-087): `sql` is its text as its file holds it (what a save writes and a
+   *  kept tab keeps), written by the core from these cells. */
+  notebook?: NotebookTab;
   /** The label of the window its results are shown in (SDB-30), until the core says that
    *  window closed (`ResultsWindowClosed`, also after Re-attach results). UI only, never kept. */
   resultsWindow?: string;
@@ -180,6 +183,26 @@ export interface Tab {
   /** Session setup statements that failed and were skipped when the session opened (ADR-037),
    *  shown until dismissed or the next connection. */
   setupSkipped?: SkippedSetupItem[];
+}
+
+/** A notebook cell as the page edits it; `id` is the page's own, never written to the file. */
+export interface NotebookCell {
+  id: string;
+  kind: "sql" | "markdown";
+  /** A SQL cell's name, which references use (`{{name}}`); empty for Markdown. */
+  name: string;
+  text: string;
+}
+
+/** A notebook tab's cells (ADR-087). */
+export interface NotebookTab {
+  /** Null until the core has read the tab's text (an opened or restored notebook), and while it
+   *  cannot (`problem` says why: the text stays, nothing is lost). */
+  cells: NotebookCell[] | null;
+  /** Why its text could not be read as a notebook, or its cells written as one. */
+  problem?: string;
+  /** Bumped on every change to the cells, so the core writes the text again. */
+  revision: number;
 }
 
 /** The `.sql` file behind a file tab. The core reads and writes it (ADR-036). */
@@ -234,6 +257,8 @@ export interface TabSnapshot {
   runOptions?: Tab["runOptions"];
   /** A file tab comes back as it was closed, unsaved changes included (ADR-036). */
   file?: TabFile;
+  /** A notebook comes back as one, its cells read again from its text (ADR-087). */
+  notebook?: boolean;
 }
 
 /** A closed tab and where it was, to reopen it in the same place. */
@@ -255,6 +280,7 @@ export function snapshotOf(tab: Tab): TabSnapshot | null {
     ...(tab.snippetName ? { snippetName: tab.snippetName } : {}),
     ...(tab.runOptions ? { runOptions: tab.runOptions } : {}),
     ...(tab.file ? { file: tab.file } : {}),
+    ...(tab.notebook ? { notebook: true } : {}),
   };
 }
 
@@ -308,6 +334,8 @@ function restoredTab({ tab: kept, notes }: RestoredTabItem): Tab {
         }
       : undefined,
     restoreNotes: notes.length > 0 ? notes : undefined,
+    // A kept notebook comes back as its text: the tab reads its cells from it, runs nothing.
+    ...(kept.notebook ? { notebook: { cells: null, revision: 0 } } : {}),
   };
 }
 
@@ -364,9 +392,12 @@ export type GridCommand =
   | { kind: "copyUpdates" }
   | { kind: "exportSelection" };
 
-/** The panel next to the activity bar: the explorer, the process monitor, the MCP page or none. */
-export type SidebarSection = "connections" | "processes" | "search" | "mcp" | null;
-/** A panel that shares the side column (the MCP page fills the window instead). */
+/** The panel next to the activity bar: the explorer, the process monitor, the MCP page, the
+ *  Tasks view (ADR-089) or none. */
+export type SidebarSection = "connections" | "processes" | "search" | "mcp" | "tasks" | null;
+/** A page that fills the window: it has no side column. */
+export const isPage = (section: SidebarSection): section is "mcp" | "tasks" => section === "mcp" || section === "tasks";
+/** A panel that shares the side column (the MCP page and the Tasks view fill the window instead). */
 export type SidePanel = "connections" | "processes" | "search";
 
 export const isSidePanel = (section: SidebarSection): section is SidePanel =>
@@ -640,7 +671,7 @@ export const useApp = create<AppStore>((set) => ({
     set((now) => {
       const tab = now.tabs.find((t) => t.id === id);
       if (!tab) return now;
-      const restored: Tab = { ...tab, title: snapshot.title, pinned: snapshot.pinned, snippetName: snapshot.snippetName, runOptions: snapshot.runOptions, file: snapshot.file };
+      const restored: Tab = { ...tab, title: snapshot.title, pinned: snapshot.pinned, snippetName: snapshot.snippetName, runOptions: snapshot.runOptions, file: snapshot.file, ...(snapshot.notebook ? { notebook: { cells: null, revision: 0 } } : {}) };
       const others = now.tabs.filter((t) => t.id !== id);
       others.splice(Math.min(last.index, others.length), 0, restored);
       return { tabs: pinnedFirst(others) };

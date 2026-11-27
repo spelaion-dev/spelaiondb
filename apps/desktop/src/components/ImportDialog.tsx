@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { useSaveTask } from "./SaveTaskDialog";
 import { create } from "zustand";
 import { call, commands } from "../api";
 import type {
@@ -90,6 +91,7 @@ export function ImportDialog() {
 
 function ImportForm({ request }: { request: ImportRequest }) {
   const { t, i18n } = useTranslation("editor");
+  const { t: ts } = useTranslation("shell");
   const numbers = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
   const close = useImport((s) => s.close);
   const connection = useApp((s) => listedConnection(s.connections, request.connection)) ?? null;
@@ -746,6 +748,23 @@ function ImportForm({ request }: { request: ImportRequest }) {
                     }}
                   >
                     {t("import.back")}
+                  </button>
+                  {/* Only a file is read again when the task runs: pasted text is this import's. */}
+                  <button
+                    disabled={!plan || source?.kind !== "file"}
+                    title={source?.kind !== "file" ? ts("tasks.saveImportOnlyFile") : undefined}
+                    onClick={() => {
+                      const built = importRequest();
+                      if (!built) return;
+                      useSaveTask.getState().open({
+                        session: request.session,
+                        name: ts("tasks.defaultImportName", { table: built.target.table }),
+                        needsFolder: false,
+                        request: () => ({ kind: "import", request: built }),
+                      });
+                    }}
+                  >
+                    {ts("tasks.saveAs")}
                   </button>
                   <button className="primary" disabled={!plan} onClick={() => void start(false)}>
                     {phase.kind === "failed" ? t("import.again") : t("import.start")}

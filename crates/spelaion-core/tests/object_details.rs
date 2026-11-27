@@ -47,8 +47,7 @@ fn login(host: &str, port: u16, user: &str, password: &str, database: &str) -> C
 }
 
 async fn cases() -> Vec<Case> {
-    let dir = std::env::temp_dir().join(format!("spelaion-details-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::support::run_dir("spelaion-details");
     let duck = dir.join("details.duckdb");
     let _ = std::fs::remove_file(&duck);
     engines::create_database(spelaion_config::Engine::Duckdb, &duck).await;

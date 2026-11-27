@@ -11,6 +11,7 @@ How to use SpelaionDB, one page per part of the app.
 | [Working with results](results.md) | Selecting, copying, exporting, sorting and filtering the grid, the cell viewer |
 | [Watching the server](server.md) | The process monitor: sessions, locks and who blocks whom, server settings, and table statistics |
 | [Saved queries and query history](saved-queries-and-history.md) | Saving SQL under a name, searching what ran |
+| [Saved tasks](tasks.md) | Exports, imports, backups and SQL file runs saved with their options, run again from the Tasks view or `spelaiondb task run`, on your own schedule |
 | [For AI agents (MCP)](mcp.md) | What agents may do through `spelaiondb mcp`, and how to set it up |
 | [Settings](settings.md) | Appearance, language, history, editor and automatic updates |
 

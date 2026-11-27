@@ -75,7 +75,13 @@
   typed password goes with it only to the same login on the same route (`carried_password`);
   otherwise the tab connects as a new one does. Nothing is run again (`tests/session_source.rs`).
   `classify.rs` and `readonly.rs` are the read-only mode barriers (ADR-008): any change
-  there needs tests that try to get around them. `tests/properties.rs` (SDB-156) generates
+  there needs tests that try to get around them. A client command line (ADR-078, SDB-466) is
+  refused wherever nothing resolves it: `classify.rs`'s `reject_client_command` (agents' reads,
+  the read-only connection barrier, session setup's check) and `write.rs`'s `check_write` refuse
+  a statement the engine's scanner reads as one, whatever the SQL parser would make of it, and
+  the session refuses it (the dialect's `refuse_statement`) before every send path: a plan's
+  EXPLAIN, COPY and a request included (`session.rs`). Only the editor's run will resolve
+  commands (SDB-467). `tests/properties.rs` (SDB-156) generates
   them: a write or a refused function hidden in every place it can go is never a read, and a
   destructive statement never passes the guard unasked; it also checks the `:name` scanner
   (`params.rs`: only placeholders in code are found and bound, a value stays in its literal),
@@ -186,7 +192,27 @@
   values given (the tab's, over its connection's in `spelaion-store`'s `connection_variables`):
   never the environment, and `${env:…}` is not a name. Agents have no variables. Like
   `classify.rs`, any change there needs tests that try to get around it (`tests/variables.rs`,
-  on every dialect).
+  on every dialect). `resolve.rs`'s `resolve_script` (ADR-078, SDB-467 and SDB-468) is the
+  editor's run's reading: it walks the split script, `@set`/`@unset` change a copy of the values
+  from their line on (the values given are never changed), each `@echo` is kept with the
+  statement it comes before, and the command lines leave the text; every other statement is
+  substituted with the values in force there, by the same checks. `@include` (only with a
+  `ScriptTree`, the tab's file's; `None` is a console and refuses it) puts each statement of the
+  included file in place on its own, closed by the first of `CLOSINGS` that splits back to just
+  that statement, so nothing the file leaves open reaches past it; the whole text is then split
+  again and must give exactly the statements written, or nothing runs. It also returns each
+  statement's origin (file and line, for the guard's question and errors) and the files read
+  with their hashes, which `check_included_files` compares just before the run starts.
+  `include.rs` (in `.github/CODEOWNERS`) is the only place that decides which file an
+  `@include` may read: refused as written first (absolute, `\`, `~`, `:`, `${`, device names,
+  a part ending in a dot or a space), then canonical and inside the tree, still `.sql`, a file;
+  read with `read_sql_file`'s rules, within `MAX_INCLUDE_DEPTH`, `MAX_INCLUDED_FILES` and
+  `MAX_INCLUDED_BYTES`. A change there needs a test in `tests/include.rs` that tries to get
+  around it, on Windows and on Unix. `missing_variables` is what the page asks for (not a name
+  an earlier `@set` gives or an `@unset` removed, included files read too). `script.rs`'s
+  `with_echoes` yields each echo and included file's name just before the statement after it
+  starts (the trailing ones only when the run went through every statement). Any other `@` line
+  stays in the text, for the session to refuse.
   `result_tabs.rs` (SDB-378) is each editor tab's result tabs over the `ResultStore`: which
   results a run replaces is decided there, never in the UI. A run frees the results that are
   not pinned, a run into a new tab frees none, a re-run of one result takes its place when
@@ -213,7 +239,10 @@
   it on every engine, 50 tables cancelled mid-way included. ClickHouse (SDB-324) has its own
   forms (`toString`, `positionUTF8`, `substringUTF8`, a float or decimal cast by the column's
   type, since it compares no float with a decimal); it has no unique key nor transactions, so
-  its hits are filtered by their values and its reads need none. Metadata search is the app's
+  its hits are filtered by their values and its reads need none. Where any other server does
+  not enforce the read-only transaction the search is refused, except where ADR-091 checked
+  that its own statements cannot write (GreptimeDB: base tables only, a fixed list of
+  functions; a change to the template keeps to that list). Metadata search is the app's
   (`dbSearch.ts` over `catalog.ts`, which keeps each schema's columns once read).
   `schema_compare/` (ADR-070) compares two schemas of the same engine: `compare_support` says
   which sessions can (PostgreSQL, MySQL, MariaDB, SQL Server, SQLite and DuckDB proper; every
@@ -488,6 +517,25 @@
   and restores PostgreSQL, MySQL and MariaDB through the two hops of `testing/docker` with the
   tools of the official images (`docker run`), or those in `SPELAION_TEST_DB_TOOLS`; any change
   there needs tests that try to leak the password.
+  `task/` (ADR-089, SDB-33) saves an export, import, dump, restore, embedded copy, DuckDB import
+  or `.sql` file run as a named task and runs it again. `document.rs` is the versioned JSON
+  document, written from the core's own request types (their serde derives are its format:
+  `task/tests.rs` pins version 1, so a change to `ExportFormat`, `CsvOptions`, `ParseOptions`,
+  `DumpOptions` and the like that breaks it needs a new version and a reader for the old one),
+  checked when saved and every time it is read back (a document that fails is unreadable and
+  runs nothing), and `check_secrets` refuses any text holding one of the connection's resolved
+  secrets or a secret-named `key=value` in a tool's arguments (`secrets_of`, the `Redactor`).
+  A task's tools are `Detect` or a folder, never a program. `run.rs`: `resolve_connection` is
+  the one way the app and the CLI resolve a task's connection (a repository one from its folder
+  alone with the personal layer; a personal one with the folders the task recorded, through
+  `Resolver::with_open_folders`); `run_task` records the run, asks for a prompt password before
+  anything opens, prepares the run with the functions the dialogs call (`rerun_check` and
+  `script_risks`, `plan_import`, `preview_dump`, `preview_restore`, `plan_sql_file`), stops for a
+  yes exactly where the run by hand asks (`Questions::Ask` answers the question and records
+  nothing; `Questions::Refuse`, the CLI, records it refused or failed), runs it in a session of
+  its own through the same job functions and records the ending with the log, every line
+  through the run's `Redactor`. An export never writes over a file (`free_path`). The tests
+  with databases are `apps/cli/tests/task.rs` (the app's run and the real binary).
   `conn_test.rs` is the connection test (ADR-032): one step at a time (resolve, proxy, each
   hop through `Tunnel::connect_observed`, Kubernetes, reaching the target with
   `Tunnel::probe`, login and session setup with the same safeguards as opening a session), its own
@@ -522,6 +570,14 @@
   (`<personal folder>/logs/spelaion.log`). "Start with a new local store" is
   `spelaion-store::set_aside`: the store and its `-wal`/`-shm` renamed to
   `state.db.broken-<date>`, never deleted or overwritten.
+  The app log (SDB-31) has a level per entry (`LogLevel`: error, warning, info; an entry written
+  before levels reads as an error) and is what Settings › Logs shows: `AppLog::read` (both files,
+  newest first, filtered by level) and `AppLog::export`. Every entry is scrubbed when written and
+  again when read (`app_log::scrub`: `audit::redact_secrets`, then an unquoted value after
+  `password=`, `pwd:`, `token=`…), so a password an error message carried never reaches the file,
+  the viewer or an export. Callers still never pass SQL, data or secrets: the scrub is a second
+  line. The desktop writes the start (version and system), and each connection that opens, has
+  its login refused or fails, by id.
   `save_name.rs` keeps a save dialog's file name in step with the chosen file type (Linux's
   GTK dialogs, `apps/desktop/src-tauri/src/file_dialog.rs`).
   `sql_file.rs` reads and writes the editor's `.sql` files (ADR-036: UTF-8 with or without a
@@ -541,6 +597,21 @@
   was kept under. History and saved queries list every open folder's and the personal ones
   (`history_page`, `snippet_page` and the rest take the open folders' keys; each entry has its
   `workspace`).
+  `notebook/` (ADR-087, SDB-36) reads and writes SQL notebooks: `format.rs` is the file format
+  (a front matter block, `sql cell=<name>` fences, `<!-- cell -->` between two Markdown cells)
+  and its round trip, which the tests hold (`write(parse(write(x))) == write(x)`); files go
+  through `sql_file.rs`'s rules. `references.rs` expands a cell's `{{name}}` references into
+  CTEs of the referenced cells' SQL, found with the dialect's `code_ranges`; a referenced cell
+  must be one statement that `classify_read_only` reads as a query, so a reference never
+  repeats a write; the expanded statement is what `check_run` and the history see. Never run a
+  cell any other way. `markdown.rs` reads Markdown cells into blocks that the page and
+  `html.rs`'s export draw, never as HTML (raw HTML stays text, links are not followed); its
+  readers are bounded (depth, a cell's size, searches for closing marks) and a change keeps the
+  `deep_or_huge_input_stays_bounded` test. `html.rs` writes the export with every text escaped,
+  a no-script policy, at most `MAX_EXPORT_ROWS` per result from the stored (masked) results,
+  and a chart only as a `data:` image that passed `chart::is_plain_svg`. Results are never
+  written into a notebook file, and a kept notebook tab (`open_tabs.notebook`) holds its
+  document as text only. Tests: the modules' own and `tests/notebooks.rs` (every engine).
   `session_setup.rs` (ADR-037) applies a connection's `[session]` table every time a session
   opens (isolation level, default schema, setup statements), from `open_connection`; on a
   read-only connection, a Production type and sessions that only read
@@ -590,3 +661,13 @@
   `JobRegistry` (SDB-369) lists a program's running jobs under ids it makes: `start(kind)` gives
   a `JobHandle` whose drop removes the entry (a panic too), and `cancel(id, kind)` refuses an id
   of another kind. The desktop names its kinds in `src-tauri/src/jobs.rs`.
+  The settings file (SDB-31) is `settings_transfer.rs`: one JSON file (`format`
+  `spelaiondb-settings`, `version`) of the store's portable rows and the personal `user.toml` and
+  `connection-types.toml`, written through `AtomicWriter`. Never a connection or a secret: those
+  move in ADR-088's encrypted file. An import checks the whole file before it writes anything:
+  the rows go into a store in memory (`Store::open_in_memory`, the same triggers), then the
+  core's own checks run over them (shortcut keys, snippets, the script template, the name pattern
+  of new connections, the tile server, read from the rows themselves because the readers drop
+  what they cannot use). Then the personal files, then the rows in one transaction; when the rows
+  fail the files are put back. A setting this version does not know is left out and listed.
+  Tested in `tests/settings_transfer.rs`.

@@ -6,6 +6,8 @@ import { useTranslation } from "react-i18next";
 import { call, commands, type AuditEventItem, type AuditFolderItem, type AuditSessionItem, type AuditStatusItem } from "../api";
 import { chooseSavePath } from "../dialogs";
 import { folderLabels } from "../folderLabels";
+import { keyOf, listedConnection } from "../connectionIdentity";
+import { useApp } from "../store";
 
 /** The folder filter's value: every folder, one folder's root, or the entries with none. */
 type FolderChoice = { kind: "all" } | { kind: "folder"; root: string } | { kind: "noFolder" };
@@ -26,6 +28,16 @@ function folderFilter(choice: FolderChoice): AuditFolderItem | null {
 }
 
 const PAGE = 500;
+
+/** Puts a logged statement in a new editor tab on its own folder's connection (SDB-32), never
+ *  run: the text the core already masked. A connection that is no longer listed leaves the tab
+ *  without one. The editor comes forward. */
+function openInEditor(event: AuditEventItem) {
+  const app = useApp.getState();
+  const listed = listedConnection(app.connections, { folder: event.folder, id: event.connection });
+  app.addTab(listed ? keyOf(listed) : null, event.statement);
+  app.setSidebarSection("connections");
+}
 type Sub = "events" | "sessions";
 
 function message(e: unknown): string {
@@ -218,6 +230,7 @@ function Events({ session, onLeaveSession }: { session: AuditSessionItem | null;
               <th>{t("activity.time")}</th>
               <th>{t("activity.folder")}</th>
               <th>{t("activity.connection")}</th>
+              <th>{t("activity.database")}</th>
               <th>{t("activity.tool")}</th>
               <th>{t("activity.statement")}</th>
               <th>{t("activity.status")}</th>
@@ -230,12 +243,19 @@ function Events({ session, onLeaveSession }: { session: AuditSessionItem | null;
                 <td className="nowrap">{dates.format(new Date(e.atMs))}</td>
                 <td title={e.folder ?? t("activity.noFolderHint")}>{e.folder === null ? <span className="muted">{t("activity.noFolder")}</span> : (folderNames.get(e.folder) ?? e.folder)}</td>
                 <td>{e.connection}</td>
+                <td title={e.database ? undefined : t("activity.noDatabaseHint")}>{e.database ?? <span className="muted">—</span>}</td>
                 <td>{e.tool ?? "—"}</td>
                 <td>
                   <code className="mcp-statement">{e.statement}</code>
                   {e.detail && <div className="muted mcp-detail">{e.detail}</div>}
+                  {(e.action === "read" || e.action === "write") && e.statement.trim() !== "" && (
+                    <button className="ghost small mcp-open" onClick={() => openInEditor(e)}>
+                      {t("activity.openInEditor")}
+                    </button>
+                  )}
                 </td>
-                <td>
+                <td className="nowrap">
+                  {e.action !== "unknown" && <span className={`mcp-action mcp-action-${e.action}`}>{t(`activity.action.${e.action}`)}</span>}{" "}
                   <span className={`badge mcp-status mcp-status-${e.status}`}>{t(`activity.statusName.${e.status}`)}</span>
                 </td>
                 <td className="nowrap">{e.durationMs === null ? "—" : t("activity.ms", { ms: e.durationMs })}</td>

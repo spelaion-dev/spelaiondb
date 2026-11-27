@@ -25,6 +25,14 @@ port, database, user, SSL mode and the password field (which is saved like a typ
   keychain or are asked when connecting; key paths in project tunnels are stored relative
   to the repository or as `~/…`, so they work for the whole team. A tunnel in use by a
   connection cannot be deleted.
+  An encrypted key (OpenSSH or PuTTY `.ppk`) asks for its passphrase when a tunnel opens; an
+  agent (Pageant, the OpenSSH agent) is tried first. Tick **Remember in the system keychain**
+  in that question to keep the passphrase in the system keychain (Credential Manager on
+  Windows, Keychain on macOS, the Secret Service on Linux), under the key file's path: every
+  tunnel that uses the same file then opens without asking. It is off by default and never
+  written to a file. To forget it, open the tunnel and choose **Forget remembered passphrase**
+  under the key file; it is also forgotten when a hop stops using that file and no other does,
+  and dropped when it no longer opens the key (it is then asked again).
 - **SQLite and DuckDB:** pick an existing file with **Browse…**, or create an empty
   database with **New database…** (it never replaces an existing file).
 - **A folder of CSV and Parquet files:** pick **CSV / Parquet folder** and choose the folder.

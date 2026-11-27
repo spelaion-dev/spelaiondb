@@ -145,6 +145,17 @@ in development the window loads Vite's server directly, so `vite.config.ts` read
 sends it as that server's header. The Windows smoke test fails on any refusal the policy
 reports, and checks first that an injected inline script does not run.
 
+**Saved tasks (ADR-089, SDB-33)**
+An export, import, dump, restore or `.sql` file run is saved from its dialog as a task: a
+checked, versioned document of the core's request types in the personal `state.db`, never a
+secret. It runs only when Run is clicked in the Tasks view or `spelaiondb task run NAME` is
+started (the user's own scheduler may do that; there is no schedule in SpelaionDB). Both call
+`spelaion-core::task::run_task`: it resolves the connection the same way (a personal one with the
+folders the task recorded), stops for a yes exactly where the run by hand would ask (the app's
+confirmation, or `--yes`), runs it in a session of its own through the same job functions, and
+records the run (where it ran, its ending, its redacted log) in the store, so the history shows
+runs from both.
+
 **Opening from outside the app (SDB-397)**
 `spelaion-desktop [FOLDER] [FILE.sql …] [--connection ID] [--plan FILE]`: the core reads the
 words (`spelaion-core`'s `launch.rs`). A folder must exist. A file must be an existing `.sql`

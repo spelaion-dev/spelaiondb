@@ -34,14 +34,16 @@ impl Dialect for PostgresDialect {
         Some(copy_block(script, semicolon + 1).data)
     }
 
-    /// A psql meta-command (`\connect`, `\i`, `\set`…) is psql's, not SQL: never sent.
+    /// A psql meta-command (`\connect`, `\i`, `\set`…) is psql's, not SQL, and a client command
+    /// line (ADR-078) is resolved only by the editor's run: neither is ever sent.
     fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
-        statement
-            .starts_with('\\')
-            .then(|| spelaion_driver_api::RequestError {
+        if statement.starts_with('\\') {
+            return Some(spelaion_driver_api::RequestError {
                 position: 0,
                 message: "this is a psql command, not SQL, and SpelaionDB only runs SQL".into(),
-            })
+            });
+        }
+        crate::refuse_client_command(statement)
     }
 
     /// What lies outside strings, quoted names and comments, and outside the data of every
@@ -347,6 +349,11 @@ impl<'a> PostgresScanner<'a> {
             // A psql meta-command, on a line of its own before a statement: not SQL.
             b'\\' if !self.has_code && at_line_start(b, i) => {
                 Some((Opening::MetaLine, line_end(b, i)))
+            }
+            // A client command line (ADR-078), where a statement could begin: a statement of
+            // its own, refused as psql's lines are.
+            b'@' if !self.has_code => {
+                crate::scanner::command_line(script, i).map(|end| (Opening::MetaLine, end))
             }
             // E'…' supports backslash escapes.
             b'\'' => Some((

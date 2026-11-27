@@ -25,12 +25,12 @@ function switcherKeys(): { modifier: string; key: string } {
 import { CommandMenuItem } from "./CommandMenuItem";
 
 /** Distinguishes SQL, table data and table metadata without adding labels to the tab bar. */
-function TabIcon({ kind }: { kind: "query" | "file" | "table" | "details" | "diagram" }) {
+function TabIcon({ kind }: { kind: "query" | "file" | "table" | "details" | "diagram" | "notebook" }) {
   return <Icon name={kind} className="tab-icon" />;
 }
 
-function tabKind(tab: Tab): "query" | "file" | "table" | "details" | "diagram" {
-  return tab.diagram ? "diagram" : tab.tableDetails ? "details" : tab.table ? "table" : tab.file ? "file" : "query";
+function tabKind(tab: Tab): "query" | "file" | "table" | "details" | "diagram" | "notebook" {
+  return tab.diagram ? "diagram" : tab.tableDetails ? "details" : tab.table ? "table" : tab.notebook ? "notebook" : tab.file ? "file" : "query";
 }
 
 /** Pixels the pointer moves before a press on a tab becomes a drag. */

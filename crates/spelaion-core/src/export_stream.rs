@@ -537,7 +537,9 @@ pub const MAX_NAME_PATTERN: usize = 200;
 /// `{date}` (`2026-11-18`), `{time}` (`14-05-09`) and `{timestamp}` (written with
 /// `timestamp_format`, a `strftime` pattern). What it renders is made a safe file name
 /// ([`file_name`]): a pattern cannot reach another folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
 pub struct FileNamePattern {
     pub pattern: String,
     pub timestamp_format: String,
@@ -685,7 +687,7 @@ pub fn file_name(name: &str) -> String {
 
 /// `folder/base.extension`, or `base (2).extension`… if that file (or one being written)
 /// already exists.
-fn free_path(folder: &Path, base: &str, extension: &str) -> PathBuf {
+pub(crate) fn free_path(folder: &Path, base: &str, extension: &str) -> PathBuf {
     let mut n = 1;
     loop {
         let name = if n == 1 {

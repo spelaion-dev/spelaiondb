@@ -155,6 +155,13 @@
   (`src/runState.ts`), and Cancel is offered again only once the core no longer says it is
   cancelling. A statement's ending is `StatementEndItem`; `ScriptFinished` carries only its
   summary.
+  A Run the user presses (the editor's runs and Explain, by button, shortcut or palette) goes
+  through `pressRun` in `EditorTab.tsx`, never straight to `run` (SDB-525): `src/runWait.ts`
+  decides from what blocks the tab, read live (`blockNow`). The session opening, the database
+  list after connecting, the history saving and a view being restored make one run wait, said
+  in the toolbar with Don't run, and it runs once, the text as pressed; a folder change is said,
+  never waited for; the session closing drops it with a word (ADR-028). Internal runs (a
+  result's rerun, pages, refreshes) keep calling `run`. `scripts/run-wait.test.mjs` tests it.
   SDB-377: the update's state is `src-tauri/src/update_state.rs` (unknown, switched off, up to
   date, available with its install ready, downloading or failed, or not installed by the app),
   so a failed download is installed again without a new check and its progress reaches the page
@@ -177,6 +184,18 @@
   before the ticket arrives; `useJobPhase` and `searchRun.ts` keep the `Job`) and stops any job
   with `cancelJob(id, kind)`. A new job is one `jobs::start` call, held until it ends; no map
   to add or remove from.
+  Saved tasks (ADR-089, SDB-33): `src-tauri/src/tasks.rs` only converts. `save_task` turns a
+  dialog's request item (the same `ExportFileOptions`, `ImportRequestItem`, `BackupRequestItem`,
+  `RestoreRequestItem`, `EmbeddedBackupItem` or file path it runs with) into the core's
+  `TaskDocument` on the session's connection key (and, for a personal connection, the open
+  folders' roots), with the session's resolved connection and typed password as the judges of
+  `check_secrets`; a name another task has comes back as `nameTaken` and is replaced only with
+  its id. `run_task` is a `Task` job over `spelaion_core::task::run_task` with
+  `Questions::Ask`: a password or a yes comes back as the outcome, nothing recorded, and the
+  page starts it again with the answer (`password` lives for that run only). The page is
+  `TasksPage.tsx` (a page like the MCP page: `isPage` in `store.ts`), the dialogs' button is
+  `SaveTaskDialog.tsx` (`useSaveTask`); the Windows smoke test's "saved tasks" step saves an
+  export, runs it from the view and from `spelaiondb task run`, and reads both runs back.
 - Split view (SDB-30): the editor area's layout is `useApp`'s `layout`, a `SplitLayout` union
   (`src/splitView.ts`: one tab, or two in panes `first` / `second`, side by side or one above the
   other, with the first pane's share), changed only through its transitions (`split`, `show`,
@@ -192,7 +211,16 @@
   `WebviewWindowBuilder` elsewhere: WebView2 refuses a second webview with other switches) and
   registered in `src-tauri/src/windows.rs` (`Windows`: what each window shows, where its closing
   stands; its unit tests pin the transitions). The page reads its kind once in `main.tsx`
-  (`windowContext.ts`); a results window renders `ResultsWindow.tsx` instead of `App`. Session
+  (`windowContext.ts`); a results window renders `ResultsWindow.tsx` instead of `App`. Each
+  window reads its personal preferences once at start (`preferences.ts`, the shortcuts, the
+  snippets, the display format, the update check). Every command that saves one, and the
+  settings import, ends with `preferences_sync::announce` (`PreferencesChanged`: which kinds
+  changed, SDB-533, SDB-535); each window reads those again from the core
+  (`preferenceSync.ts`, an exhaustive switch over `PreferenceKind`), and a setting it is still
+  saving keeps what it shows (`savedSetting.changedElsewhere`). A new personal preference a
+  window keeps gets a `PreferenceKind` and an announce in its setter, or a window opened earlier
+  shows the old value and saves it back. The side panel is left out: each window's layout.
+  Session
   keys come from `store.ts` (tabs) and `explorerSession` (explorer), both with `sessionPrefix()`:
   never write `meta:…` or `tab-${n}` by hand. A PostgreSQL connection that opens several
   databases (ADR-074, SDB-504) has a database level in the explorer (`DatabaseNode` in
@@ -296,6 +324,38 @@
   folder's types, and a connection's sessions are told apart by folder as well as id. An
   "untrusted" outcome (`ConnectOutcome`, `ConnectionTestOutcome`, `EditorAccessOutcome`) names
   the folder it is about (`root`), which the page trusts: not always the shown one.
+- The editor's run reads a script's variables and client commands through the core before
+  anything else (ADR-078, SDB-467 and SDB-468): `EditorTab.tsx`'s `withVariables` asks
+  `script_variables` which values are missing (`missing_variables`) and then `resolve_script`,
+  whose text is what runs and what the guard (`script_risks`, then `check_run`) reads. Both take
+  the tab's file (`tab.file.path`, `null` for a console); `script_tree` (`lib.rs`) makes its
+  `ScriptTree` from the open folders (`OpenFolders::paths`), and the reading runs on a blocking
+  thread because `@include` reads files. Its `@echo` lines and included files' names travel in
+  the run's options (`RunOptionsItem::echoes`) and come back as `ScriptEvent::Echo` and
+  `ScriptEvent::Included` when the run reaches each (`start_script`, through
+  `spelaion_core::with_echoes`); the files it read travel as `RunOptionsItem::files`, and
+  `start_script` refuses the run with `check_included_files` when one changed after the guard's
+  question. The statements' origins stay in the page for the run: the risk dialog and a failed
+  statement's message name an included statement's file and line. The page never resolves a
+  command, and a command line it sent unresolved is refused by the session (SDB-466). Only the
+  editor's runs do this: table data, notebook cells, plans and every other run send no echoes and
+  resolve nothing.
+- SQL notebooks (ADR-087, SDB-36): a notebook tab is a file tab (`tab.file`, `tab.sql`) with
+  `tab.notebook` (`store.ts`): `sql` is the notebook's text as the core writes it from the cells
+  (`notebook_text`, `notebook.ts`'s `syncNotebookText`, after each change and before every save),
+  so saving, the changed-on-disk check, the unsaved mark, closing's question and kept tabs are
+  `sqlFiles.ts`'s and ADR-036's; an opened or restored notebook reads its cells from its text
+  (`parse_notebook`) and is not written again until a cell changes. `.md` paths open as notebooks
+  (`openFilePath`). `NotebookTab.tsx` runs a cell as the editor runs a script: `expand_notebook_cell`
+  (the core's CTE expansion with the session's dialect), `script_risks` and the confirmation,
+  then `run_notebook_cell` (`notebook.rs`), which is `start_script` with the cell's results key
+  (`cell_results_key`), so `check_run`, the history and the run options are the editor's; never
+  run a cell's text any other way. Each cell's results are freed with the tab (`close_editor`
+  frees its cells' keys too) or when the cell goes (`release_notebook_cell`). Markdown is drawn
+  from `notebook_markdown`'s blocks as React text; links and images are never followed or
+  fetched. The HTML export (`export_notebook_html`) sends result ids and a shown chart's SVG,
+  never rows. A command that acts on an editor tab excludes notebooks (`editorTab` in
+  `commands.ts` and the other kind checks); `fileTab` is the editor's or a notebook's.
 - The frontend build checks token use in `styles.css` and the canvas code with
   `scripts/check-ui-tokens.mjs`. Its counted baseline records existing declarations; remove
   each fixed occurrence from `scripts/ui-tokens-baseline.json` in the same change.

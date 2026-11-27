@@ -1,6 +1,6 @@
 use spelaion_driver_api::{Dialect, StatementSpan};
 
-use crate::{is_white_space_at, trimmed};
+use crate::scanner::{self, RegionKind, SemicolonScanner};
 
 /// HiveQL's lexical rules, which Spark SQL and Impala share, under each engine's own name (`hive`,
 /// `spark`, `kyuubi`, `impala`): `` `…` `` names with a doubled backquote, strings in `'…'` and in
@@ -25,12 +25,17 @@ impl Dialect for HiveDialect {
         self.name
     }
 
+    /// A client command line (ADR-078) is resolved only by the editor's run: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        crate::refuse_client_command(statement)
+    }
+
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         split(script)
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, skip_non_code)
+        scanner::code_ranges(SemicolonScanner::new(script, opening))
     }
 
     /// Always in backquotes, a `` ` `` doubled: the only way these engines quote a name.
@@ -40,45 +45,13 @@ impl Dialect for HiveDialect {
 }
 
 pub(crate) fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut has_code = false;
-    let mut i = 0;
-    while i < b.len() {
-        if let Some(end) = skip_non_code(script, i) {
-            if matches!(b[i], b'\'' | b'"' | b'`') {
-                has_code = true;
-            }
-            i = end.max(i + 1);
-            continue;
-        }
-        match b[i] {
-            b';' => {
-                if has_code {
-                    spans.extend(trimmed(script, start, i));
-                }
-                i += 1;
-                start = i;
-                has_code = false;
-            }
-            _ => {
-                if !is_white_space_at(script, i) {
-                    has_code = true;
-                }
-                i += 1;
-            }
-        }
-    }
-    if has_code {
-        spans.extend(trimmed(script, start, b.len()));
-    }
-    spans
+    scanner::statements(SemicolonScanner::new(script, opening))
 }
 
-/// The byte after the string, quoted name or comment that starts at `i`; `None` when none
-/// starts there. An unterminated one runs to the end of the script.
-pub(crate) fn skip_non_code(script: &str, i: usize) -> Option<usize> {
+/// The string, quoted name or comment that starts at byte `i`, with the byte after it; `None`
+/// when none starts there. An unterminated one runs to the end of the script. The scanner's one
+/// reading of them (HiveQL's statements end at a `;` outside them: [`SemicolonScanner`]).
+fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
     match *b.get(i)? {
         q @ (b'\'' | b'"') => {
@@ -86,11 +59,11 @@ pub(crate) fn skip_non_code(script: &str, i: usize) -> Option<usize> {
             while j < b.len() {
                 match b[j] {
                     b'\\' => j += 2,
-                    c if c == q => return Some(j + 1),
+                    c if c == q => return Some((RegionKind::String, j + 1)),
                     _ => j += 1,
                 }
             }
-            Some(b.len())
+            Some((RegionKind::String, b.len()))
         }
         b'`' => {
             let mut j = i + 1;
@@ -100,23 +73,25 @@ pub(crate) fn skip_non_code(script: &str, i: usize) -> Option<usize> {
                         j += 2;
                         continue;
                     }
-                    return Some(j + 1);
+                    return Some((RegionKind::QuotedName, j + 1));
                 }
                 j += 1;
             }
-            Some(b.len())
+            Some((RegionKind::QuotedName, b.len()))
         }
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((
+            RegionKind::Comment,
             b[i..]
                 .iter()
                 .position(|&c| c == b'\n')
                 .map_or(b.len(), |p| i + p + 1),
-        ),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(
+        )),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((
+            RegionKind::Comment,
             script[i + 2..]
                 .find("*/")
                 .map_or(b.len(), |p| i + 2 + p + 2),
-        ),
+        )),
         _ => None,
     }
 }

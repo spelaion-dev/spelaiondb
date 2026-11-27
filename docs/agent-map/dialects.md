@@ -12,9 +12,12 @@
   `Dialect::with_sql_mode` gives the session's dialect, which `spelaion-core`'s `sql_mode.rs`
   reads when the session opens and after a statement that names `sql_mode`. T-SQL batches
   (`GO`, `BEGIN … END`) are split in `sqlserver.rs`; a `DECLARE` keeps the rest of its batch,
-  where its variables live (the guard still checks each statement in it). SQLite's
-  `skip_quote_or_comment` and `code_line_starts` are what `remote.rs` relies on to keep a
-  dot-command away from the server's shell: any change to them needs its tests there too.
+  where its variables live (the guard still checks each statement in it). The remote
+  SQLite check (`remote.rs`, ADR-065 step 6) reads SQLite's scanner through `sqlite.rs`'s
+  `statement_start` and `code_line_starts`, both built from `SqliteScanner`'s regions, and keeps
+  only the `sqlite3` shell's own line rules (a line starting with `.` or `#`) to itself: it is
+  what keeps a dot-command away from the server's shell, so any change to SQLite's scanner
+  needs `remote.rs`'s tests too.
 - White space is one rule for every splitter (SDB-434): Unicode's, as `str::trim` reads it
   (a no-break space, a vertical tab, U+2028, U+3000 too). `lib.rs`'s `is_white_space_at` says
   whether a byte is white space, `white_space_before` whether a word may start after it, and
@@ -49,8 +52,52 @@
   `[names]`, nested comments, `GO` lines (a statement end, code; a `--` comment after the `GO`
   is a comment), `BEGIN … END` blocks and the rest of a batch a `DECLARE` or a module takes;
   `split`, `code_ranges`, `first_word` and `counts_rows` read its regions, and it gives the
-  guard its first word (`Dialect::first_word`). Every other dialect, PostgreSQL and MySQL
-  included for now, answers `None` there and the guard reads the word through its
-  `code_ranges`. Until another dialect moves, a rule its splitter learns (a quote, a meta line,
-  white space) must be copied into its other readers (`code_ranges`'s skip function) in the
-  same change: that gap is what SDB-436, 437 and 439 were.
+  guard its first word (`Dialect::first_word`). SQLite has moved (SDB-456): `SqliteScanner` in
+  `sqlite.rs` reads quotes and comments through `skip_quote_or_comment` and keeps a
+  `CREATE [TEMP] TRIGGER`'s `BEGIN … END` depth from the statement's first words; `split` and
+  `code_ranges` read its regions.
+  DuckDB has moved (SDB-456): its statements end at a `;` outside what `opening` in `duckdb.rs`
+  reads (strings, `E'…'` too, quoted names, nested comments, `$tag$` bodies), so its scanner is
+  `scanner.rs`'s `SemicolonScanner` given that `opening`; `split` and `code_ranges` read its
+  regions through `scanner.rs`'s `statements` and `code_ranges`. A dialect whose words decide
+  nothing about where a statement ends moves the same way: an `Opening` of its own, the shared
+  scanner.
+  Oracle has moved (SDB-456): `OracleScanner` in `oracle.rs` reads strings (`q'[…]'`, `N'…'`),
+  names and comments through `opening`, ends any statement at a line holding only `/` and
+  decides at a statement's first code whether it is a PL/SQL unit (`is_plsql`, whose words read
+  `opening` too; the guard calls it). `skip_non_code` is `opening` without the kind.
+  ClickHouse has moved (SDB-456): its `opening` in `clickhouse.rs` reads strings, names (both
+  with backslash escapes), `--` and `# ` comments, nested block comments and `$tag$` heredocs,
+  for the `SemicolonScanner`.
+  Trino has moved (SDB-456): `opening` in `trino.rs` is standard SQL's reading (`'…'`, `"…"`,
+  `--`, block comments that do not nest), which the standard dialect (`standard.rs`, the Flight
+  SQL engines) reads too, through `trino::split` and `trino::code_ranges`.
+  Hive has moved (SDB-456): `opening` in `hive.rs` reads HiveQL's strings (`'…'` and `"…"`,
+  backslash escapes), backquoted names and comments for Hive, Spark, Kyuubi and Impala alike.
+  Spanner has moved (SDB-456): `opening` in `spanner.rs` reads GoogleSQL's `'…'` and `"…"`
+  strings (triple-quoted too), backquoted names and `--`, `#` and block comments.
+  Databend has moved (SDB-456): `opening` in `databend.rs` reads its strings and names
+  (backslash escapes, doubled quotes), backticked names, `--` and block comments and `$$`
+  bodies.
+  TDengine has moved (SDB-456): `TdengineScanner` in `tdengine.rs` reads strings, backquoted
+  names and comments through `opening`, and keeps what its splitter decides with: whether the
+  statement's code holds a word, and where its first code is (leading comments are left out of
+  what is sent). `words`, which the guard's `statement_class` and `refuse_statement` read,
+  reads the scanner's code ranges.
+  CQL has moved (SDB-456): `CqlScanner` in `cql.rs` reads strings, names, `$$` bodies and `--`,
+  `//` and block comments through `opening`, and keeps the statement's words as it goes, so it
+  tells an unapplied `BEGIN … BATCH` (whose `;` do not end it) without reading the statement
+  again at every `;`. `words` and `batch_class`, which the guard reads, read the scanner's code
+  ranges.
+  Every SQL dialect has moved: a rule a splitter learns (a quote, a meta line, white space)
+  goes into its scanner alone, and every reader has it.
+  Client command lines (ADR-078, SDB-466): every SQL dialect's scanner reads a line that starts
+  with `@` and an ASCII letter, with only white space before it on its line and no code yet in
+  the statement (`scanner::command_line`), as a `MetaLine` statement of its own, with no strings
+  or comments in it; anywhere else an `@` is what it was (a string, `SELECT` then `@x := 1`,
+  Spanner's `@{…}` hint). Every SQL dialect's `refuse_statement` refuses it
+  (`refuse_client_command`: a known command that nothing resolves, `@export` for good, an
+  unknown `@word`). CQL and TDengine, which are not SQL (ADR-056), have none. A new SQL dialect
+  checks for the line where a statement could begin and refuses it the same way
+  (`tests/command_lines.rs`). Every dialect but SQL Server answers
+  `None` to `first_word` for now, and the guard reads the word through its `code_ranges`.

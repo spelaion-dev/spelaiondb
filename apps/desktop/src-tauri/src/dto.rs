@@ -1059,6 +1059,244 @@ impl From<EditorSnippetItem> for spelaion_core::EditorSnippet {
     }
 }
 
+/// What a settings file holds, and what importing it changes or changed (SDB-31).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsSummaryItem {
+    pub app_version: String,
+    pub exported_at: String,
+    /// Settings other than shortcuts and snippets.
+    pub settings: u32,
+    pub shortcuts: u32,
+    pub snippets: u32,
+    /// `${user.…}` variables that are new or get another value.
+    pub variables: Vec<String>,
+    /// The tunnels' local port range it sets, as `[min, max]`.
+    pub tunnel_ports: Option<TunnelPortsItem>,
+    pub masking_added: Vec<String>,
+    pub types_added: Vec<String>,
+    pub types_kept: Vec<String>,
+    /// The MCP read-only mode is on here and stays on, though the file has it off.
+    pub mcp_read_only_kept: bool,
+    /// What the file has that this version does not know, left out.
+    pub skipped: Vec<String>,
+}
+
+impl From<spelaion_core::SettingsSummary> for SettingsSummaryItem {
+    fn from(summary: spelaion_core::SettingsSummary) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            app_version: summary.app_version,
+            exported_at: summary.exported_at,
+            settings: count(summary.settings),
+            shortcuts: count(summary.shortcuts),
+            snippets: count(summary.snippets),
+            variables: summary.variables,
+            tunnel_ports: summary
+                .tunnel_ports
+                .map(|(min, max)| TunnelPortsItem { min, max }),
+            masking_added: summary.masking_added,
+            types_added: summary.types_added,
+            types_kept: summary.types_kept,
+            mcp_read_only_kept: summary.mcp_read_only_kept,
+            skipped: summary.skipped,
+        }
+    }
+}
+
+/// How much a log entry matters (SDB-31); as a filter, the least important level shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum LogLevelItem {
+    Error,
+    Warning,
+    Info,
+}
+
+impl From<LogLevelItem> for spelaion_core::LogLevel {
+    fn from(level: LogLevelItem) -> Self {
+        match level {
+            LogLevelItem::Error => spelaion_core::LogLevel::Error,
+            LogLevelItem::Warning => spelaion_core::LogLevel::Warning,
+            LogLevelItem::Info => spelaion_core::LogLevel::Info,
+        }
+    }
+}
+
+impl From<spelaion_core::LogLevel> for LogLevelItem {
+    fn from(level: spelaion_core::LogLevel) -> Self {
+        match level {
+            spelaion_core::LogLevel::Error => LogLevelItem::Error,
+            spelaion_core::LogLevel::Warning => LogLevelItem::Warning,
+            spelaion_core::LogLevel::Info => LogLevelItem::Info,
+        }
+    }
+}
+
+/// One entry of the app log, scrubbed by the core.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntryItem {
+    /// When it was written (UTC, ISO 8601); empty for a line the log did not write.
+    pub time: String,
+    pub level: LogLevelItem,
+    pub message: String,
+}
+
+/// What Settings › Logs shows: the entries a filter keeps, newest first, how many of each
+/// level the log has, and where its file is.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LogPageItem {
+    pub path: String,
+    pub entries: Vec<LogEntryItem>,
+    pub errors: u32,
+    pub warnings: u32,
+    pub infos: u32,
+}
+
+impl LogPageItem {
+    pub fn new(path: &std::path::Path, page: spelaion_core::LogPage) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            path: path.display().to_string(),
+            entries: page
+                .entries
+                .into_iter()
+                .map(|entry| LogEntryItem {
+                    time: entry.time,
+                    level: entry.level.into(),
+                    message: entry.message,
+                })
+                .collect(),
+            errors: count(page.errors),
+            warnings: count(page.warnings),
+            infos: count(page.infos),
+        }
+    }
+}
+
+/// What exporting personal connections wrote (ADR-088).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionsExportedItem {
+    pub connections: u32,
+    pub network_profiles: u32,
+    /// Keychain passwords carried, encrypted.
+    pub secrets: u32,
+    /// No system keychain here: no password could be carried.
+    pub without_keychain: bool,
+    /// Network profiles the connections name that are not personal: not in the file.
+    pub profiles_not_carried: Vec<String>,
+}
+
+impl From<spelaion_config::ConnectionsExported> for ConnectionsExportedItem {
+    fn from(exported: spelaion_config::ConnectionsExported) -> Self {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Self {
+            connections: count(exported.connections),
+            network_profiles: count(exported.network_profiles),
+            secrets: count(exported.secrets),
+            without_keychain: exported.without_keychain,
+            profiles_not_carried: exported.profiles_not_carried,
+        }
+    }
+}
+
+/// Whether an item of a connections file is a connection or a network profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferItemKindItem {
+    Connection,
+    NetworkProfile,
+}
+
+impl From<spelaion_config::ItemKind> for TransferItemKindItem {
+    fn from(kind: spelaion_config::ItemKind) -> Self {
+        match kind {
+            spelaion_config::ItemKind::Connection => TransferItemKindItem::Connection,
+            spelaion_config::ItemKind::NetworkProfile => TransferItemKindItem::NetworkProfile,
+        }
+    }
+}
+
+/// What importing an item of a connections file would do, as the core decided.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ImportStateItem {
+    New,
+    Exists,
+    Refused { reason: String },
+    Invalid { reason: String },
+}
+
+/// One item of a connections file, as its import preview shows it.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionImportItem {
+    pub kind: TransferItemKindItem,
+    pub id: String,
+    pub name: String,
+    pub state: ImportStateItem,
+    pub secrets: u32,
+}
+
+impl From<spelaion_config::ImportItem> for ConnectionImportItem {
+    fn from(item: spelaion_config::ImportItem) -> Self {
+        Self {
+            kind: item.kind.into(),
+            id: item.id,
+            name: item.name,
+            state: match item.state {
+                spelaion_config::ItemState::New => ImportStateItem::New,
+                spelaion_config::ItemState::Exists => ImportStateItem::Exists,
+                spelaion_config::ItemState::Refused(reason) => ImportStateItem::Refused { reason },
+                spelaion_config::ItemState::Invalid(reason) => ImportStateItem::Invalid { reason },
+            },
+            secrets: u32::try_from(item.secrets).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// What happened to an item on import.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ImportOutcomeItem {
+    Added,
+    Replaced,
+    Skipped,
+    NotImported { reason: String },
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionImportResultItem {
+    pub kind: TransferItemKindItem,
+    pub id: String,
+    pub outcome: ImportOutcomeItem,
+}
+
+impl From<spelaion_config::ImportResult> for ConnectionImportResultItem {
+    fn from(result: spelaion_config::ImportResult) -> Self {
+        Self {
+            kind: result.kind.into(),
+            id: result.id,
+            outcome: match result.outcome {
+                spelaion_config::ItemOutcome::Added => ImportOutcomeItem::Added,
+                spelaion_config::ItemOutcome::Replaced => ImportOutcomeItem::Replaced,
+                spelaion_config::ItemOutcome::Skipped => ImportOutcomeItem::Skipped,
+                spelaion_config::ItemOutcome::NotImported(reason) => {
+                    ImportOutcomeItem::NotImported { reason }
+                }
+                spelaion_config::ItemOutcome::Failed(reason) => {
+                    ImportOutcomeItem::Failed { reason }
+                }
+            },
+        }
+    }
+}
+
 /// One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
 /// app's registry and the keys it now has, as the registry writes them, or none.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -2202,6 +2440,16 @@ pub enum ScriptEvent {
     HistoryWarning {
         message: String,
     },
+    /// A script's `@echo` line, when the run reached it (ADR-078): its text, as written. Not a
+    /// statement.
+    Echo {
+        text: String,
+    },
+    /// An included file starts (ADR-078, point 7): its name, relative to the script's folder
+    /// tree with `/`.
+    Included {
+        file: String,
+    },
 }
 
 /// How far a stored result got (SDB-367), as the core says it: the page shows it and never
@@ -2459,12 +2707,127 @@ impl From<OnErrorItem> for spelaion_core::ScriptErrorMode {
 }
 
 /// How one run goes: its error mode and, if set, its own statement timeout.
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOptionsItem {
     pub on_error: OnErrorItem,
     /// Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run.
     pub timeout_seconds: Option<u32>,
+    /// The run's `@echo` lines and included files' names (ADR-078), as `resolve_script` gave
+    /// them: none for any other run. Only shown, never a statement.
+    #[serde(default)]
+    pub echoes: Vec<ScriptEchoItem>,
+    /// The files the run included, with the hash of what was read: the run is refused when one
+    /// of them changed since (ADR-078, point 4). None for any other run.
+    #[serde(default)]
+    pub files: Vec<IncludedFileItem>,
+}
+
+/// What the Messages tab shows when the run reaches it (ADR-078).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EchoLineItem {
+    /// An `@echo` line's text, as written.
+    Echo { text: String },
+    /// An included file starts: its name.
+    Included { file: String },
+}
+
+/// A line for the Messages tab, by the statement it comes before.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptEchoItem {
+    /// The statement of the resolved script it comes before (the number of statements when it
+    /// comes after the last one).
+    pub before: u32,
+    pub line: EchoLineItem,
+}
+
+impl From<spelaion_core::ScriptEcho> for ScriptEchoItem {
+    fn from(echo: spelaion_core::ScriptEcho) -> Self {
+        Self {
+            before: u32::try_from(echo.before).unwrap_or(u32::MAX),
+            line: match echo.line {
+                spelaion_core::EchoLine::Echo(text) => EchoLineItem::Echo { text },
+                spelaion_core::EchoLine::Included(file) => EchoLineItem::Included { file },
+            },
+        }
+    }
+}
+
+impl From<ScriptEchoItem> for spelaion_core::ScriptEcho {
+    fn from(echo: ScriptEchoItem) -> Self {
+        Self {
+            before: echo.before as usize,
+            line: match echo.line {
+                EchoLineItem::Echo { text } => spelaion_core::EchoLine::Echo(text),
+                EchoLineItem::Included { file } => spelaion_core::EchoLine::Included(file),
+            },
+        }
+    }
+}
+
+/// A file a run included (ADR-078, point 7).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct IncludedFileItem {
+    /// Canonical.
+    pub path: String,
+    /// Relative to the script's folder tree, with `/`.
+    pub name: String,
+    /// SHA-256 of what was read.
+    pub hash: String,
+}
+
+impl From<spelaion_core::IncludedFile> for IncludedFileItem {
+    fn from(file: spelaion_core::IncludedFile) -> Self {
+        Self {
+            path: file.path.to_string_lossy().into_owned(),
+            name: file.name,
+            hash: file.hash,
+        }
+    }
+}
+
+impl From<IncludedFileItem> for spelaion_core::IncludedFile {
+    fn from(file: IncludedFileItem) -> Self {
+        Self {
+            path: std::path::PathBuf::from(file.path),
+            name: file.name,
+            hash: file.hash,
+        }
+    }
+}
+
+/// Where a statement of a resolved script was written.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementOriginItem {
+    /// The included file, relative to the script's tree; `null` for the tab's own text.
+    pub file: Option<String>,
+    /// Its first line in that text, from 1.
+    pub line: u32,
+}
+
+impl From<spelaion_core::StatementOrigin> for StatementOriginItem {
+    fn from(origin: spelaion_core::StatementOrigin) -> Self {
+        Self {
+            file: origin.file,
+            line: u32::try_from(origin.line).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// A script the editor runs, with its client commands resolved by the core (ADR-078): the text
+/// the run sends, which its guard and read-only check read, its `@echo` lines and included
+/// files' names, where each statement comes from, and the files it read.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedScriptItem {
+    pub text: String,
+    pub echoes: Vec<ScriptEchoItem>,
+    pub origins: Vec<StatementOriginItem>,
+    pub files: Vec<IncludedFileItem>,
 }
 
 /// The answer to a paused run.
@@ -3718,10 +4081,24 @@ pub enum InteractionKind {
     rename_all_fields = "camelCase"
 )]
 pub enum SecretLabel {
-    KeyPassphrase { path: String, retry: bool },
-    Password { user: String, host: String },
-    ProxyPassword { user: String, host: String },
-    Challenge { host: String, instructions: String },
+    /// `can_remember`: the dialog offers "Remember in the system keychain" (ADR-090).
+    KeyPassphrase {
+        path: String,
+        retry: bool,
+        can_remember: bool,
+    },
+    Password {
+        user: String,
+        host: String,
+    },
+    ProxyPassword {
+        user: String,
+        host: String,
+    },
+    Challenge {
+        host: String,
+        instructions: String,
+    },
 }
 
 /// One engine in the "add connection" picker. `available`: it has a driver and can be used.
@@ -6498,11 +6875,39 @@ pub struct AuditEventItem {
     /// The connection's folder (ADR-075); none for a personal connection, and for entries
     /// written before 0.17.
     pub folder: Option<String>,
+    /// The database the statement ran in (SDB-32), where the engine has one to tell apart from
+    /// the connection; none otherwise, and for entries written before 0.18.
+    pub database: Option<String>,
+    /// What kind of call it was, from its tool (SDB-32): read, write or catalog.
+    pub action: AuditActionItem,
+}
+
+/// What kind of call an MCP entry records (SDB-32), as the core reads it from the tool.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AuditActionItem {
+    Read,
+    Write,
+    Catalog,
+    Unknown,
+}
+
+impl From<spelaion_core::audit::AuditAction> for AuditActionItem {
+    fn from(action: spelaion_core::audit::AuditAction) -> Self {
+        use spelaion_core::audit::AuditAction;
+        match action {
+            AuditAction::Read => AuditActionItem::Read,
+            AuditAction::Write => AuditActionItem::Write,
+            AuditAction::Catalog => AuditActionItem::Catalog,
+            AuditAction::Unknown => AuditActionItem::Unknown,
+        }
+    }
 }
 
 impl From<spelaion_core::AuditRecord> for AuditEventItem {
     fn from(record: spelaion_core::AuditRecord) -> Self {
         let e = spelaion_core::audit::redacted(&record.entry);
+        let action = spelaion_core::audit::action(e.tool.as_deref()).into();
         Self {
             id: record.id,
             at_ms: e.at_ms,
@@ -6516,6 +6921,8 @@ impl From<spelaion_core::AuditRecord> for AuditEventItem {
             duration_ms: e.duration_ms,
             detail: e.detail,
             folder: e.folder,
+            database: e.database,
+            action,
         }
     }
 }
@@ -7175,6 +7582,9 @@ pub struct OpenTabItem {
     pub timeout_seconds: Option<u32>,
     pub snippet_name: Option<String>,
     pub file: Option<OpenTabFileItem>,
+    /// A notebook tab (ADR-087): `text` is the notebook's document as its file holds it.
+    #[serde(default)]
+    pub notebook: bool,
 }
 
 impl From<OpenTabItem> for spelaion_core::SavedTab {
@@ -7197,6 +7607,7 @@ impl From<OpenTabItem> for spelaion_core::SavedTab {
             }),
             // Its place in the window is the core's to give (`window_sets`).
             window_position: None,
+            notebook: t.notebook,
         }
     }
 }
@@ -7222,6 +7633,7 @@ impl From<spelaion_core::SavedTab> for OpenTabItem {
                 },
                 modified: f.modified,
             }),
+            notebook: t.notebook,
         }
     }
 }

@@ -22,12 +22,17 @@ impl Dialect for StandardDialect {
         self.name
     }
 
+    /// A client command line (ADR-078) is resolved only by the editor's run: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        crate::refuse_client_command(statement)
+    }
+
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         crate::trino::split(script)
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        spelaion_driver_api::code_ranges(script, crate::trino::skip_non_code)
+        crate::trino::code_ranges(script)
     }
 
     /// Always in double quotes, a `"` doubled.

@@ -10,6 +10,14 @@
 //! folder's connection reads only its own folder, and its definition is the same whatever else
 //! is open; with one folder open, every definition is what it was before several could be.
 //!
+//! A connection that goes through a network profile is also opened from the team's
+//! `known_hosts` its tunnel is checked against (SDB-527): its own folder's
+//! `.spelaion/known_hosts`, as the resolver gives it. A change to that file (a server's new
+//! key) makes the next session open from the saved configuration, which goes through ADR-022's
+//! review, instead of reusing a session opened before it. A connection without a profile, or
+//! one through a Kubernetes profile (no SSH), reads no `known_hosts` and its definition does not
+//! hold it.
+//!
 //! A session opened earlier is still what the configuration says while this stays the same.
 //! The app keeps the definition each session was opened from, and the core compares it with
 //! the current one before another session is made from it (`spelaion-core`'s
@@ -39,6 +47,10 @@ pub struct ConnectionDefinition {
     /// A personal connection with several folders open (ADR-075): what it reads of each, in
     /// the order they were opened. Empty for a folder's connection, and with one folder open.
     open_folders: Vec<FolderKey>,
+    /// The team's `known_hosts` a tunnelled connection is checked against when it reads one
+    /// folder (SDB-527): its bytes, or `None` when there is no tunnel, no folder or no file.
+    /// With several folders, `open_folders` holds each one's.
+    known_hosts: Option<Vec<u8>>,
 }
 
 /// What a personal connection reads of one open folder (ADR-075): whether it is trusted, its
@@ -123,18 +135,29 @@ impl Config {
         } else {
             Vec::new()
         };
+        // The profile the resolver would use, from whichever folder it comes.
+        let tunnel = entry.file.tunnel.as_deref().and_then(|name| {
+            match crate::folders::profile(self, &configs, entry.id.source, name) {
+                crate::folders::Profile::Found(_, t) => Some((t.file_path.clone(), t.file.clone())),
+                crate::folders::Profile::Missing | crate::folders::Profile::Several(_) => None,
+            }
+        });
+        // A tunnel (not a Kubernetes profile, which opens no SSH) is checked against the
+        // `known_hosts` of the folder it reads, as `Resolver::team_known_hosts` reads them.
+        let ssh = tunnel
+            .as_ref()
+            .is_some_and(|(_, file)| file.kubernetes.is_none());
+        let known_hosts = match (ssh, folders.as_slice()) {
+            (true, [folder]) => folder
+                .workspace_root
+                .as_deref()
+                .and_then(|root| std::fs::read(crate::trust::team_known_hosts(root)).ok()),
+            _ => None,
+        };
         Some(ConnectionDefinition {
             file_path: entry.file_path.clone(),
             file: entry.file.clone(),
-            // The profile the resolver would use, from whichever folder it comes.
-            tunnel: entry.file.tunnel.as_deref().and_then(|name| {
-                match crate::folders::profile(self, &configs, entry.id.source, name) {
-                    crate::folders::Profile::Found(_, t) => {
-                        Some((t.file_path.clone(), t.file.clone()))
-                    }
-                    crate::folders::Profile::Missing | crate::folders::Profile::Several(_) => None,
-                }
-            }),
+            tunnel,
             user: self.user.clone(),
             user_unreadable: self.user_unreadable,
             types: [
@@ -144,6 +167,7 @@ impl Config {
             workspace_root: self.workspace_root.clone(),
             trusted,
             open_folders,
+            known_hosts,
         })
     }
 }

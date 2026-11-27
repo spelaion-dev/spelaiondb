@@ -23,6 +23,11 @@ impl Dialect for SqlServerDialect {
         "sqlserver"
     }
 
+    /// A client command line (ADR-078) is resolved only by the editor's run: never sent.
+    fn refuse_statement(&self, statement: &str) -> Option<spelaion_driver_api::RequestError> {
+        crate::refuse_client_command(statement)
+    }
+
     fn split_statements(&self, script: &str) -> Vec<StatementSpan> {
         split(script)
     }
@@ -372,6 +377,8 @@ enum Opening {
     Quoted {
         string: bool,
     },
+    /// A client command line (ADR-078), where a statement could begin.
+    Command,
     StatementEnd,
 }
 
@@ -429,6 +436,9 @@ impl<'a> SqlServerScanner<'a> {
                 Some((Opening::Comment { line: false }, block_comment_end(b, i)))
             }
             b';' if self.depth == 0 && !self.rest_of_batch => Some((Opening::StatementEnd, i + 1)),
+            b'@' if !self.has_code => {
+                crate::scanner::command_line(self.script, i).map(|end| (Opening::Command, end))
+            }
             _ => None,
         }
     }
@@ -450,6 +460,13 @@ impl<'a> SqlServerScanner<'a> {
                     self.at_line_start = true;
                 }
                 RegionKind::Comment
+            }
+            Opening::Command => {
+                // A statement of its own, which the session refuses wherever nothing resolves
+                // it; its newline is white space of what follows.
+                let statement = crate::trimmed(self.script, range.start, range.end);
+                self.start = end;
+                RegionKind::MetaLine { statement }
             }
             Opening::Quoted { string } => {
                 self.has_code = true;

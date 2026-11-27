@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use spelaion_driver_api::{Dialect, StatementSpan};
+use spelaion_driver_api::{Dialect, RequestError, StatementSpan};
 
 pub mod clickhouse;
 pub mod cql;
@@ -51,6 +51,46 @@ pub use sqlserver::SqlServerDialect;
 pub use standard::StandardDialect;
 pub use tdengine::TdengineDialect;
 pub use trino::TrinoDialect;
+
+/// The client commands of SpelaionDB's scripts (ADR-078): what a line starting with `@` may
+/// name. `@export` is not one of them: it is refused for good, with what to do instead.
+pub const CLIENT_COMMANDS: &[&str] = &["set", "unset", "echo", "include"];
+
+/// The word of the client command line (ADR-078) that `statement` starts with, lower case:
+/// `@` and an ASCII letter, then letters, digits and `_`. `None` for any other statement. A
+/// SQL dialect's scanner gives such a line as a statement of its own.
+pub fn client_command(statement: &str) -> Option<String> {
+    let rest = statement.trim_start().strip_prefix('@')?;
+    if !rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    Some(
+        rest.chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect::<String>()
+            .to_ascii_lowercase(),
+    )
+}
+
+/// Why a client command line (ADR-078) is not sent, when `statement` is one: nothing resolves
+/// a command where a statement is sent, an `@export` is never built, and an unknown `@word` is
+/// not a command. A line starting with `@` and a letter is never sent to a server as SQL.
+pub fn refuse_client_command(statement: &str) -> Option<RequestError> {
+    let word = client_command(statement)?;
+    let message = match word.as_str() {
+        "export" => "@export is not supported: run the query, then use Export".to_string(),
+        known if CLIENT_COMMANDS.contains(&known) => format!(
+            "@{known} is a command of SpelaionDB's scripts, and nothing runs it here: it is never sent to the server"
+        ),
+        unknown => format!(
+            "@{unknown} is not a command of SpelaionDB's scripts, and a line starting with @ is never sent to the server as SQL"
+        ),
+    };
+    Some(RequestError {
+        position: 0,
+        message,
+    })
+}
 
 /// Whether a backslash escapes the next character in a `'…'` string of the dialect named
 /// `name` (its [`Dialect::name`]), as that dialect's splitter reads it: ClickHouse, Databend,

@@ -10,7 +10,8 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 /// What a script run does when a statement fails.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum OnError {
     /// The run stops at the failed statement; the rest is not run.
     #[default]
@@ -305,4 +306,42 @@ mod tests {
             "stopped at statement 3, which failed"
         );
     }
+}
+
+/// What a run whose client commands were resolved yields (ADR-078): its events, and each
+/// `@echo` line and included file's name when the run reaches it.
+#[derive(Debug)]
+pub enum RunItem {
+    Event(crate::CoreEvent),
+    Echo(crate::EchoLine),
+}
+
+/// The run's events with its `@echo` lines and included files' names (ADR-078, points 6 and
+/// 7): each comes just before the statement after it starts; the ones after the last statement
+/// come when the run went through every statement, before its end. A run that stopped earlier never reaches the rest. An echo
+/// is not a statement: the run's summary does not count it.
+pub fn with_echoes(
+    mut events: futures_util::stream::BoxStream<'static, crate::CoreEvent>,
+    echoes: Vec<crate::ScriptEcho>,
+) -> futures_util::stream::BoxStream<'static, RunItem> {
+    use futures_util::StreamExt;
+    Box::pin(async_stream::stream! {
+        let mut pending = echoes.into_iter().peekable();
+        while let Some(event) = events.next().await {
+            match &event {
+                crate::CoreEvent::StatementStarted { index, .. } => {
+                    while let Some(echo) = pending.next_if(|e| e.before <= *index) {
+                        yield RunItem::Echo(echo.line);
+                    }
+                }
+                crate::CoreEvent::ScriptFinished { summary, .. } if summary.stop.is_none() => {
+                    for echo in pending.by_ref() {
+                        yield RunItem::Echo(echo.line);
+                    }
+                }
+                _ => {}
+            }
+            yield RunItem::Event(event);
+        }
+    })
 }

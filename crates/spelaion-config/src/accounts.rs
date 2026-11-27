@@ -32,6 +32,13 @@ pub fn connection_account(config: &Config, id: &ConnectionId) -> String {
     ConnectionKey::of(config, id).keychain_account()
 }
 
+/// Entry of an SSH key file's remembered passphrase (ADR-090): `key:<canonical path>`, shared
+/// by every connection, hop and folder that uses the file. The name comes from the path the
+/// key was read from, canonicalized here, never from text a file writes.
+pub fn key_passphrase_account(key: &std::path::Path) -> String {
+    format!("key:{}", crate::identity::canonical_folder(key).display())
+}
+
 /// Entry of a tunnel proxy's password (ADR-027): `~/tunnel/<name>/proxy/password` or
 /// `repo:<root>/tunnel/<name>/proxy/password`.
 pub fn proxy_account(config: &Config, source: Source, tunnel: &str) -> String {

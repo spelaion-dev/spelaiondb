@@ -42,6 +42,20 @@ pub enum VariableError {
     OpensText(String),
     #[error("the value of ${{{0}}} is too long or holds a character that cannot be sent")]
     InvalidValue(String),
+    /// A client command line written otherwise than its command reads (ADR-078).
+    #[error("{0}")]
+    Command(String),
+    /// An `@include` refused (ADR-078, point 7).
+    #[error(transparent)]
+    Include(#[from] crate::include::IncludeError),
+    /// What went wrong in an included file, with the file (relative to the script's tree) and
+    /// the line.
+    #[error("{file}, line {line}: {error}")]
+    InFile {
+        file: String,
+        line: usize,
+        error: Box<VariableError>,
+    },
 }
 
 /// The distinct variables of `script`'s statements, in order of first appearance.
@@ -105,7 +119,7 @@ pub fn substitute_variables(
 }
 
 /// One statement with its variables' values written in, checked.
-fn substitute_statement(
+pub(crate) fn substitute_statement(
     dialect: &dyn Dialect,
     statement: &str,
     found: &[(Range<usize>, &str)],
@@ -168,7 +182,7 @@ fn substitute_statement(
 }
 
 /// `${a}`, or `${a} and ${b}`: the variables an error is about.
-fn names_of(names: &[&str]) -> String {
+pub(crate) fn names_of(names: &[&str]) -> String {
     let mut distinct: Vec<&str> = Vec::new();
     for name in names {
         if !distinct.contains(name) {
@@ -184,7 +198,10 @@ fn names_of(names: &[&str]) -> String {
 
 /// Where each `${name}` of a statement is (the whole `${…}`), in order. Only the statement's
 /// code is searched.
-fn variables<'a>(dialect: &dyn Dialect, statement: &'a str) -> Vec<(Range<usize>, &'a str)> {
+pub(crate) fn variables<'a>(
+    dialect: &dyn Dialect,
+    statement: &'a str,
+) -> Vec<(Range<usize>, &'a str)> {
     let bytes = statement.as_bytes();
     let mut found = Vec::new();
     for code in dialect.code_ranges(statement) {

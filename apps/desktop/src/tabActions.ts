@@ -133,5 +133,5 @@ export function focusOtherPane() {
 export function toggleResultsMaximized(id: string) {
   const app = useApp.getState();
   const tab = app.tabs.find((t) => t.id === id);
-  if (tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram) app.setResultsMaximized(id, !tab.resultsMaximized);
+  if (tab && !tab.table && !tab.tableDetails && !tab.plan && !tab.diagram && !tab.notebook) app.setResultsMaximized(id, !tab.resultsMaximized);
 }

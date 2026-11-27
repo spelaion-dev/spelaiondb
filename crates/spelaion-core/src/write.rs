@@ -17,7 +17,8 @@ use sqlparser::parser::Parser;
 
 use crate::Session;
 use crate::classify::{
-    classify_read_only, reaches_outside, reject_mysql_executable_comments, reject_unicode_escapes,
+    classify_read_only, reaches_outside, reject_client_command, reject_mysql_executable_comments,
+    reject_unicode_escapes,
 };
 use crate::guard::{Risk, destructive, sql_dialect};
 use crate::readonly::DUCKDB_NO_EXTERNAL_ACCESS;
@@ -244,6 +245,7 @@ pub fn check_write(dialect: &dyn Dialect, sql: &str) -> Result<(), String> {
     let engine = dialect.name();
     reject_mysql_executable_comments(engine, sql)?;
     reject_unicode_escapes(engine, sql)?;
+    reject_client_command(engine, sql)?;
     if dialect.split_statements(sql).len() != 1 {
         return Err("exactly one statement per call".into());
     }

@@ -118,6 +118,9 @@ pub struct SavedTab {
     /// Its place among the window's tabs, across folders (ADR-075); `None` for a tab kept
     /// before tabs belonged to their connection's folder.
     pub window_position: Option<u32>,
+    /// A notebook tab (ADR-087): `text` is the notebook's document, and `file` its file once
+    /// it has one. Never its results.
+    pub notebook: bool,
 }
 
 /// A workspace's open tabs, in the tab bar's order.
@@ -163,9 +166,9 @@ impl Store {
                 "insert into open_tabs (workspace, position, active, title, text, connection,
                      pinned, on_error, timeout_seconds, snippet_name, file_path, file_hash,
                      file_encoding, file_line_ending, file_modified, database,
-                     window_position)
+                     window_position, notebook)
                  values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                         ?17)",
+                         ?17, ?18)",
             )?;
             for (position, tab) in saved.tabs.iter().enumerate() {
                 let file = tab.file.as_ref();
@@ -190,6 +193,8 @@ impl Store {
                         .as_deref()
                         .filter(|d| !d.is_empty() && tab.connection.is_some()),
                     tab.window_position.map(i64::from),
+                    // Only a notebook says so; other tabs leave it empty, as rows kept before.
+                    tab.notebook.then_some(1),
                 ])?;
             }
         }
@@ -202,7 +207,7 @@ impl Store {
         let mut statement = self.conn.prepare(
             "select active, title, text, connection, pinned, on_error, timeout_seconds,
                     snippet_name, file_path, file_hash, file_encoding, file_line_ending,
-                    file_modified, database, window_position
+                    file_modified, database, window_position, notebook
              from open_tabs where workspace = ?1 order by position",
         )?;
         let rows = statement.query_map([workspace], |r| {
@@ -240,6 +245,7 @@ impl Store {
                     window_position: r
                         .get::<_, Option<i64>>(14)?
                         .and_then(|p| u32::try_from(p).ok()),
+                    notebook: r.get::<_, Option<bool>>(15)?.unwrap_or(false),
                 },
                 file,
             ))
@@ -367,6 +373,7 @@ mod tests {
                     file: None,
                     // Kept and read back like every other field.
                     window_position: Some(4),
+                    notebook: false,
                 },
                 SavedTab {
                     text: "update t set x = 1 where id = 2;\n".into(),
@@ -382,6 +389,23 @@ mod tests {
                 },
                 SavedTab {
                     text: "-- scratch".into(),
+                    ..SavedTab::default()
+                },
+                // A notebook tab keeps its document as text and says it is one (ADR-087).
+                SavedTab {
+                    text: "---
+spelaion-notebook: 1
+---
+"
+                    .into(),
+                    notebook: true,
+                    file: Some(SavedFile {
+                        path: "/repo/notes/lost.md".into(),
+                        hash: Some("cd34".into()),
+                        encoding: FileEncoding::Utf8,
+                        line_ending: LineEnding::Lf,
+                        modified: false,
+                    }),
                     ..SavedTab::default()
                 },
             ],

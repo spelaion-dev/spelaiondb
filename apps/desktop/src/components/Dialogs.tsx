@@ -384,6 +384,7 @@ function RiskDialog() {
         {request.statements.slice(0, SHOWN_STATEMENTS).map((s, i) => (
           <li key={i}>
             <strong>{t(`risk.${s.risk}`)}</strong>
+            {s.place && <span className="muted small"> {t("risk.from", { place: s.place })}</span>}
             <pre className="mono small">{s.sql.length > SHOWN_SQL ? `${s.sql.slice(0, SHOWN_SQL)}…` : s.sql}</pre>
           </li>
         ))}
@@ -530,9 +531,12 @@ function InteractionDialog() {
   const item = useDialogs((s) => s.interactions[0]);
   const pop = useDialogs((s) => s.popInteraction);
   const [value, setValue] = useState("");
+  // Off each time the question opens (ADR-090): remembering is the person's choice every time.
+  const [remember, setRemember] = useState(false);
   if (!item) return null;
+  const canRemember = item.request.kind === "secret" && item.request.label.kind === "keyPassphrase" && item.request.label.canRemember;
   const answer = (accept: boolean) => {
-    void call(commands.answerInteraction(item.id, accept, accept && item.request.kind === "secret" ? value : null));
+    void call(commands.answerInteraction(item.id, accept, accept && item.request.kind === "secret" ? value : null, accept && canRemember && remember));
     pop(item.id);
   };
   const r = item.request;
@@ -595,6 +599,12 @@ function InteractionDialog() {
         autoComplete="off"
         aria-label={prompt}
       />
+      {canRemember && (
+        <label className="check">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          {t("rememberPassphrase")}
+        </label>
+      )}
       <div className="modal-actions">
         <button onClick={() => answer(false)}>{t("cancel")}</button>
         <button className="primary" onClick={() => answer(true)}>

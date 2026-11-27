@@ -517,7 +517,7 @@ try {
   }
   // Opens a settings category in the settings dialog, runs `action` and closes the dialog:
   // the tabs behind it are left as they were.
-  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14, shortcuts: 15 };
+  const CATEGORY = { appearance: 1, language: 2, explorer: 3, connections: 4, types: 5, masking: 6, history: 7, network: 8, plugins: 10, scripts: 11, editor: 12, snippets: 13, map: 14, shortcuts: 15, transfer: 16, logs: 17 };
   async function withSettings(category, action) {
     await page.locator(".activity-bar .settings-button").click();
     const dialog = page.locator(".settings-dialog");
@@ -668,7 +668,7 @@ try {
   step("connections sidebar: drag, keyboard resizing, limits and reset");
   const sidebar = page.locator(".sidebar");
   const activities = page.getByRole("navigation", { name: "Activity bar" });
-  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Processes", "Search", "Query history", "Saved queries", "MCP server", "Settings"]);
+  assert.deepEqual(await activities.getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))), ["Connections", "Processes", "Search", "Query history", "Saved queries", "Tasks", "MCP server", "Settings"]);
   for (const button of await activities.getByRole("button").all()) assert.ok(await button.getAttribute("title"));
   const connectionsActivity = activities.getByRole("button", { name: "Connections" });
   assert.equal(await connectionsActivity.getAttribute("aria-pressed"), "true");
@@ -1389,6 +1389,78 @@ try {
     const tsv = readFileSync(exportPath("selection.tsv"), "utf8").replace(/^\ufeff/, "").trimEnd().split("\n");
     assert.equal(tsv[0], "country\torders");
     assert.equal(tsv.length, 3);
+  }
+
+  step("saved tasks: a streaming export saved as a task runs again from Tasks and from the command line, and its history shows both (SDB-33)");
+  {
+    // A task's files go to a folder it names, a new file each run (ADR-089).
+    const taskOut = join(userDir, "task-out");
+    mkdirSync(taskOut, { recursive: true });
+    await page.evaluate((target) => (window.__spelaionOpenFolder = target), taskOut);
+    await openResultExport();
+    const dialog = page.getByRole("dialog", { name: "Export result" });
+    await dialog.waitFor();
+    await dialog.getByRole("combobox", { name: /^Format/ }).selectOption("csv");
+    // Only an export that runs again can be saved: the loaded rows are this result only.
+    await dialog.getByRole("radio", { name: /^The rows loaded/ }).check();
+    assert.ok(await dialog.getByRole("button", { name: "Save as task…" }).isDisabled());
+    await dialog.getByRole("radio", { name: "Every row: run the query again" }).check();
+    await dialog.getByRole("button", { name: "Save as task…" }).click();
+    const save = page.getByRole("dialog", { name: "Save as task" });
+    await save.waitFor();
+    await save.getByRole("textbox", { name: "Name" }).fill("Smoke orders");
+    await save.getByRole("textbox", { name: "Folder" }).fill("Smoke");
+    await save.getByRole("button", { name: "Choose…" }).click();
+    assert.equal(await save.getByRole("textbox", { name: "Save files to" }).inputValue(), taskOut);
+    await save.getByRole("button", { name: "Save task" }).click();
+    await save.getByText("Saved as task “Smoke orders”.").waitFor();
+    await shot("03d-task-saved");
+    await save.getByRole("button", { name: "Done" }).click();
+    await save.waitFor({ state: "detached" });
+    await dialog.getByRole("button", { name: "Close" }).last().click();
+    await dialog.waitFor({ state: "detached" });
+    await page.evaluate(() => delete window.__spelaionOpenFolder);
+
+    // Run from the Tasks view: nothing asks on a SQLite connection without a type.
+    const tasksButton = page.locator('.activity-bar [data-command="view.tasks"]');
+    await tasksButton.click();
+    const tasksPage = page.locator(".tasks-page");
+    await tasksPage.locator(".tasks-folder-name", { hasText: "Smoke" }).waitFor();
+    await tasksPage.locator('[data-task="Smoke orders"]').click();
+    await tasksPage.getByRole("button", { name: "Run", exact: true }).click();
+    await tasksPage.locator(".tasks-result", { hasText: /^Done: 6 rows/ }).waitFor();
+    await tasksPage.locator('.tasks-run[data-origin="app"][data-state="succeeded"]').waitFor();
+    await shot("03d-task-run");
+    const firstFiles = readdirSync(taskOut).filter((f) => f.endsWith(".csv"));
+    assert.equal(firstFiles.length, 1);
+    const firstFile = readFileSync(join(taskOut, firstFiles[0]), "utf8");
+    assert.equal(firstFile.replace(/^\ufeff/, "").trimEnd().split(/\r?\n/).length, 7);
+
+    // The same task from the command line, as a scheduler would run it: a second file, never
+    // over the first, with the same rows.
+    const cli = process.env.SPELAION_E2E_CLI ?? join(root, "target/release/spelaiondb" + (process.platform === "win32" ? ".exe" : ""));
+    const printed = execFileSync(cli, ["task", "run", "smoke ORDERS"], { env: { ...process.env, SPELAION_USER_DIR: userDir }, encoding: "utf8" });
+    assert.match(printed, /^6 rows/);
+    const files = readdirSync(taskOut).filter((f) => f.endsWith(".csv"));
+    assert.equal(files.length, 2);
+    for (const file of files) assert.equal(readFileSync(join(taskOut, file), "utf8"), firstFile);
+
+    // Its history shows both runs, the newest first: reopening the view reads them again.
+    await tasksButton.click();
+    await tasksPage.waitFor({ state: "detached" });
+    await tasksButton.click();
+    await tasksPage.locator('[data-task="Smoke orders"]').click();
+    const runs = tasksPage.locator(".tasks-run");
+    await runs.nth(1).waitFor();
+    assert.equal(await runs.count(), 2);
+    assert.equal(await runs.nth(0).getAttribute("data-origin"), "cli");
+    assert.equal(await runs.nth(1).getAttribute("data-origin"), "app");
+    await runs.nth(0).getByText("From the command line").waitFor();
+    await runs.nth(0).getByRole("button", { name: "Show log" }).click();
+    await runs.nth(0).locator(".tasks-log", { hasText: "started from the command line" }).waitFor();
+    await shot("03d-task-history");
+    await tasksButton.click();
+    await tasksPage.waitFor({ state: "detached" });
   }
 
   step("cell viewer: pretty JSON, hex dump of bytes, full text");
@@ -3589,6 +3661,28 @@ try {
     await replaceQuery(panel, "select 'unterminated");
   }
 
+  step("Settings › Logs shows the app log by level and exports it (SDB-31)");
+  {
+    const logFile = join(userDir, "exported.log");
+    await withSettings("logs", async (settings) => {
+      const entries = settings.getByRole("list", { name: "Log entries" });
+      await entries.locator('li[data-level="info"]', { hasText: /SpelaionDB .* started on windows/ }).first().waitFor();
+      await shot("05e-logs");
+      await settings.getByRole("combobox", { name: "Show" }).selectOption("error");
+      await settings.locator('li[data-level="info"]').first().waitFor({ state: "detached" });
+      assert.equal(await settings.locator('li[data-level="warning"]').count(), 0, "only errors at that level");
+      await settings.getByRole("combobox", { name: "Show" }).selectOption("info");
+      await entries.locator('li[data-level="info"]').first().waitFor();
+      await page.evaluate((target) => (window.__spelaionSavePath = target), logFile);
+      await settings.getByRole("button", { name: "Export log…" }).click();
+      await settings.getByRole("status").filter({ hasText: `entries to ${logFile}` }).waitFor();
+      await page.evaluate(() => delete window.__spelaionSavePath);
+    });
+    const exportedLog = readFileSync(logFile, "utf8");
+    assert.match(exportedLog, /Z INFO SpelaionDB .* started on windows/);
+    assert.doesNotMatch(exportedLog, /password\s*[=:]\s*(?!\*\*\*)\S/i, "no password in the log");
+  }
+
   step("Settings › Keyboard shortcuts lists every command and finds one by its name or by its keys (SDB-447)");
   await withSettings("shortcuts", async (settings) => {
     const rows = settings.locator(".shortcut-table tr[data-command]");
@@ -3647,6 +3741,45 @@ try {
     await page.keyboard.press("Control+Shift+Enter");
     await resultTab("old keys").waitFor();
     await replaceQuery(panel, "select 'unterminated");
+  }
+
+  step("Settings › Export and import: the settings move in one file, checked before anything changes (SDB-31)");
+  {
+    const settingsFile = join(userDir, "smoke.spelaion-settings");
+    await page.evaluate((target) => (window.__spelaionSavePath = target), settingsFile);
+    await withSettings("transfer", async (settings) => {
+      await settings.getByRole("button", { name: "Export settings…" }).click();
+      await settings.getByRole("status").filter({ hasText: `settings to ${settingsFile}` }).waitFor();
+    });
+    await page.evaluate(() => delete window.__spelaionSavePath);
+    const exported = JSON.parse(readFileSync(settingsFile, "utf8"));
+    assert.equal(exported.format, "spelaiondb-settings");
+    assert.equal(exported.settings.theme, "light");
+    assert.equal(exported.settings.recent_folders, undefined, "this computer's folders stay here");
+    assert.ok(!JSON.stringify(exported).toLowerCase().includes("password"), "no password in the settings file");
+    // Another theme here; the import brings the file's back, after showing what it changes.
+    await setTheme("dark", "dark");
+    await page.evaluate((target) => (window.__spelaionOpenPath = target), settingsFile);
+    await withSettings("transfer", async (settings) => {
+      await settings.getByRole("button", { name: "Import settings…" }).click();
+      const preview = settings.getByRole("region", { name: "Import these settings?" });
+      await preview.waitFor();
+      assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "dark", "nothing changes before the import");
+      await shot("05g-settings-import-preview");
+      await preview.getByRole("button", { name: "Import settings" }).click();
+      await settings.getByRole("heading", { name: "Settings imported" }).waitFor();
+      await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
+    });
+    await page.evaluate(() => delete window.__spelaionOpenPath);
+    // A file that is not a settings file is refused, and says nothing changed.
+    const notSettings = join(userDir, "not.spelaion-settings");
+    writeFileSync(notSettings, "{}");
+    await page.evaluate((target) => (window.__spelaionOpenPath = target), notSettings);
+    await withSettings("transfer", async (settings) => {
+      await settings.getByRole("button", { name: "Import settings…" }).click();
+      await settings.getByRole("alert").filter({ hasText: "Could not import settings: this is not a SpelaionDB settings file. Nothing was changed." }).waitFor();
+    });
+    await page.evaluate(() => delete window.__spelaionOpenPath);
   }
 
   step("tabs: Ctrl+W closes, Ctrl+Shift+T reopens with the SQL, Ctrl+Tab goes back to the previous tab");
@@ -4058,6 +4191,58 @@ try {
     await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count + 1, tabsBefore);
     await page.keyboard.press("Control+w");
     await page.waitForFunction((count) => document.querySelectorAll('.tabbar [role="tab"]').length === count, tabsBefore);
+  }
+
+  step("preferences follow every window: changed in the main window, shown in a connection's window, never written back from it (SDB-535)");
+  {
+    const storedGrid = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_grid_preferences"));
+    const before = await storedGrid();
+    const shop = await connectionMenu("Shop (SQLite)");
+    const [other] = await Promise.all([
+      page.context().waitForEvent("page"),
+      shop.getByRole("menuitem", { name: "Open in a new window" }).click(),
+    ]);
+    await other.locator(".activity-bar .settings-button").waitFor();
+    const otherAppearance = async (action) => {
+      await other.locator(".activity-bar .settings-button").click();
+      const dialog = other.locator(".settings-dialog");
+      await dialog.locator(`.settings-nav button:nth-child(${CATEGORY.appearance})`).click();
+      await dialog.locator('input[name="zebra"]').waitFor();
+      await action(dialog);
+      await dialog.locator(".wizard-header button").click();
+      await dialog.waitFor({ state: "detached" });
+    };
+    await otherAppearance(async (dialog) => assert.equal(await dialog.locator('input[name="zebra"]').isChecked(), before.zebra));
+    // Changed in the main window: the theme and the grid's zebra rows.
+    await setTheme("dark", "dark");
+    await setGridLook({ zebra: !before.zebra });
+    await other.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    // The other window shows the grid as stored, and its own change keeps the main window's.
+    await otherAppearance(async (dialog) => {
+      await other.waitForFunction((zebra) => document.querySelector('input[name="zebra"]')?.checked === zebra, !before.zebra);
+      await dialog.locator('input[name="nullText"]').click();
+      await other.waitForFunction((nullText) => {
+        const input = document.querySelector('input[name="nullText"]');
+        return input?.checked === nullText && !input.matches(":disabled");
+      }, !before.nullText);
+    });
+    await page.waitForFunction(async (nullText) => (await window.__TAURI_INTERNALS__.invoke("get_grid_preferences")).nullText === nullText, !before.nullText);
+    const after = await storedGrid();
+    assert.equal(after.zebra, !before.zebra, "the other window did not write the old zebra rows back");
+    assert.equal(after.nullText, !before.nullText);
+    // And the main window shows the other window's change.
+    await withSettings("appearance", async (settings) => {
+      await page.waitForFunction((nullText) => document.querySelector('input[name="nullText"]')?.checked === nullText, !before.nullText);
+      assert.equal(await settings.locator('input[name="zebra"]').isChecked(), !before.zebra);
+    });
+    // Back as they were, from the main window; the other window closes with nothing to ask.
+    await setGridLook({ zebra: before.zebra, nullText: before.nullText });
+    await setTheme("light", "light");
+    await other.waitForFunction(() => document.documentElement.dataset.theme === "light");
+    await other.keyboard.press("Control+Shift+P");
+    await other.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("close this window");
+    await Promise.all([other.waitForEvent("close"), other.keyboard.press("Enter")]);
+    assert.deepEqual(await storedGrid(), before);
   }
 
   step("windows: a tab's results in their own window without running the query again, and a connection in its own window whose closing leaves the main window's sessions (SDB-30)");
@@ -5969,7 +6154,12 @@ try {
         await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.disabled === false);
         await settings.locator('input[name="tileAttribution"]').fill("Test tiles");
         await page.keyboard.press("Enter");
-        await page.waitForFunction(() => !document.querySelector(".settings-page input:disabled"));
+        // Until the core has the attribution (SDB-532): the next field's typing waits for the
+        // save, as it does for a person, instead of racing it on a slow machine.
+        await page.waitForFunction(async () => {
+          const saved = await window.__TAURI_INTERNALS__.invoke("get_map_preferences");
+          return saved.tileAttribution === "Test tiles";
+        });
         // An address the core refuses is said, and the saved one stays.
         await settings.locator('input[name="tileUrl"]').fill("http://tiles.example.com/{z}/{x}/{y}.png");
         await page.keyboard.press("Enter");
@@ -6035,11 +6225,84 @@ try {
       await openMap();
       await page.waitForTimeout(500);
       assert.equal(tileRequests.length, asked, "the tiles kept by the core are not asked again");
+      await viewerToggle.click();
+      await viewer.waitFor({ state: "detached" });
+
+      // SDB-533: OpenStreetMap, once chosen, can be turned off again: unticked, it stays off
+      // when the settings are read again from the core, and Remove takes the server away. A
+      // window opened while it was on (a connection's own, SDB-30) follows the change: it used
+      // to keep tiles on and save them on again with its next change.
+      const storedMap = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_map_preferences"));
+      await withSettings("map", async (settings) => {
+        await settings.getByRole("button", { name: "Use OpenStreetMap" }).click();
+        await page.waitForFunction(() => document.querySelector('input[name="tileUrl"]')?.value === "https://tile.openstreetmap.org/{z}/{x}/{y}.png" && document.querySelector('input[name="mapTiles"]')?.checked);
+        await page.waitForFunction(() => !document.querySelector(".settings-page input:disabled"));
+      });
+      assert.equal((await storedMap()).tiles, true, "choosing OpenStreetMap turns tiles on");
+      const shopMenu = await connectionMenu("Shop (SQLite)");
+      const [otherWindow] = await Promise.all([
+        page.context().waitForEvent("page"),
+        shopMenu.getByRole("menuitem", { name: "Open in a new window" }).click(),
+      ]);
+      const otherTiles = otherWindow.locator('input[name="mapTiles"]');
+      const otherSettings = async (action) => {
+        await otherWindow.locator(".activity-bar .settings-button").click();
+        const dialog = otherWindow.locator(".settings-dialog");
+        await dialog.locator(`.settings-nav button:nth-child(${CATEGORY.map})`).click();
+        await otherTiles.waitFor();
+        await action();
+        await dialog.locator(".wizard-header button").click();
+        await dialog.waitFor({ state: "detached" });
+      };
+      await otherSettings(async () => assert.ok(await otherTiles.isChecked(), "the other window starts with tiles on"));
+      await withSettings("map", async (settings) => {
+        await settings.locator('input[name="mapTiles"]').uncheck();
+        await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.checked === false && !document.querySelector(".settings-page input:disabled"));
+        assert.equal(await settings.locator(".error").count(), 0, "turning tiles off is accepted");
+      });
+      const osmOff = {
+        tiles: false,
+        tileName: "OpenStreetMap",
+        tileUrl: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        tileAttribution: "© OpenStreetMap contributors",
+        tileAttributionUrl: "https://www.openstreetmap.org/copyright",
+      };
+      assert.deepEqual(await storedMap(), osmOff, "tiles stay off and the server is kept");
+      // The other window shows them off too, and its next change keeps them off.
+      await otherSettings(async () => {
+        await otherWindow.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.checked === false);
+        await otherWindow.locator('input[name="tileAttribution"]').fill("© OpenStreetMap contributors.");
+        await otherWindow.keyboard.press("Enter");
+        await otherWindow.waitForFunction(() => !document.querySelector(".settings-page input:disabled"));
+        await otherWindow.waitForTimeout(300);
+      });
+      assert.deepEqual(await storedMap(), { ...osmOff, tileAttribution: "© OpenStreetMap contributors." }, "a change in the other window does not turn tiles on again");
+      // That window closes on its own command, with no SQL to ask about.
+      await otherWindow.keyboard.press("Control+Shift+P");
+      await otherWindow.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("close this window");
+      await Promise.all([otherWindow.waitForEvent("close"), otherWindow.keyboard.press("Enter")]);
+      await withSettings("map", async (settings) => {
+        assert.equal(await settings.locator('input[name="mapTiles"]').isChecked(), false, "still off when the settings open again");
+        assert.equal(await settings.locator('input[name="tileAttribution"]').inputValue(), "© OpenStreetMap contributors.", "the other window's change shows here");
+        await settings.getByRole("button", { name: "Remove tile server" }).click();
+        await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.disabled === true && document.querySelector('input[name="tileUrl"]')?.value === "");
+      });
+      assert.deepEqual(await storedMap(), { tiles: false, tileName: "", tileUrl: "", tileAttribution: "", tileAttributionUrl: "" }, "Remove leaves no server");
+      // Opened again with tiles off: a plain background, and nothing asked of any server.
+      const before = tileRequests.length;
+      await viewerToggle.click();
+      await page.mouse.click(box.x + 52 + widths[0] + 20, box.y + 34 + 12);
+      await viewer.getByText(/^Plain background: no map tiles are loaded\./).waitFor();
+      await page.waitForTimeout(500);
+      assert.equal(await mapHost.locator(".map-tiles").count(), 0);
+      assert.equal(tileRequests.length, before, "with tiles off the core asks nothing");
     } finally {
       // A dialog left open by a failure above is closed first, so the cleanup cannot hide it.
       if (await page.locator(".settings-dialog").count()) await page.locator(".settings-dialog .wizard-header button").click();
+      // The steps above end with the server removed; one that failed earlier may have left it.
       await withSettings("map", async (settings) => {
-        await settings.getByRole("button", { name: "Remove tile server" }).click();
+        const remove = settings.getByRole("button", { name: "Remove tile server" });
+        if (await remove.count()) await remove.click();
         await page.waitForFunction(() => document.querySelector('input[name="mapTiles"]')?.disabled === true);
       });
       tileServer.close();
@@ -6663,6 +6926,128 @@ try {
     await fileTab("copy.sql").click();
     await page.keyboard.press("Control+w");
     await fileTab("copy.sql").waitFor({ state: "detached" });
+  }
+
+  step("SQL notebooks (ADR-087): a cell referencing another runs as a CTE, Run all stops at an error and sums up, saved, reopened without running, exported as HTML");
+  {
+    const notebookDir = join(userDir, "notebooks");
+    mkdirSync(notebookDir, { recursive: true });
+    const notebookPath = join(notebookDir, "orders.md");
+    const htmlPath = join(notebookDir, "orders.html");
+    const notebookLabel = page.locator(".tabbar .tab .tab-label", { hasText: /^orders\.md$/ });
+    // A query on Shop first: a new notebook takes the active tab's connection, unconnected.
+    await newQuery("Shop (SQLite)", "select 1;");
+    await page.getByRole("button", { name: "Open a file or a recent one" }).click();
+    await page.getByRole("menu", { name: "Open a file or a recent one" }).getByRole("menuitem", { name: "New notebook" }).click();
+    const notebook = page.locator(".tab-panel:not([hidden]) .notebook-tab");
+    await notebook.waitFor();
+    assert.equal(await notebook.locator(".status-connected").count(), 0, "a new notebook connects only when a cell runs");
+    const cell = (name) => notebook.locator(`section.notebook-cell[data-cell="${name}"]`);
+    await cell("cell_1").locator(".cm-content").click();
+    await page.keyboard.insertText("select id, total from orders where total > 100");
+    // A Markdown cell: drawn by the core's blocks, its raw HTML shown as text.
+    await notebook.getByRole("button", { name: "Add a Markdown cell at the end" }).click();
+    await notebook.getByLabel("Markdown text").fill("# Big orders\n\nThe **largest** ones, see <b>notes</b>.");
+    await notebook.getByRole("button", { name: "Done", exact: true }).click();
+    await notebook.locator(".notebook-markdown h1", { hasText: "Big orders" }).waitFor();
+    assert.equal(await notebook.locator(".notebook-markdown b").count(), 0);
+    assert.match(await notebook.locator(".notebook-markdown").innerText(), /<b>notes<\/b>/);
+    // A SQL cell that references the first: the core runs cell_1's SQL inside it, as a CTE.
+    await notebook.getByRole("button", { name: "Add a SQL cell at the end" }).click();
+    await cell("cell_2").locator(".cm-content").click();
+    await page.keyboard.insertText("select count(*) as n from {{cell_1}}");
+    await cell("cell_2").getByText("Uses cell_1").waitFor();
+    await page.keyboard.press("Control+Enter");
+    await cell("cell_2").locator(".notebook-result .statusline", { hasText: "1 row" }).waitFor();
+    assert.equal(await cell("cell_1").locator(".notebook-output").count(), 0, "running cell_2 shows no result in cell_1");
+    await cell("cell_2").getByRole("button", { name: "Cell actions" }).click();
+    await page.getByRole("menu", { name: "Cell actions" }).getByRole("menuitem", { name: "Show the SQL that runs" }).click();
+    await cell("cell_2").locator(".notebook-expanded pre", { hasText: /WITH "?cell_1"? AS \(/ }).waitFor();
+    // Run all: every SQL cell from the top, then a summary.
+    await notebook.getByRole("button", { name: "Run all", exact: true }).click();
+    await notebook.locator(".notebook-summary", { hasText: "Ran 2 of 2 SQL cells" }).waitFor();
+    await cell("cell_1").locator(".notebook-result .statusline", { hasText: /\d rows?/ }).waitFor();
+    await cell("cell_1").getByRole("button", { name: "Show as a chart" }).click();
+    await cell("cell_1").locator(".notebook-chart svg.chart-svg").waitFor();
+    await shot("sdb-36-notebook");
+    // A cell that fails stops Run all, and the summary says where and why.
+    await notebook.getByRole("button", { name: "Add a SQL cell at the end" }).click();
+    await cell("cell_3").locator(".cm-content").click();
+    await page.keyboard.insertText("select * from no_such_notebook_table");
+    await notebook.getByRole("button", { name: "Run all", exact: true }).click();
+    await notebook.locator(".notebook-summary", { hasText: /Stopped at cell_3 .*no such table/ }).waitFor();
+    await shot("sdb-36-notebook-stopped");
+    await cell("cell_3").getByRole("button", { name: "Cell actions" }).click();
+    await page.getByRole("menu", { name: "Cell actions" }).getByRole("menuitem", { name: "Delete cell" }).click();
+    const deleting = page.getByRole("dialog", { name: "Delete cell?" });
+    await deleting.getByRole("button", { name: "Delete cell" }).click();
+    await cell("cell_3").waitFor({ state: "detached" });
+    // Saved as a Markdown file with the cells and no results; Ctrl+S asks where the first time.
+    await page.evaluate((path) => { window.__spelaionSavePath = path; }, notebookPath);
+    await cell("cell_2").locator(".cm-content").click();
+    await page.keyboard.press("Control+s");
+    await notebookLabel.waitFor();
+    const saved = readFileSync(notebookPath, "utf8");
+    assert.match(saved, /^---\r?\nspelaion-notebook: 1\r?\nconnection: /);
+    assert.match(saved, /```sql cell=cell_2\r?\nselect count\(\*\) as n from \{\{cell_1\}\}\r?\n```/);
+    assert.match(saved, /# Big orders/);
+    assert.ok(!saved.includes("no_such_notebook_table"), "the deleted cell is not saved");
+    // Export as HTML: the results on screen, the chart as an image, no script, nothing linked.
+    await page.evaluate((path) => { window.__spelaionSavePath = path; }, htmlPath);
+    await notebook.getByRole("button", { name: "Export as HTML…" }).click();
+    await notebook.getByText(/^Exported to /).waitFor();
+    const html = readFileSync(htmlPath, "utf8");
+    assert.match(html, /Content-Security-Policy/);
+    assert.match(html, /<h1>Big orders<\/h1>/);
+    assert.match(html, /&lt;b&gt;notes&lt;\/b&gt;/);
+    assert.match(html, /data:image\/svg\+xml;base64,/);
+    assert.ok(!/<script/i.test(html), "the export has no script");
+    await page.evaluate(() => { delete window.__spelaionSavePath; });
+    // Closed and opened again: its cells come back, nothing runs and nothing connects.
+    await page.keyboard.press("Control+w");
+    await notebookLabel.waitFor({ state: "detached" });
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, notebookPath);
+    await page.keyboard.press("Control+o");
+    await notebookLabel.waitFor();
+    await cell("cell_2").waitFor();
+    assert.equal(await notebook.locator(".notebook-output").count(), 0, "a reopened notebook shows no result");
+    assert.equal(await notebook.locator(".status-connected").count(), 0, "a reopened notebook is not connected");
+    await shot("sdb-36-notebook-reopened");
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    await page.keyboard.press("Control+w");
+    await notebookLabel.waitFor({ state: "detached" });
+    // The query tab on Shop that the notebook took its connection from.
+    await page.keyboard.press("Control+w");
+  }
+
+  step("@include (ADR-078): a file tab runs another file of its folder in place, named in the Messages tab; a console refuses it");
+  {
+    const includeDir = join(userDir, "include files");
+    mkdirSync(join(includeDir, "parts"), { recursive: true });
+    const mainPath = join(includeDir, "main.sql");
+    writeFileSync(join(includeDir, "parts", "count.sql"), "@echo counting orders\nselect count(*) as included_n from orders;\n");
+    writeFileSync(mainPath, "@include parts/count.sql\nselect 'after_include' as a;\n");
+    // A console has no folder to include from: refused before anything runs.
+    const consoleTab = await newQuery("Shop (SQLite)", "@include parts/count.sql");
+    await run(consoleTab);
+    await consoleTab.locator(".messages", { hasText: "@include runs only in a file tab" }).waitFor();
+    // The file tab takes the console's connection; its run includes parts/count.sql.
+    await page.evaluate((path) => { window.__spelaionOpenPath = path; }, mainPath);
+    await page.keyboard.press("Control+o");
+    const mainLabel = page.locator(".tabbar .tab .tab-label", { hasText: /^main\.sql$/ });
+    await mainLabel.waitFor();
+    await page.evaluate(() => { delete window.__spelaionOpenPath; });
+    const filePanel = page.locator(".tab-panel:not([hidden])");
+    await run(filePanel);
+    await filePanel.locator(".result-tab-list").getByRole("button", { name: /^Messages/ }).click();
+    const messages = filePanel.locator(".messages");
+    await messages.getByText("Running parts/count.sql", { exact: true }).waitFor();
+    await messages.getByText("counting orders", { exact: true }).waitFor();
+    await messages.getByText(/^Statement 2:/).waitFor();
+    await shot("sdb-468-include");
+    await page.keyboard.press("Control+w");
+    await mainLabel.waitFor({ state: "detached" });
+    await page.keyboard.press("Control+w");
   }
 
   step("direct PostgreSQL: password asked in a dialog");
@@ -7392,11 +7777,21 @@ try {
     await gis.click({ button: "right" });
     await page.getByRole("menu", { name: "Database spelaion_gis" }).getByRole("menuitem", { name: "New query", exact: true }).click();
     const gisPanel = page.locator(".tab-panel:not([hidden])");
+    // A run's row count shows when its result ends, a moment before the core says the run
+    // ended; until then the tab is running (its tab shows the spinner, Run is Cancel) and the
+    // next Run pressed is ignored, as on #553 and #570 (SDB-531). The status line also keeps the
+    // last run's count until the next one ends, so each query here returns a count of its own
+    // (1, 2, 3 rows): its count shows that run ended its result, and the spinner going away that
+    // the core ended the run, before the next action.
+    const ran = async (rows) => {
+      await gisPanel.locator(".statusline", { hasText: new RegExp(`(^|[^0-9])${rows} rows?\\b`) }).waitFor();
+      await page.locator(".tabbar .tab.active .tab-running").waitFor({ state: "detached" });
+    };
     await gisPanel.locator(".status-connected").waitFor();
     await gisPanel.locator(".cm-content").click();
     await page.keyboard.insertText("select current_database() where current_database() = 'spelaion_gis';");
     await run(gisPanel);
-    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    await ran(1);
 
     // SDB-505: the tab's database picker. Choosing another is a disconnect and a connect, never
     // a switch: back to the connection's own database, then to spelaion_gis again.
@@ -7406,13 +7801,14 @@ try {
     await picker.selectOption("spelaion");
     await gisPanel.locator(".status-connected").waitFor();
     assert.equal(await picker.inputValue(), "spelaion");
-    await replaceQuery(gisPanel, "select current_database() where current_database() = 'spelaion';");
+    await replaceQuery(gisPanel, "select current_database() from generate_series(1, 2) where current_database() = 'spelaion';");
     await run(gisPanel);
-    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    await ran(2);
     // With a transaction open, choosing another database asks first; Cancel keeps the session.
     await replaceQuery(gisPanel, "begin;");
     await run(gisPanel);
     await gisPanel.locator(".tx-badge").waitFor();
+    await page.locator(".tabbar .tab.active .tab-running").waitFor({ state: "detached" });
     await picker.selectOption("spelaion_gis");
     const changeOpen = page.getByRole("dialog", { name: "Disconnect with an open transaction?" });
     await changeOpen.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -7434,9 +7830,9 @@ try {
     await page.getByLabel("Password", { exact: true }).fill("spelaion");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
     await gisPanel.locator(".status-connected").waitFor();
-    await replaceQuery(gisPanel, "select current_database() where current_database() = 'spelaion_gis';");
+    await replaceQuery(gisPanel, "select current_database() from generate_series(1, 3) where current_database() = 'spelaion_gis';");
     await run(gisPanel);
-    await gisPanel.locator(".statusline", { hasText: /1 row/ }).waitFor();
+    await ran(3);
     await page.locator(".tabbar .tab.active .close").click();
 
     // SDB-506: backup and restore from a database's row act on that database, and say so.
@@ -9405,6 +9801,33 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await panel.getByText("INFO: hello from the smoke test").waitFor();
   await panel.getByText("INFO: a low severity message").waitFor();
   await shot("12a4-sqlserver");
+  step("a Run pressed right after connecting to SQL Server waits for the connection and its database list, then runs (SDB-525)");
+  {
+    // A new query connects at once; its password is asked every time.
+    await page.locator('.connection-row:has-text("SQL Server (Docker)") > .label').dblclick();
+    const fresh = page.locator(".tab-panel:not([hidden])");
+    await page.getByRole("dialog").getByText("Password for SQL Server (Docker)").waitFor();
+    await page.getByLabel("Password", { exact: true }).fill("Spelaion-test-1");
+    // Whether the tab said it waits: the notice may be gone before the result arrives.
+    await page.evaluate(() => {
+      window.__runWaited = false;
+      const seen = () => { if (document.querySelector(".tab-panel:not([hidden])")?.textContent.includes("Waiting to run:")) window.__runWaited = true; };
+      window.__runWaitObserver = new MutationObserver(seen);
+      window.__runWaitObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    // Typed and run at once, while the tab connects or lists its databases: never dropped.
+    await fresh.locator(".cm-content").click();
+    await page.keyboard.insertText("select 'pressed while connecting' as w");
+    await page.keyboard.press("Control+Enter");
+    await fresh.locator(".statusline", { hasText: "1 row" }).waitFor();
+    // Nothing waits any more.
+    assert.equal(await fresh.getByText(/^Waiting to run:/).count(), 0);
+    const waited = await page.evaluate(() => { window.__runWaitObserver.disconnect(); return window.__runWaited; });
+    console.log(`  the run ${waited ? "waited, as the tab said" : "found the tab ready"}`);
+    await page.keyboard.press("Control+w");
+    await panel.locator(".cm-content").waitFor();
+  }
   step("process monitor: SQL Server sessions and supported actions");
   await activities.getByRole("button", { name: "Processes", exact: true }).click();
   await page.locator("#processes-sidebar").getByRole("button", { name: "SQL Server (Docker)", exact: true }).click();
@@ -10292,6 +10715,44 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await answerProxyPassword();
   await panel.locator(".statusline", { hasText: "1 row" }).waitFor();
+
+  step("an encrypted SSH key's passphrase remembered in the system keychain, then forgotten (SDB-534)");
+  await withSettings("network", async (settings) => {
+    await settings.getByRole("button", { name: "New network profile…" }).click();
+    const locked = page.getByRole("dialog", { name: "New network profile" });
+    await locked.getByLabel("Profile name").fill("Locked key");
+    await locked.getByRole("radio", { name: "Personal", exact: true }).check();
+    await locked.getByLabel("Hop 1 Host").fill("127.0.0.1");
+    await locked.getByLabel("Hop 1 Port").fill("2221");
+    await locked.getByLabel("Hop 1 User").fill("spelaion");
+    await locked.getByLabel("Hop 1 Authentication").selectOption("key");
+    await locked.getByLabel("Hop 1 Private key file").fill(join(root, "testing", "docker", "keys", "id_ed25519_pass"));
+    // First test: the passphrase is asked, with the box off; ticked, it is remembered.
+    await locked.getByRole("button", { name: "Test profile" }).click();
+    const passphrase = page.getByRole("dialog", { name: "SSH key passphrase" });
+    await passphrase.waitFor();
+    const remember = passphrase.getByRole("checkbox", { name: "Remember in the system keychain" });
+    assert.equal(await remember.isChecked(), false, "off by default");
+    await remember.check();
+    await passphrase.locator("input[type=password]").fill("spelaion-test");
+    await shot("14c-remember-passphrase");
+    await passphrase.getByRole("button", { name: "Unlock key" }).click();
+    await locked.locator(".test-result", { hasText: "Tunnel OK · 1 hop" }).waitFor();
+    await locked.getByText("A passphrase for this key is remembered in the system keychain.").waitFor();
+    // Second test: nobody is asked.
+    await locked.getByRole("button", { name: "Test profile" }).click();
+    await locked.locator(".test-result", { hasText: "Tunnel OK · 1 hop" }).waitFor();
+    assert.equal(await passphrase.count(), 0, "a remembered passphrase is not asked");
+    // Forgotten from the profile: the next test asks again (and is cancelled here).
+    await locked.getByRole("button", { name: "Forget remembered passphrase" }).click();
+    await locked.getByText("Forgotten: the passphrase is asked the next time this key is used.").waitFor();
+    await locked.getByRole("button", { name: "Test profile" }).click();
+    await passphrase.waitFor();
+    await passphrase.getByRole("button", { name: "Cancel", exact: true }).click();
+    await passphrase.waitFor({ state: "detached" });
+    await locked.getByRole("button", { name: "Cancel", exact: true }).last().click();
+    await locked.waitFor({ state: "detached" });
+  });
 
   step("Settings → Network: network profiles listed, created, edited and deleted there");
   await withSettings("network", async (settings) => {
@@ -11416,6 +11877,9 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   const events = mcp.getByRole("table", { name: "Events" });
   await events.getByRole("row").filter({ hasText: "select count(*) as n from product" }).getByText("OK").waitFor();
   await events.getByRole("row").filter({ hasText: "insert into product" }).getByText("Refused").waitFor();
+  // A refused write reads as one at a glance (SDB-32): the kind of call beside how it ended.
+  await events.getByRole("row").filter({ hasText: "insert into product" }).getByText("Write", { exact: true }).waitFor();
+  await events.getByRole("row").filter({ hasText: "select count(*) as n from product" }).getByText("Read", { exact: true }).waitFor();
   await events.getByText("alter user bob password '***'").waitFor();
   assert.ok(!(await mcp.innerText()).includes("hunter2"), "a password never shows");
   await shot("mcp-activity");
@@ -11435,7 +11899,7 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mcp.getByRole("button", { name: "Export CSV" }).click();
   await mcp.getByText("4 events exported to", { exact: false }).waitFor();
   const activityCsv = readFileSync(csvPath, "utf8");
-  assert.ok(activityCsv.startsWith("time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder\n"), activityCsv);
+  assert.ok(activityCsv.startsWith("time,session,client,connection,tool,statement,status,rows,duration_ms,detail,folder,database\n"), activityCsv);
   assert.ok(activityCsv.includes(",smoke-agent,shop,execute_write,alter user bob password '***',refused,"), activityCsv);
   assert.ok(!activityCsv.includes("hunter2"), activityCsv);
   const jsonPath = join(userDir, "activity.json");
@@ -11444,6 +11908,23 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
   await mcp.getByText(`4 events exported to ${jsonPath}`, { exact: false }).waitFor();
   assert.equal(JSON.parse(readFileSync(jsonPath, "utf8")).length, 4);
   await page.evaluate(() => { delete window.__spelaionSavePath; });
+  // A logged statement opens in a new editor tab on its connection, never run (SDB-32).
+  {
+    const tabsBefore = await page.locator(".tabbar .tab").count();
+    await events.getByRole("row").filter({ hasText: "select count(*) as n from product" }).getByRole("button", { name: "Open in editor" }).click();
+    await mcp.waitFor({ state: "detached" });
+    await page.waitForFunction((n) => document.querySelectorAll(".tabbar .tab").length === n + 1, tabsBefore);
+    await page.waitForFunction(
+      (expected) => [...document.querySelectorAll(".tab-panel:not([hidden]) .cm-content .cm-line")].map((line) => line.textContent).join("\n") === expected,
+      "select count(*) as n from product",
+    );
+    const opened = page.locator(".tab-panel:not([hidden])");
+    assert.equal(await opened.locator(".result-tabs button", { hasText: /^Result/ }).count(), 0, "opened, not run");
+    await shot("mcp-open-in-editor");
+    await page.getByRole("button", { name: "MCP server", exact: true }).click();
+    await mcp.getByRole("tab", { name: "Activity" }).click();
+    await mcp.getByRole("status").filter({ hasText: "4 events" }).waitFor();
+  }
   // Sessions: the agent's process, opening into its calls.
   await mcp.getByRole("tab", { name: "Sessions" }).click();
   const sessions = mcp.getByRole("table", { name: "Sessions" });
@@ -11532,7 +12013,8 @@ where variable_name = 'Ssl_cipher' and variable_value <> '';`,
     await mcp.getByText(`${shownFolders.length} events exported to`, { exact: false }).waitFor();
     await page.evaluate(() => { delete window.__spelaionSavePath; });
     const exported = readFileSync(folderCsv, "utf8").trimEnd().split("\n").slice(1);
-    assert.ok(exported.length === shownFolders.length && exported.every((line) => line.endsWith(`,${secondRoot}`)), exported.join("\n"));
+    // Each line ends with the folder, then the database (SDB-32), none for this SQLite file.
+    assert.ok(exported.length === shownFolders.length && exported.every((line) => line.endsWith(`,${secondRoot},`)), exported.join("\n"));
     // Entries with no folder: the clearing record.
     await folderFilter.selectOption("noFolder");
     await events.getByText("Log cleared").waitFor();

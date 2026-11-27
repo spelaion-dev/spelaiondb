@@ -2312,3 +2312,66 @@ async fn an_agent_on_a_connection_with_all_databases_reaches_only_its_own_databa
     );
     assert!(!listed.contains("spelaion_gis"), "{listed}");
 }
+
+/// SDB-32: a statement's audit entry carries the database it ran in where the engine has one to
+/// tell apart from the connection: none on SQLite, the connection's own on PostgreSQL, the
+/// session's current one on MySQL (read from the session, no SQL of ours). A refused write
+/// carries it too, so the Activity tab says where it was refused.
+#[tokio::test]
+async fn an_agents_statement_is_recorded_with_the_database_it_ran_in() {
+    let dir = temp("audit-database-sqlite");
+    let db = database(&dir);
+    std::fs::create_dir_all(dir.join("connections")).unwrap();
+    std::fs::write(
+        dir.join("connections/notes.toml"),
+        writable_connection(&db, ""),
+    )
+    .unwrap();
+    let sqlite = server(None, &dir, false);
+    assert!(!refused(
+        &query(&sqlite, "~/notes", "select * from notes").await
+    ));
+    let last = &app_store(&dir).recent(1).unwrap()[0];
+    assert_eq!(last.tool.as_deref(), Some("run_query"));
+    assert_eq!(last.database, None, "SQLite has no database to tell apart");
+
+    for (variable, engine) in [
+        ("SPELAION_TEST_PG", "postgres"),
+        ("SPELAION_TEST_MYSQL", "mysql"),
+    ] {
+        let Ok(address) = std::env::var(variable) else {
+            eprintln!("{variable} not set: the {engine} audit database is not tested");
+            continue;
+        };
+        let (host, port) = address.rsplit_once(':').unwrap();
+        let dir = temp(&format!("audit-database-{engine}"));
+        std::fs::create_dir_all(dir.join("connections")).unwrap();
+        std::fs::write(
+            dir.join("connections/server.toml"),
+            format!(
+                "schema_version = 1\nengine = \"{engine}\"\nhost = \"{host}\"\nport = {port}\nuser = \"spelaion\"\ndatabase = \"spelaion\"\npassword = {{ secret = \"cmd:echo spelaion\" }}\n\n[mcp]\nexposed = true\n"
+            ),
+        )
+        .unwrap();
+        let server = server(None, &dir, false);
+        let read = query(&server, "~/server", "select 1").await;
+        assert!(!refused(&read), "{engine}: {}", body(&read));
+        let last = &app_store(&dir).recent(1).unwrap()[0];
+        assert_eq!(last.decision, Decision::Executed, "{engine}");
+        assert_eq!(last.database.as_deref(), Some("spelaion"), "{engine}");
+
+        // The connection lets agents read only: a write is refused, where it was asked.
+        let write = server
+            .write(
+                &call("execute_write"),
+                "~/server",
+                "create table audit_db_probe (id int)",
+            )
+            .await
+            .unwrap();
+        assert!(refused(&write), "{engine}: {}", body(&write));
+        let last = &app_store(&dir).recent(1).unwrap()[0];
+        assert_eq!(last.decision, Decision::Rejected, "{engine}");
+        assert_eq!(last.tool.as_deref(), Some("execute_write"), "{engine}");
+    }
+}

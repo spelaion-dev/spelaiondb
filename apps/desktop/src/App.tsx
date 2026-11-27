@@ -9,11 +9,14 @@ import { ImportDialog } from "./components/ImportDialog";
 import { RunFileDialog } from "./components/RunFileDialog";
 import { ActivityBar } from "./components/ActivityBar";
 import { McpPage } from "./components/McpPage";
+import { TasksPage } from "./components/TasksPage";
+import { SaveTaskDialog } from "./components/SaveTaskDialog";
 import { AddConnection } from "./components/AddConnection";
 import { DeleteConnection } from "./components/DeleteConnection";
 import { MoveConnection } from "./components/MoveConnection";
 import { Dialogs } from "./components/Dialogs";
 import { EditorTab } from "./components/EditorTab";
+import { NotebookTab } from "./components/NotebookTab";
 import { PlanFileTab } from "./components/PlanViewer";
 import { openSavedPlan } from "./planFiles";
 import { TabBar } from "./components/TabBar";
@@ -41,7 +44,7 @@ import { commands, events } from "./api";
 import { usePreferences } from "./preferences";
 import { isInstalling, manualUpdateKey, useUpdate } from "./update";
 import { UpdateInstallButton, UpdateProblem } from "./components/UpdateInstall";
-import { isSidePanel, useApp, useDialogs } from "./store";
+import { isPage, isSidePanel, useApp, useDialogs } from "./store";
 import { sessionLost } from "./tabState";
 import { topDialog, useModalFocus } from "./modalFocus";
 import { restoreTabs } from "./tabPersistence";
@@ -95,7 +98,7 @@ export default function App() {
   // store, not this render: the restore above may have just changed it.
   useEffect(() => {
     const section = useApp.getState().sidebarSection;
-    if (!restored.current || section === "mcp") return;
+    if (!restored.current || isPage(section)) return;
     const { sidePanel: saved, setSidePanel } = usePreferences.getState();
     if (saved.hidden !== (section === null)) void setSidePanel(section === null, saved.width);
   }, [sideHidden, sidebarSection]);
@@ -109,10 +112,10 @@ export default function App() {
   const connections = useApp((s) => s.connections);
   const workspaceChanging = useApp((s) => s.workspaceChanging);
   // The MCP server page fills the window: it has no sidebar.
-  const sidebarOpen = sidebarSection !== null && sidebarSection !== "mcp";
+  const sidebarOpen = sidebarSection !== null && !isPage(sidebarSection);
   // Opening or switching a query tab (from history, a shortcut…) leaves the MCP page.
   useEffect(() => {
-    setSidebarSection((section) => (section === "mcp" ? "connections" : section));
+    setSidebarSection((section) => (isPage(section) ? "connections" : section));
   }, [activeTab, tabIds.length]);
   const selectedProcessConnection = processConnection === null ? undefined : listedConnection(connections, processConnection);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
@@ -295,13 +298,13 @@ export default function App() {
         )}
         <UpdateNotice />
         <ReleaseNotesDialog />
-        <TabBar hidden={sidebarSection === "processes" || sidebarSection === "mcp"} />
+        <TabBar hidden={sidebarSection === "processes" || isPage(sidebarSection)} />
         <div className="workspace-content">
           <div
             ref={workspaceRef}
             className={`editor-workspace${layout.kind === "split" ? ` split-${layout.direction}` : ""}`}
             style={splitTemplate(layout)}
-            hidden={sidebarSection === "processes" || sidebarSection === "mcp"}
+            hidden={sidebarSection === "processes" || isPage(sidebarSection)}
           >
             {layout.kind === "split" && <SplitResizer layout={layout} workspace={workspaceRef} />}
             {tabIds.length === 0 ? (
@@ -327,6 +330,7 @@ export default function App() {
             ? <ScreenBoundary screen="process monitor"><ProcessMonitor key={connectionTag(keyOf(selectedProcessConnection))} connection={selectedProcessConnection} onOpenEditor={() => setSidebarSection("connections")} /></ScreenBoundary>
             : <div className="process-welcome"><h2>{t("shell:processMonitor.title")}</h2><p>{t("shell:processMonitor.choose")}</p></div>)}
           {sidebarSection === "mcp" && <ScreenBoundary screen="mcp"><McpPage /></ScreenBoundary>}
+          {sidebarSection === "tasks" && <ScreenBoundary screen="tasks"><TasksPage /></ScreenBoundary>}
           {historyOpen && <HistoryPanel />}
           {snippetsOpen && <SnippetsPanel />}
         </div>
@@ -348,6 +352,7 @@ export default function App() {
       <BackupDialog />
       <SchemaCompareDialog />
       <RunFileDialog />
+      <SaveTaskDialog />
       <Dialogs />
     </div>
   );
@@ -445,8 +450,8 @@ const TabPanel = memo(function TabPanel({ id, active, pane }: { id: string; acti
       onPointerDownCapture={takeFocus}
       onFocusCapture={takeFocus}
     >
-      <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : "editor"}>
-        {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : <EditorTab tab={t} />}
+      <ScreenBoundary screen={t.plan ? "plan" : t.tableDetails ? "table details" : t.diagram ? "er diagram" : t.table ? "table data" : t.notebook ? "notebook" : "editor"}>
+        {t.plan ? <PlanFileTab tab={t} /> : t.tableDetails ? <TableDetailsView tab={t} /> : t.diagram ? <ErDiagramView tab={t} /> : t.notebook ? <NotebookTab tab={t} /> : <EditorTab tab={t} />}
       </ScreenBoundary>
     </div>
   );

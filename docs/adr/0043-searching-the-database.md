@@ -5,6 +5,9 @@
 - **Builds on:** ADR-005 (the driver contract), ADR-024 (the explorer's catalog), ADR-034 (a read
   in its own session, inside the engine's read-only transaction); fits ADR-041 (engines as
   plugins): both additions to the contract take and return owned data and travel as messages
+- **Extended by:** ADR-091 (on a server that does not enforce the read-only transaction, the
+  search may run without it where it is checked that its own statements cannot write: base
+  tables only, GreptimeDB alone so far)
 
 ## Context
 "Which table has a column called `customer_id`?" and "where does this value appear?" are common

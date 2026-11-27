@@ -182,6 +182,33 @@ export const commands = {
 	 *  read-only connection and an unconfirmed run.
 	 */
 	runSqlFile: (session: string, job: Channel<JobTicket>, path: string, onError: OnErrorItem, confirmed: boolean, onEvent: Channel<BackupEventItem_Deserialize>) => typedError<JobOutcome<FileRunDoneItem, null>, string>(__TAURI_INVOKE("run_sql_file", { session, job, path, onError, confirmed, onEvent })),
+	/**  Every saved task, by folder and name, with its last run. */
+	tasks: () => typedError<TaskItem_Serialize[], string>(__TAURI_INVOKE("tasks")),
+	/**  A task's newest runs, newest first. */
+	taskRuns: (id: number | null) => typedError<TaskRunItem_Serialize[], string>(__TAURI_INVOKE("task_runs", { id })),
+	/**  A run's kept log. */
+	taskRunLog: (run: number | null) => typedError<TaskLogItem, string>(__TAURI_INVOKE("task_run_log", { run })),
+	/**
+	 *  Saves a dialog's request as the task `name` in `folder`, on the connection of `session`
+	 *  (ADR-089 point 10). A name another task has comes back as `nameTaken` unless `replace` is
+	 *  that task's id, which the page passes once the user agreed to replace it.
+	 */
+	saveTask: (session: string, name: string, folder: string, replace: number | null, request: TaskRequestItem_Deserialize) => typedError<SaveTaskOutcome, string>(__TAURI_INVOKE("save_task", { session, name, folder, replace, request })),
+	/**
+	 *  Changes a task's name, folder, connection, path or query (the Tasks view's Edit), checked
+	 *  again as when it was saved, with the new connection's secrets as the judge.
+	 */
+	editTask: (id: number | null, edit: TaskEditItem_Deserialize) => typedError<null, string>(__TAURI_INVOKE("edit_task", { id, edit })),
+	/**  A copy of a task under the next free "(copy)" name, without its runs. */
+	duplicateTask: (id: number | null) => typedError<number | null, string>(__TAURI_INVOKE("duplicate_task", { id })),
+	/**  Deletes a task and its runs. */
+	deleteTask: (id: number | null) => typedError<null, string>(__TAURI_INVOKE("delete_task", { id })),
+	/**
+	 *  Runs a task now, as the Tasks view's Run: the core asks back for a password or a yes
+	 *  (nothing is recorded until the run starts with the answer), runs it in a session of its
+	 *  own and records it. `password` is what the password dialog got, kept for this run only.
+	 */
+	runTask: (id: number | null, job: Channel<JobTicket>, password: string | null, confirmed: boolean, onEvent: Channel<TaskEventItem_Deserialize>) => typedError<TaskOutcomeItem_Serialize, string>(__TAURI_INVOKE("run_task", { id, job, password, confirmed, onEvent })),
 	getLanguage: () => typedError<string, string>(__TAURI_INVOKE("get_language")),
 	setLanguage: (language: string) => typedError<null, string>(__TAURI_INVOKE("set_language", { language })),
 	getTheme: () => typedError<string, string>(__TAURI_INVOKE("get_theme")),
@@ -246,8 +273,13 @@ export const commands = {
 	timeZones: () => typedError<string[], string>(__TAURI_INVOKE("time_zones")),
 	/**  The map view's background (ADR-045): tiles from the user's tile server, off by default. */
 	getMapPreferences: () => typedError<MapPreferencesItem, string>(__TAURI_INVOKE("get_map_preferences")),
-	/**  Saves the map's preferences; the core checks the tile server first. */
-	setMapPreferences: (preferences: MapPreferencesItem) => typedError<null, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
+	/**
+	 *  Saves the map's preferences; the core checks the tile server first. Answers what the core
+	 *  stored, and tells every window (`PreferencesChanged`, SDB-533): a window opened before the
+	 *  change would otherwise keep the old value, draw tiles that were turned off and save them on
+	 *  again with its next change.
+	 */
+	setMapPreferences: (preferences: MapPreferencesItem) => typedError<MapPreferencesItem, string>(__TAURI_INVOKE("set_map_preferences", { preferences })),
 	/**
 	 *  Tile `z/x/y` of map view `view`, from the stored tile server, as a `data:` image. Refused with
 	 *  tiles off, past the view's requests, or when the server sends no image.
@@ -293,6 +325,28 @@ export const commands = {
 	 *  it first in the recent files.
 	 */
 	openSqlFile: (path: string) => typedError<SqlFileItem, string>(__TAURI_INVOKE("open_sql_file", { path })),
+	/**  Reads a notebook from its text (a file the page opened as a `.sql` file is, or a kept tab). */
+	parseNotebook: (text: string) => typedError<Notebook_Serialize, string>(__TAURI_INVOKE("parse_notebook", { text })),
+	/**  The notebook's text, as its file holds it: what a save writes and a kept tab keeps. */
+	notebookText: (notebook: Notebook_Deserialize) => typedError<string, string>(__TAURI_INVOKE("notebook_text", { notebook })),
+	/**  A Markdown cell's blocks, drawn by the page as text (ADR-087, point 18). */
+	notebookMarkdown: (text: string) => typedError<Block_Serialize[], string>(__TAURI_INVOKE("notebook_markdown", { text })),
+	/**  The name a new SQL cell gets. */
+	newNotebookCellName: (notebook: Notebook_Deserialize) => typedError<string, string>(__TAURI_INVOKE("new_notebook_cell_name", { notebook })),
+	/**  Whether the SQL cell at `index` may be called `name`. */
+	checkNotebookCellName: (notebook: Notebook_Deserialize, index: number, name: string) => typedError<null, string>(__TAURI_INVOKE("check_notebook_cell_name", { notebook, index, name })),
+	expandNotebookCell: (session: string, notebook: Notebook_Deserialize, index: number) => typedError<ExpandedCellItem, string>(__TAURI_INVOKE("expand_notebook_cell", { session, notebook, index })),
+	/**
+	 *  Runs a cell's expanded SQL on the notebook tab's session, as the editor runs a script: the
+	 *  same `check_run` (the read-only barrier, then the guard's confirmations), the history, the
+	 *  tab's run options. Its results go to the cell's own result tabs (`cell_results_key`),
+	 *  replacing the cell's previous ones.
+	 */
+	runNotebookCell: (session: string, cell: string, sql: string, confirmed: boolean, options: RunOptionsItem_Deserialize, onEvent: Channel<ScriptEvent_Deserialize>) => typedError<null, string>(__TAURI_INVOKE("run_notebook_cell", { session, cell, sql, confirmed, options, onEvent })),
+	/**  Frees one cell's results (the cell was deleted, or its results cleared). */
+	releaseNotebookCell: (session: string, cell: string) => typedError<null, string>(__TAURI_INVOKE("release_notebook_cell", { session, cell })),
+	/**  Writes the notebook as one self-contained HTML file to `path` (ADR-087, point 17). */
+	exportNotebookHtml: (path: string, title: string, connection: string | null, notebook: Notebook_Deserialize, outputs: CellOutputItem_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("export_notebook_html", { path, title, connection, notebook, outputs })),
 	/**
 	 *  Saves a tab's text to `path`. `format` is the file's (`None`: a new file, UTF-8 and the
 	 *  platform's line break); `expected_hash` is what the tab last read or saved (`None`: write
@@ -977,15 +1031,28 @@ export const commands = {
 	bindParams: (session: string, sql: string, values: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("bind_params", { session, sql, values })),
 	/**
 	 *  The `${name}` variables of a script's statements, in order, and which of them have no
-	 *  value yet (neither the tab's nor its connection's), so the UI can ask for those.
+	 *  value yet (neither the tab's nor its connection's, nor an earlier `@set`'s, in the script or
+	 *  a file it includes), so the UI can ask for those. `file`: the tab's `.sql` file, `null` for
+	 *  a console.
 	 */
-	scriptVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<ScriptVariablesItem, string>(__TAURI_INVOKE("script_variables", { session, sql, tab })),
+	scriptVariables: (session: string, sql: string, tab: { [key in string]: string }, file: string | null) => typedError<ScriptVariablesItem, string>(__TAURI_INVOKE("script_variables", { session, sql, tab, file })),
 	/**
 	 *  The script with its variables' values written in, by the core, before anything else reads
 	 *  it: the guard, the read-only checks and the run are given this text. Refused when a value
 	 *  would change how the script is split or read.
 	 */
 	substituteVariables: (session: string, sql: string, tab: { [key in string]: string }) => typedError<string, string>(__TAURI_INVOKE("substitute_variables", { session, sql, tab })),
+	/**
+	 *  The script with its client commands resolved and its variables' values written in, by the
+	 *  core, before anything else reads it (ADR-078): `@set` and `@unset` change the values from
+	 *  their line on for this run only (never the tab's or the connection's), `@echo` lines and
+	 *  included files' names come back to be shown when the run reaches them, and `@include` puts
+	 *  a `.sql` file of the tab's folder tree in place, read here once. The run sends the text, and
+	 *  its guard and read-only check read it. `file`: the tab's `.sql` file, `null` for a console,
+	 *  which refuses `@include`. Refused as `substitute_variables` refuses a value, and for what
+	 *  `@include` refuses.
+	 */
+	resolveScript: (session: string, sql: string, tab: { [key in string]: string }, file: string | null) => typedError<ResolvedScriptItem_Serialize, string>(__TAURI_INVOKE("resolve_script", { session, sql, tab, file })),
 	/**  A connection's variables, by name (SDB-383): local values, kept in the local store. */
 	connectionVariables: (connection: ConnectionKeyItem_Deserialize) => typedError<VariableItem[], string>(__TAURI_INVOKE("connection_variables", { connection })),
 	/**
@@ -1090,6 +1157,40 @@ export const commands = {
 	userMasking: () => typedError<UserMaskingItem, string>(__TAURI_INVOKE("user_masking")),
 	/**  Sets the user's own column masking patterns. They apply to sessions opened from then on. */
 	setUserMasking: (patterns: string[]) => typedError<null, string>(__TAURI_INVOKE("set_user_masking", { patterns })),
+	/**  Writes the personal settings to `path`, which the user chose in the save dialog. */
+	exportSettings: (path: string) => typedError<SettingsSummaryItem_Serialize, string>(__TAURI_INVOKE("export_settings", { path })),
+	/**  What importing the settings file at `path` would change; nothing is written. */
+	previewSettingsImport: (path: string) => typedError<SettingsSummaryItem_Serialize, string>(__TAURI_INVOKE("preview_settings_import", { path })),
+	/**
+	 *  Imports the settings file at `path`, checked whole by the core first. The configuration is
+	 *  read again, every window takes the new interface size and reads every preference again
+	 *  (`PreferencesChanged`, SDB-535).
+	 */
+	importSettings: (path: string) => typedError<SettingsSummaryItem_Serialize, string>(__TAURI_INVOKE("import_settings", { path })),
+	/**  The log's entries of `level` or more important, newest first, with where the file is. */
+	readLog: (level: LogLevelItem) => typedError<LogPageItem, string>(__TAURI_INVOKE("read_log", { level })),
+	/**
+	 *  Writes the entries of `level` or more important to `path`, which the user chose in the save
+	 *  dialog; how many were written.
+	 */
+	exportLog: (level: LogLevelItem, path: string) => typedError<number, string>(__TAURI_INVOKE("export_log", { level, path })),
+	/**
+	 *  Seals the personal connections `ids` (as the explorer lists them, `~/orders`; empty: every
+	 *  personal one) with the password the user typed twice, into `path`, chosen in the save
+	 *  dialog. A repository connection is refused: it moves with its repository (ADR-022).
+	 */
+	exportPersonalConnections: (ids: string[], password: string, path: string) => typedError<ConnectionsExportedItem, string>(__TAURI_INVOKE("export_personal_connections", { ids, password, path })),
+	/**
+	 *  Opens the connections file at `path` with `password` and says what importing each item
+	 *  would do; nothing is written.
+	 */
+	previewConnectionsFile: (path: string, password: string) => typedError<ConnectionImportItem[], string>(__TAURI_INVOKE("preview_connections_file", { path, password })),
+	/**
+	 *  Imports the connections file at `path`: each item whole or not at all, its passwords into
+	 *  the keychain. Items that exist here are replaced only when named in `replace_connections`
+	 *  or `replace_profiles`. The configuration is read again afterwards.
+	 */
+	importConnectionsFile: (path: string, password: string, replaceConnections: string[], replaceProfiles: string[]) => typedError<ConnectionImportResultItem[], string>(__TAURI_INVOKE("import_connections_file", { path, password, replaceConnections, replaceProfiles })),
 	listConnections: () => typedError<ConnectionItem_Serialize[], string>(__TAURI_INVOKE("list_connections")),
 	listHistory: (search: string, offset: number, limit: number) => typedError<HistoryItem_Serialize[], string>(__TAURI_INVOKE("list_history", { search, offset, limit })),
 	historyPage: (filter: HistoryFilterItem_Deserialize, limit: number, offset: number) => typedError<HistoryPageItem_Serialize, string>(__TAURI_INVOKE("history_page", { filter, limit, offset })),
@@ -1289,7 +1390,17 @@ export const commands = {
 	 */
 	queryKeyTable: (session: string, result: number, sql: string) => typedError<KeyTableItem | null, string>(__TAURI_INVOKE("query_key_table", { session, result, sql })),
 	/**  The UI's answer to a tunnel dialog (unknown host, passphrase…). */
-	answerInteraction: (id: number, accept: boolean, secret: string | null) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret })),
+	answerInteraction: (id: number, accept: boolean, secret: string | null, remember: boolean) => typedError<null, string>(__TAURI_INVOKE("answer_interaction", { id, accept, secret, remember })),
+	/**
+	 *  Whether a passphrase is remembered for the key file a hop names (ADR-090): only whether,
+	 *  never the passphrase.
+	 */
+	keyPassphraseRemembered: (personal: boolean, identityFile: string) => typedError<boolean, string>(__TAURI_INVOKE("key_passphrase_remembered", { personal, identityFile })),
+	/**
+	 *  Forgets the passphrase remembered for the key file a hop names (ADR-090): it is asked the
+	 *  next time the key is used.
+	 */
+	forgetKeyPassphrase: (personal: boolean, identityFile: string) => typedError<null, string>(__TAURI_INVOKE("forget_key_passphrase", { personal, identityFile })),
 	/**  An editor tab's transaction, as the core last read it (ADR-031). */
 	transactionStatus: (session: string) => typedError<TransactionStatusItem, string>(__TAURI_INVOKE("transaction_status", { session })),
 	/**
@@ -1365,6 +1476,7 @@ export const events = {
 	launchRequested: makeEvent<LaunchRequested_Serialize, LaunchRequested_Deserialize>("launch-requested"),
 	pluginInstallChanged: makeEvent<PluginInstallChanged, PluginInstallChanged>("plugin-install-changed"),
 	pluginsChanged: makeEvent<PluginsChanged, PluginsChanged>("plugins-changed"),
+	preferencesChanged: makeEvent<PreferencesChanged, PreferencesChanged>("preferences-changed"),
 	quitRequested: makeEvent<QuitRequested, QuitRequested>("quit-requested"),
 	resultsWindowClosed: makeEvent<ResultsWindowClosed, ResultsWindowClosed>("results-window-closed"),
 	runChanged: makeEvent<RunChanged, RunChanged>("run-changed"),
@@ -1384,6 +1496,9 @@ export type AddedFolderItem = {
 	folders: OpenFolderItem[],
 };
 
+/**  A table column's alignment. */
+export type Align = "none" | "left" | "center" | "right";
+
 /**  The script a structure form would run, written by the core, to show before it does. */
 export type AlterationPreviewItem = {
 	/**  The whole script, as shown and as sent back to apply it. */
@@ -1401,6 +1516,9 @@ export type AnalyzeUnavailable =
 "readOnly" | 
 /**  The engine has no ANALYZE that executes the query (SQLite). */
 "engine";
+
+/**  What kind of call an MCP entry records (SDB-32), as the core reads it from the tool. */
+export type AuditActionItem = "read" | "write" | "catalog" | "unknown";
 
 /**  One MCP call, with its secrets already masked by the core. */
 export type AuditEventItem = AuditEventItem_Serialize | AuditEventItem_Deserialize;
@@ -1423,6 +1541,13 @@ export type AuditEventItem_Deserialize = {
 	 *  written before 0.17.
 	 */
 	folder?: string | null,
+	/**
+	 *  The database the statement ran in (SDB-32), where the engine has one to tell apart from
+	 *  the connection; none otherwise, and for entries written before 0.18.
+	 */
+	database?: string | null,
+	/**  What kind of call it was, from its tool (SDB-32): read, write or catalog. */
+	action: AuditActionItem,
 };
 
 /**  One MCP call, with its secrets already masked by the core. */
@@ -1443,6 +1568,13 @@ export type AuditEventItem_Serialize = {
 	 *  written before 0.17.
 	 */
 	folder: string | null,
+	/**
+	 *  The database the statement ran in (SDB-32), where the engine has one to tell apart from
+	 *  the connection; none otherwise, and for entries written before 0.18.
+	 */
+	database: string | null,
+	/**  What kind of call it was, from its tool (SDB-32): read, write or catalog. */
+	action: AuditActionItem,
 };
 
 export type AuditFilterItem = AuditFilterItem_Serialize | AuditFilterItem_Deserialize;
@@ -1592,12 +1724,25 @@ export type BackupToolsItem_Serialize = {
 	tools: ToolItem_Serialize[],
 };
 
+/**  A block of a Markdown cell. */
+export type Block = Block_Serialize | Block_Deserialize;
+
 /**  A rectangle of the page: rows `firstRow..=lastRow` of the shown `columns`, in order. */
 export type BlockItem = {
 	firstRow: number,
 	lastRow: number,
 	columns: number[],
 };
+
+/**  A block of a Markdown cell. */
+export type Block_Deserialize = { kind: "heading"; level: number; content: Inline[] } | { kind: "paragraph"; content: Inline[] } | { kind: "quote"; blocks: Block_Deserialize[] } | { kind: "list"; ordered: boolean; 
+/**  The first item's number, for a numbered list. */
+start: number; items: Inline[][] } | { kind: "code"; language?: string | null; text: string } | { kind: "rule" } | { kind: "table"; align: Align[]; header: Inline[][]; rows: Inline[][][] };
+
+/**  A block of a Markdown cell. */
+export type Block_Serialize = { kind: "heading"; level: number; content: Inline[] } | { kind: "paragraph"; content: Inline[] } | { kind: "quote"; blocks: Block_Serialize[] } | { kind: "list"; ordered: boolean; 
+/**  The first item's number, for a numbered list. */
+start: number; items: Inline[][] } | { kind: "code"; language: string | null; text: string } | { kind: "rule" } | { kind: "table"; align: Align[]; header: Inline[][]; rows: Inline[][][] };
 
 /**  Why a column cannot be copied as it is. */
 export type BlockedItem = "binary" | "masked";
@@ -1659,6 +1804,13 @@ export type BulkActionItem = { kind: "set"; value: CellInputItem } | { kind: "fi
 
 export type CardinalityItem = "one" | "zeroOrOne" | "zeroOrMany";
 
+/**  One cell. */
+export type Cell = 
+/**  SQL, run as a script on the notebook's session; `name` is what references use. */
+{ kind: "sql"; name: string; sql: string } | 
+/**  Markdown text, drawn from [`markdown::read`]'s blocks. */
+{ kind: "markdown"; text: string };
+
 /**  A value typed in the grid for a result column (`None` is NULL). */
 export type CellEditItem = CellEditItem_Serialize | CellEditItem_Deserialize;
 
@@ -1693,6 +1845,24 @@ export type CellEditViewItem_Serialize = {
 export type CellInputItem = { kind: "text"; text: string } | { kind: "null" } | { kind: "default" };
 
 /**
+ *  What a SQL cell shows when the notebook is exported. The rows are read from the stored
+ *  results here, never sent by the page.
+ */
+export type CellOutputItem = CellOutputItem_Serialize | CellOutputItem_Deserialize;
+
+/**
+ *  What a SQL cell shows when the notebook is exported. The rows are read from the stored
+ *  results here, never sent by the page.
+ */
+export type CellOutputItem_Deserialize = { kind: "notRun" } | { kind: "ran"; messages: string[]; results: CellResultItem_Deserialize[] } | { kind: "failed"; error: string };
+
+/**
+ *  What a SQL cell shows when the notebook is exported. The rows are read from the stored
+ *  results here, never sent by the page.
+ */
+export type CellOutputItem_Serialize = { kind: "notRun" } | { kind: "ran"; messages: string[]; results: CellResultItem_Serialize[] } | { kind: "failed"; error: string };
+
+/**
  *  Rows of a result by position, and the columns taken from each, in order (the grid leaves
  *  out the columns it hides).
  */
@@ -1718,6 +1888,23 @@ export type CellRange_Serialize = {
 	rows: number,
 	columns: number[],
 	selectedRows: number[] | null,
+};
+
+/**  A shown result of a cell, as the export reads it. */
+export type CellResultItem = CellResultItem_Serialize | CellResultItem_Deserialize;
+
+/**  A shown result of a cell, as the export reads it. */
+export type CellResultItem_Deserialize = {
+	result: number,
+	/**  The chart the page shows for it, as SVG; the core checks it before embedding it. */
+	chartSvg?: string | null,
+};
+
+/**  A shown result of a cell, as the export reads it. */
+export type CellResultItem_Serialize = {
+	result: number,
+	/**  The chart the page shows for it, as SVG; the core checks it before embedding it. */
+	chartSvg: string | null,
 };
 
 /**
@@ -2340,6 +2527,21 @@ export type ConnectionDraftItem_Serialize = {
 	maskNever: string[],
 };
 
+/**  One item of a connections file, as its import preview shows it. */
+export type ConnectionImportItem = {
+	kind: TransferItemKindItem,
+	id: string,
+	name: string,
+	state: ImportStateItem,
+	secrets: number,
+};
+
+export type ConnectionImportResultItem = {
+	kind: TransferItemKindItem,
+	id: string,
+	outcome: ImportOutcomeItem,
+};
+
 export type ConnectionItem = ConnectionItem_Serialize | ConnectionItem_Deserialize;
 
 export type ConnectionItem_Deserialize = {
@@ -2583,6 +2785,18 @@ export type ConnectionTypeItem_Serialize = {
 	maskColumns: string[],
 	/**  The team's: the user cannot remove them. */
 	inheritedMaskColumns: string[],
+};
+
+/**  What exporting personal connections wrote (ADR-088). */
+export type ConnectionsExportedItem = {
+	connections: number,
+	networkProfiles: number,
+	/**  Keychain passwords carried, encrypted. */
+	secrets: number,
+	/**  No system keychain here: no password could be carried. */
+	withoutKeychain: boolean,
+	/**  Network profiles the connections name that are not personal: not in the file. */
+	profilesNotCarried: string[],
 };
 
 export type ConstraintDetails = ConstraintDetails_Serialize | ConstraintDetails_Deserialize;
@@ -3191,6 +3405,13 @@ export type DuplicatedItem = {
 	passwordCopied: boolean,
 };
 
+/**  What the Messages tab shows when the run reaches it (ADR-078). */
+export type EchoLineItem = 
+/**  An `@echo` line's text, as written. */
+{ kind: "echo"; text: string } | 
+/**  An included file starts: its name. */
+{ kind: "included"; file: string };
+
 /**  A column as a structure form shows it (ADR-047): every field is SQL as the engine writes it. */
 export type EditableColumnItem = EditableColumnItem_Serialize | EditableColumnItem_Deserialize;
 
@@ -3449,6 +3670,17 @@ export type ErrorAnswerItem = "stop" | "skip" | "skipAll";
 export type ExistingItem = {
 	id: string,
 	name: string,
+};
+
+/**
+ *  A cell ready to run on the notebook tab's session: its references expanded into CTEs by the
+ *  session's own dialect (ADR-087, points 8 and 9).
+ */
+export type ExpandedCellItem = {
+	/**  What runs, and what the guard and the history see. */
+	sql: string,
+	/**  The referenced cells, in the order their CTEs are written. */
+	references: string[],
 };
 
 export type ExplainCheck = {
@@ -4158,6 +4390,9 @@ export type ImportOptionsItem = {
 	sheet: string,
 };
 
+/**  What happened to an item on import. */
+export type ImportOutcomeItem = { kind: "added" } | { kind: "replaced" } | { kind: "skipped" } | { kind: "notImported"; reason: string } | { kind: "failed"; reason: string };
+
 /**  What will run, written by the core, to show before it does. */
 export type ImportPlanItem = {
 	statements: string[],
@@ -4293,6 +4528,9 @@ export type ImportSourceItem = { kind: "file"; path: string } |
 /**  Pasted or clipboard text. */
 { kind: "text"; text: string };
 
+/**  What importing an item of a connections file would do, as the core decided. */
+export type ImportStateItem = { kind: "new" } | { kind: "exists" } | { kind: "refused"; reason: string } | { kind: "invalid"; reason: string };
+
 /**  Where the connections go. */
 export type ImportTarget = ImportTarget_Serialize | ImportTarget_Deserialize;
 
@@ -4328,6 +4566,16 @@ export type ImportTarget_Serialize = {
 	keepClientFolders: boolean,
 };
 
+/**  A file a run included (ADR-078, point 7). */
+export type IncludedFileItem = {
+	/**  Canonical. */
+	path: string,
+	/**  Relative to the script's folder tree, with `/`. */
+	name: string,
+	/**  SHA-256 of what was read. */
+	hash: string,
+};
+
 export type IndexCleanupItem = "auto" | "on" | "off";
 
 export type IndexDetails = {
@@ -4337,6 +4585,13 @@ export type IndexDetails = {
 	/**  `CREATE INDEX …` as the engine writes it (or a comment for SQLite's automatic ones). */
 	definition: string,
 };
+
+/**  A span of text inside a block. */
+export type Inline = { kind: "text"; text: string } | { kind: "strong"; content: Inline[] } | { kind: "emphasis"; content: Inline[] } | { kind: "code"; text: string } | 
+/**  Shown as its text and its address; never followed. */
+{ kind: "link"; content: Inline[]; url: string } | 
+/**  Shown as its alternative text and address; never fetched. */
+{ kind: "image"; alt: string; url: string } | { kind: "lineBreak" };
 
 /**  Where installing an update stands. */
 export type InstallStatus = InstallStatus_Serialize | InstallStatus_Deserialize;
@@ -4392,7 +4647,9 @@ export type JobKind =
 /**  "Load every row", a page or a row jump of a query's result. */
 "rowLoad" | "pluginInstall" | 
 /**  A schema comparison's reads (ADR-070). */
-"schemaCompare";
+"schemaCompare" | 
+/**  A saved task's run (ADR-089). */
+"task";
 
 /**
  *  How a job ended (ADR-060): the one answer of every command that runs a job of the core (an
@@ -4669,6 +4926,29 @@ export type LockSnapshotItem_Serialize = {
 export type LockWaitItem = {
 	waiting: string,
 	blocking: string,
+};
+
+/**  One entry of the app log, scrubbed by the core. */
+export type LogEntryItem = {
+	/**  When it was written (UTC, ISO 8601); empty for a line the log did not write. */
+	time: string,
+	level: LogLevelItem,
+	message: string,
+};
+
+/**  How much a log entry matters (SDB-31); as a filter, the least important level shown. */
+export type LogLevelItem = "error" | "warning" | "info";
+
+/**
+ *  What Settings › Logs shows: the entries a filter keeps, newest first, how many of each
+ *  level the log has, and where its file is.
+ */
+export type LogPageItem = {
+	path: string,
+	entries: LogEntryItem[],
+	errors: number,
+	warnings: number,
+	infos: number,
 };
 
 /**  What a column loses on its way, for the page to word. */
@@ -5181,6 +5461,29 @@ export type NotScriptedItem = {
 	reason: string,
 };
 
+/**  A notebook as the page edits it: cells in order and the connection it was last run on. */
+export type Notebook = Notebook_Serialize | Notebook_Deserialize;
+
+/**  A notebook as the page edits it: cells in order and the connection it was last run on. */
+export type Notebook_Deserialize = {
+	/**
+	 *  The id of the connection it was last run on: a suggestion when it opens, never a
+	 *  connection opened by reading it (ADR-087, point 11).
+	 */
+	connection?: string | null,
+	cells: Cell[],
+};
+
+/**  A notebook as the page edits it: cells in order and the connection it was last run on. */
+export type Notebook_Serialize = {
+	/**
+	 *  The id of the connection it was last run on: a suggestion when it opens, never a
+	 *  connection opened by reading it (ADR-087, point 11).
+	 */
+	connection: string | null,
+	cells: Cell[],
+};
+
 export type NoticeItem = {
 	severity: string,
 	message: string,
@@ -5389,6 +5692,8 @@ export type OpenTabItem_Deserialize = {
 	timeoutSeconds?: number | null,
 	snippetName?: string | null,
 	file?: OpenTabFileItem_Deserialize | null,
+	/**  A notebook tab (ADR-087): `text` is the notebook's document as its file holds it. */
+	notebook?: boolean,
 };
 
 /**  An editor tab as kept between runs: text and settings, never results or session state. */
@@ -5408,6 +5713,8 @@ export type OpenTabItem_Serialize = {
 	timeoutSeconds: number | null,
 	snippetName: string | null,
 	file: OpenTabFileItem_Serialize | null,
+	/**  A notebook tab (ADR-087): `text` is the notebook's document as its file holds it. */
+	notebook: boolean,
 };
 
 /**  One statement of a script in the editor's outline. */
@@ -6181,6 +6488,16 @@ export type PluginsOverview_Serialize = {
 /**  A PostgreSQL connection's pooler (SDB-396). */
 export type PoolerItem = "session" | "transaction";
 
+/**  A personal preference a window keeps once read. */
+export type PreferenceKind = "language" | "theme" | "interfaceSize" | "explorer" | "grid" | "script" | "editor" | "map" | "reconnectOnStart" | "displayFormat" | "shortcuts" | 
+/**  The editor snippets and the new script's template. */
+"snippets" | "updateCheck";
+
+/**  The core stored new values of these preferences: every window reads them again. */
+export type PreferencesChanged = {
+	settings: PreferenceKind[],
+};
+
 export type PreviewColumnItem = {
 	name: string,
 	kind: ColumnKindItem,
@@ -6435,6 +6752,37 @@ export type RerunCheckItem_Serialize = {
 	openTransaction: boolean,
 };
 
+/**
+ *  A script the editor runs, with its client commands resolved by the core (ADR-078): the text
+ *  the run sends, which its guard and read-only check read, its `@echo` lines and included
+ *  files' names, where each statement comes from, and the files it read.
+ */
+export type ResolvedScriptItem = ResolvedScriptItem_Serialize | ResolvedScriptItem_Deserialize;
+
+/**
+ *  A script the editor runs, with its client commands resolved by the core (ADR-078): the text
+ *  the run sends, which its guard and read-only check read, its `@echo` lines and included
+ *  files' names, where each statement comes from, and the files it read.
+ */
+export type ResolvedScriptItem_Deserialize = {
+	text: string,
+	echoes: ScriptEchoItem[],
+	origins: StatementOriginItem_Deserialize[],
+	files: IncludedFileItem[],
+};
+
+/**
+ *  A script the editor runs, with its client commands resolved by the core (ADR-078): the text
+ *  the run sends, which its guard and read-only check read, its `@echo` lines and included
+ *  files' names, where each statement comes from, and the files it read.
+ */
+export type ResolvedScriptItem_Serialize = {
+	text: string,
+	echoes: ScriptEchoItem[],
+	origins: StatementOriginItem_Serialize[],
+	files: IncludedFileItem[],
+};
+
 /**  A finished restore: the bytes of the file fed to the tool and how long it took. */
 export type RestoreDoneItem = {
 	bytes: number | null,
@@ -6669,6 +7017,16 @@ export type RunOptionsItem_Deserialize = {
 	onError: OnErrorItem,
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds?: number | null,
+	/**
+	 *  The run's `@echo` lines and included files' names (ADR-078), as `resolve_script` gave
+	 *  them: none for any other run. Only shown, never a statement.
+	 */
+	echoes?: ScriptEchoItem[],
+	/**
+	 *  The files the run included, with the hash of what was read: the run is refused when one
+	 *  of them changed since (ADR-078, point 4). None for any other run.
+	 */
+	files?: IncludedFileItem[],
 };
 
 /**  How one run goes: its error mode and, if set, its own statement timeout. */
@@ -6676,6 +7034,16 @@ export type RunOptionsItem_Serialize = {
 	onError: OnErrorItem,
 	/**  Seconds; `null` for the connection's `statement_timeout`, 0 for none in this run. */
 	timeoutSeconds: number | null,
+	/**
+	 *  The run's `@echo` lines and included files' names (ADR-078), as `resolve_script` gave
+	 *  them: none for any other run. Only shown, never a statement.
+	 */
+	echoes: ScriptEchoItem[],
+	/**
+	 *  The files the run included, with the hash of what was read: the run is refused when one
+	 *  of them changed since (ADR-078, point 4). None for any other run.
+	 */
+	files: IncludedFileItem[],
 };
 
 /**
@@ -6750,6 +7118,9 @@ export type SaveFileOutcome = { kind: "saved"; path: string; name: string; hash:
 { kind: "deletedOnDisk" } | 
 /**  The file's encoding cannot hold this character: save as UTF-8 instead? */
 { kind: "unrepresentable"; character: string; encoding: string };
+
+/**  How saving went: a name another task has is asked about before it is replaced. */
+export type SaveTaskOutcome = { kind: "saved"; id: number | null } | { kind: "nameTaken"; id: number | null };
 
 /**  A saved diagram with what it holds, checked by the core just now. */
 export type SavedDiagramDetailItem = SavedDiagramDetailItem_Serialize | SavedDiagramDetailItem_Deserialize;
@@ -6875,6 +7246,16 @@ export type ScreenFailureItem = {
 	stack: string,
 };
 
+/**  A line for the Messages tab, by the statement it comes before. */
+export type ScriptEchoItem = {
+	/**
+	 *  The statement of the resolved script it comes before (the number of statements when it
+	 *  comes after the last one).
+	 */
+	before: number,
+	line: EchoLineItem,
+};
+
 export type ScriptEvent = ScriptEvent_Serialize | ScriptEvent_Deserialize;
 
 export type ScriptEvent_Deserialize = 
@@ -6909,7 +7290,17 @@ end: StatementEndItem } |
 /**  The run waits for `answer_script_error` with this ticket (ADR-035). */
 { kind: "errorPaused"; index: number; ticket: number; remaining: number } | 
 /**  The run ended; its summary says how. */
-{ kind: "scriptFinished"; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string };
+{ kind: "scriptFinished"; summary: ScriptSummaryItem_Deserialize } | { kind: "historyWarning"; message: string } | 
+/**
+ *  A script's `@echo` line, when the run reached it (ADR-078): its text, as written. Not a
+ *  statement.
+ */
+{ kind: "echo"; text: string } | 
+/**
+ *  An included file starts (ADR-078, point 7): its name, relative to the script's folder
+ *  tree with `/`.
+ */
+{ kind: "included"; file: string };
 
 export type ScriptEvent_Serialize = 
 /**
@@ -6943,7 +7334,17 @@ end: StatementEndItem } |
 /**  The run waits for `answer_script_error` with this ticket (ADR-035). */
 { kind: "errorPaused"; index: number; ticket: number; remaining: number } | 
 /**  The run ended; its summary says how. */
-{ kind: "scriptFinished"; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string };
+{ kind: "scriptFinished"; summary: ScriptSummaryItem_Serialize } | { kind: "historyWarning"; message: string } | 
+/**
+ *  A script's `@echo` line, when the run reached it (ADR-078): its text, as written. Not a
+ *  statement.
+ */
+{ kind: "echo"; text: string } | 
+/**
+ *  An included file starts (ADR-078, point 7): its name, relative to the script's folder
+ *  tree with `/`.
+ */
+{ kind: "included"; file: string };
 
 /**  How scripts run from the editor, shared by every workspace. */
 export type ScriptPreferencesItem = {
@@ -7031,7 +7432,9 @@ export type SearchTableItem = {
 };
 
 /**  Structured context for our own prompts; remote SSH challenges stay verbatim. */
-export type SecretLabel = { kind: "keyPassphrase"; path: string; retry: boolean } | { kind: "password"; user: string; host: string } | { kind: "proxyPassword"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
+export type SecretLabel = 
+/**  `can_remember`: the dialog offers "Remember in the system keychain" (ADR-090). */
+{ kind: "keyPassphrase"; path: string; retry: boolean; canRemember: boolean } | { kind: "password"; user: string; host: string } | { kind: "proxyPassword"; user: string; host: string } | { kind: "challenge"; host: string; instructions: string };
 
 /**
  *  The numbers about a grid selection (the calc panel), computed by the core over the stored
@@ -7194,6 +7597,51 @@ export type SessionLost_Serialize = {
 	openTransaction: boolean,
 };
 
+/**  What a settings file holds, and what importing it changes or changed (SDB-31). */
+export type SettingsSummaryItem = SettingsSummaryItem_Serialize | SettingsSummaryItem_Deserialize;
+
+/**  What a settings file holds, and what importing it changes or changed (SDB-31). */
+export type SettingsSummaryItem_Deserialize = {
+	appVersion: string,
+	exportedAt: string,
+	/**  Settings other than shortcuts and snippets. */
+	settings: number,
+	shortcuts: number,
+	snippets: number,
+	/**  `${user.…}` variables that are new or get another value. */
+	variables: string[],
+	/**  The tunnels' local port range it sets, as `[min, max]`. */
+	tunnelPorts?: TunnelPortsItem | null,
+	maskingAdded: string[],
+	typesAdded: string[],
+	typesKept: string[],
+	/**  The MCP read-only mode is on here and stays on, though the file has it off. */
+	mcpReadOnlyKept: boolean,
+	/**  What the file has that this version does not know, left out. */
+	skipped: string[],
+};
+
+/**  What a settings file holds, and what importing it changes or changed (SDB-31). */
+export type SettingsSummaryItem_Serialize = {
+	appVersion: string,
+	exportedAt: string,
+	/**  Settings other than shortcuts and snippets. */
+	settings: number,
+	shortcuts: number,
+	snippets: number,
+	/**  `${user.…}` variables that are new or get another value. */
+	variables: string[],
+	/**  The tunnels' local port range it sets, as `[min, max]`. */
+	tunnelPorts: TunnelPortsItem | null,
+	maskingAdded: string[],
+	typesAdded: string[],
+	typesKept: string[],
+	/**  The MCP read-only mode is on here and stays on, though the file has it off. */
+	mcpReadOnlyKept: boolean,
+	/**  What the file has that this version does not know, left out. */
+	skipped: string[],
+};
+
 /**
  *  One command whose keyboard shortcut the user changed (SDB-447, ADR-064): its id in the
  *  app's registry and the keys it now has, as the registry writes them, or none.
@@ -7350,6 +7798,25 @@ export type StatStateItem = { kind: "done" } |
 export type StatementEndItem = "failed" | "cancelled" | 
 /**  It ran longer than the run's statement timeout. */
 "timedOut";
+
+/**  Where a statement of a resolved script was written. */
+export type StatementOriginItem = StatementOriginItem_Serialize | StatementOriginItem_Deserialize;
+
+/**  Where a statement of a resolved script was written. */
+export type StatementOriginItem_Deserialize = {
+	/**  The included file, relative to the script's tree; `null` for the tab's own text. */
+	file?: string | null,
+	/**  Its first line in that text, from 1. */
+	line: number,
+};
+
+/**  Where a statement of a resolved script was written. */
+export type StatementOriginItem_Serialize = {
+	/**  The included file, relative to the script's tree; `null` for the tab's own text. */
+	file: string | null,
+	/**  Its first line in that text, from 1. */
+	line: number,
+};
 
 /**
  *  What Ctrl+Enter runs: the text the core wrote for the statement under the cursor, and that
@@ -7538,6 +8005,150 @@ export type TablesStoppedItem = {
 	files: ExportedFileItem[],
 	table: number,
 };
+
+/**
+ *  What the Tasks view's Edit changes. The other options are changed by saving again from the
+ *  dialog (ADR-089 point 10).
+ */
+export type TaskEditItem = TaskEditItem_Serialize | TaskEditItem_Deserialize;
+
+/**
+ *  What the Tasks view's Edit changes. The other options are changed by saving again from the
+ *  dialog (ADR-089 point 10).
+ */
+export type TaskEditItem_Deserialize = {
+	name: string,
+	folder: string,
+	connection: ConnectionKeyItem_Deserialize,
+	path?: string | null,
+	sql?: string | null,
+};
+
+/**
+ *  What the Tasks view's Edit changes. The other options are changed by saving again from the
+ *  dialog (ADR-089 point 10).
+ */
+export type TaskEditItem_Serialize = {
+	name: string,
+	folder: string,
+	connection: ConnectionKeyItem_Serialize,
+	path: string | null,
+	sql: string | null,
+};
+
+/**  A run's live log line or progress. */
+export type TaskEventItem = TaskEventItem_Serialize | TaskEventItem_Deserialize;
+
+/**  A run's live log line or progress. */
+export type TaskEventItem_Deserialize = { kind: "log"; line: string } | { kind: "rows"; table?: number | null; rows: number | null; bytes: number | null } | { kind: "import"; read: number | null; committed: number | null } | { kind: "bytes"; bytes: number | null; total?: number | null } | { kind: "statements"; done: number | null; total: number | null };
+
+/**  A run's live log line or progress. */
+export type TaskEventItem_Serialize = { kind: "log"; line: string } | { kind: "rows"; table: number | null; rows: number | null; bytes: number | null } | { kind: "import"; read: number | null; committed: number | null } | { kind: "bytes"; bytes: number | null; total: number | null } | { kind: "statements"; done: number | null; total: number | null };
+
+/**
+ *  A saved task as the Tasks view lists it. `unreadable` says why a document cannot be used;
+ *  such a task has no kind or connection and runs nothing.
+ */
+export type TaskItem = TaskItem_Serialize | TaskItem_Deserialize;
+
+/**
+ *  A saved task as the Tasks view lists it. `unreadable` says why a document cannot be used;
+ *  such a task has no kind or connection and runs nothing.
+ */
+export type TaskItem_Deserialize = {
+	id: number | null,
+	name: string,
+	folder: string,
+	kind?: TaskKindItem | null,
+	connection?: ConnectionKeyItem_Deserialize | null,
+	/**  The file or folder it writes to or reads from, as Edit changes it. */
+	path?: string | null,
+	/**  A query export's query, as Edit changes it. */
+	sql?: string | null,
+	unreadable?: string | null,
+	lastRun?: TaskRunItem_Deserialize | null,
+};
+
+/**
+ *  A saved task as the Tasks view lists it. `unreadable` says why a document cannot be used;
+ *  such a task has no kind or connection and runs nothing.
+ */
+export type TaskItem_Serialize = {
+	id: number | null,
+	name: string,
+	folder: string,
+	kind: TaskKindItem | null,
+	connection: ConnectionKeyItem_Serialize | null,
+	/**  The file or folder it writes to or reads from, as Edit changes it. */
+	path: string | null,
+	/**  A query export's query, as Edit changes it. */
+	sql: string | null,
+	unreadable: string | null,
+	lastRun: TaskRunItem_Serialize | null,
+};
+
+export type TaskKindItem = "export" | "import" | "dump" | "restore" | "embeddedDump" | "duckdbImport" | "runFile";
+
+export type TaskLogItem = {
+	log: string,
+	omitted: number | null,
+};
+
+export type TaskOriginItem = "app" | "cli";
+
+/**  How starting a task ended: it ran (recorded), or it asks first (nothing recorded). */
+export type TaskOutcomeItem = TaskOutcomeItem_Serialize | TaskOutcomeItem_Deserialize;
+
+/**  How starting a task ended: it ran (recorded), or it asks first (nothing recorded). */
+export type TaskOutcomeItem_Deserialize = { kind: "ran"; run: number | null; state: TaskRunStateItem; summary: string; message?: string | null } | { kind: "needsConfirmation"; plan: TaskPlanItem } | { kind: "passwordRequired"; canRemember: boolean };
+
+/**  How starting a task ended: it ran (recorded), or it asks first (nothing recorded). */
+export type TaskOutcomeItem_Serialize = { kind: "ran"; run: number | null; state: TaskRunStateItem; summary: string; message: string | null } | { kind: "needsConfirmation"; plan: TaskPlanItem } | { kind: "passwordRequired"; canRemember: boolean };
+
+/**  What a run will do, for the confirmation: written by the core. */
+export type TaskPlanItem = {
+	kind: TaskKindItem,
+	connection: string,
+	steps: string[],
+	risks: string[],
+	notes: string[],
+};
+
+/**  What a dialog's "Save as task…" saves: the request it would run, as it sends it to run. */
+export type TaskRequestItem = TaskRequestItem_Serialize | TaskRequestItem_Deserialize;
+
+/**  What a dialog's "Save as task…" saves: the request it would run, as it sends it to run. */
+export type TaskRequestItem_Deserialize = { kind: "exportQuery"; sql: string; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Deserialize } | { kind: "exportTable"; table: TableExportItem; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Deserialize } | { kind: "exportTables"; tables: RelationRefItem[]; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Deserialize } | { kind: "import"; request: ImportRequestItem } | { kind: "dump"; request: BackupRequestItem_Deserialize } | { kind: "restore"; request: RestoreRequestItem } | { kind: "embeddedDump"; request: EmbeddedBackupItem } | { kind: "duckdbImport"; folder: string } | { kind: "runFile"; path: string; onError: OnErrorItem };
+
+/**  What a dialog's "Save as task…" saves: the request it would run, as it sends it to run. */
+export type TaskRequestItem_Serialize = { kind: "exportQuery"; sql: string; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Serialize } | { kind: "exportTable"; table: TableExportItem; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Serialize } | { kind: "exportTables"; tables: RelationRefItem[]; folder: string; names: FileNamePatternItem; options: ExportFileOptions_Serialize } | { kind: "import"; request: ImportRequestItem } | { kind: "dump"; request: BackupRequestItem_Serialize } | { kind: "restore"; request: RestoreRequestItem } | { kind: "embeddedDump"; request: EmbeddedBackupItem } | { kind: "duckdbImport"; folder: string } | { kind: "runFile"; path: string; onError: OnErrorItem };
+
+/**  A recorded run, from the app or the command line. */
+export type TaskRunItem = TaskRunItem_Serialize | TaskRunItem_Deserialize;
+
+/**  A recorded run, from the app or the command line. */
+export type TaskRunItem_Deserialize = {
+	id: number | null,
+	origin: TaskOriginItem,
+	startedMs: number | null,
+	endedMs?: number | null,
+	state: TaskRunStateItem,
+	summary: string,
+};
+
+/**  A recorded run, from the app or the command line. */
+export type TaskRunItem_Serialize = {
+	id: number | null,
+	origin: TaskOriginItem,
+	startedMs: number | null,
+	endedMs: number | null,
+	state: TaskRunStateItem,
+	summary: string,
+};
+
+export type TaskRunStateItem = 
+/**  No ending was recorded: still running, or its program stopped. */
+"unfinished" | "succeeded" | "failed" | "cancelled" | "refused";
 
 export type TemporalKindItem = "date" | "time" | "timestamp" | 
 /**  Written in UTC with `+00`, as the grid shows it. */
@@ -7786,6 +8397,9 @@ inTransaction: boolean;
 autoCommitLocked: boolean; 
 /**  Commit and Rollback are shown: in manual commit, or while a transaction is open. */
 endActionsShown: boolean };
+
+/**  Whether an item of a connections file is a connection or a network profile. */
+export type TransferItemKindItem = "connection" | "networkProfile";
 
 /**  The transposed view of rows of a result (SDB-386): a result of its own in the core. */
 export type TransposedItem = {

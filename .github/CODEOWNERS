@@ -16,6 +16,9 @@
 /crates/spelaion-core/src/import/source.rs             @petilolz @frglez
 /crates/spelaion-core/src/import/xlsx.rs               @petilolz @frglez
 
+# Which files a script's `@include` may read, and how much (ADR-078, point 7).
+/crates/spelaion-core/src/include.rs            @petilolz @frglez
+
 # Column masking (ADR-051).
 /crates/spelaion-core/src/masking.rs            @petilolz @frglez
 /crates/spelaion-config/src/masking.rs          @petilolz @frglez
@@ -23,6 +26,9 @@
 
 # Secrets, repository trust and SSH host keys (ADR-009, ADR-022, ADR-007).
 /crates/spelaion-config/src/secrets.rs          @petilolz @frglez
+# The encrypted file personal connections and their passwords move in (ADR-088).
+/crates/spelaion-config/src/connections_file.rs     @petilolz @frglez
+/crates/spelaion-config/src/connection_transfer.rs  @petilolz @frglez
 /crates/spelaion-config/src/trust.rs            @petilolz @frglez
 /crates/spelaion-config/src/resolve.rs          @petilolz @frglez
 /crates/spelaion-config/src/folders.rs          @petilolz @frglez

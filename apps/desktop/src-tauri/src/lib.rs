@@ -5,6 +5,7 @@ mod app_lifecycle;
 mod backup;
 mod clipboard_text;
 mod connection_import;
+mod connection_transfer;
 mod dashboard;
 mod diagnostics;
 mod diagram;
@@ -17,14 +18,19 @@ mod interaction;
 mod jobs;
 mod launch;
 mod library;
+mod log_viewer;
 mod mcp;
+mod notebook;
 mod open_folders;
 mod panics;
 mod plans;
 mod plugins;
+mod preferences_sync;
 mod schema_compare;
+mod settings_transfer;
 mod startup;
 mod table_copy;
+mod tasks;
 mod tiles;
 mod update;
 mod update_state;
@@ -42,7 +48,7 @@ use spelaion_config::{
     TrustStore, default_user_dir, load,
 };
 use spelaion_core::{
-    AppLog, Engines, ExportFormat, ExportOptions, FindQuery, GenericDialect, JobCancel,
+    AppLog, Engines, ExportFormat, ExportOptions, FindQuery, GenericDialect, JobCancel, LogLevel,
     OpenConnection, OpenError, OpenOptions, QueryHistory, ResultId, ResultStore, SessionHealth,
     StartupAction, StartupFailure, StreamExport, TabKeeper, TunnelPool, copy_text, open_connection,
     start_over,
@@ -62,6 +68,9 @@ use spelaion_driver_api::NameFilter;
 /// for metadata per connection (ADR-004).
 struct AppState {
     user_dir: PathBuf,
+    /// The app log (SDB-283), which Settings › Logs shows (SDB-31): what the app chooses to
+    /// write, scrubbed by the core, never SQL, data or secrets.
+    log: AppLog,
     /// The folders the window holds open, each with its own configuration (ADR-075, SDB-500).
     /// The page shows one at a time (`config()`): the last one opened.
     folders: RwLock<open_folders::OpenFolders>,
@@ -219,6 +228,14 @@ fn detected_engine_mark(open: &OpenConnection) -> Option<String> {
 type CmdResult<T> = Result<T, String>;
 
 impl AppState {
+    /// Adds an entry to the app log; a log that cannot be written is not the user's problem
+    /// here (the console says so).
+    fn log(&self, level: LogLevel, message: &str) {
+        if let Err(e) = self.log.append(level, message) {
+            eprintln!("could not write the log {}: {e}", self.log.path().display());
+        }
+    }
+
     /// The engines a connection opened now uses (ADR-055: they change when the plugins do).
     fn engines(&self) -> Arc<Engines> {
         self.engines.read().expect("lock poisoned").clone()
@@ -429,12 +446,18 @@ async fn get_language(state: State<'_, AppState>) -> CmdResult<String> {
 }
 
 #[command]
-async fn set_language(language: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn set_language(
+    language: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     state
         .history
         .set_language(language)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Language]);
+    Ok(())
 }
 
 #[command]
@@ -443,12 +466,18 @@ async fn get_theme(state: State<'_, AppState>) -> CmdResult<String> {
 }
 
 #[command]
-async fn set_theme(theme: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn set_theme(
+    theme: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     state
         .history
         .set_theme(theme)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Theme]);
+    Ok(())
 }
 
 /// The interface size in percent (SDB-389).
@@ -468,6 +497,7 @@ async fn get_interface_size(state: State<'_, AppState>) -> CmdResult<u16> {
 async fn set_interface_size(
     size: u16,
     window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
@@ -475,9 +505,17 @@ async fn set_interface_size(
         .set_interface_size(size)
         .await
         .map_err(|e| e.to_string())?;
+    // Every window is drawn at it (SDB-535); the one that asked must succeed.
+    for (label, other) in app.webview_windows() {
+        if label != window.label() {
+            let _ = other.set_zoom(interface_scale(size));
+        }
+    }
     window
         .set_zoom(interface_scale(size))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::InterfaceSize]);
+    Ok(())
 }
 
 /// The steps the interface size and the editor's zoom move through, as the core lists them.
@@ -492,7 +530,7 @@ fn size_steps() -> SizeStepsItem {
 }
 
 /// The webview's zoom factor for an interface size in percent.
-fn interface_scale(size: u16) -> f64 {
+pub(crate) fn interface_scale(size: u16) -> f64 {
     f64::from(size) / 100.0
 }
 
@@ -511,13 +549,16 @@ async fn get_explorer_preferences(
 #[command]
 async fn set_explorer_preferences(
     preferences: ExplorerPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_explorer_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Explorer]);
+    Ok(())
 }
 
 #[command]
@@ -532,13 +573,16 @@ async fn get_editor_preferences(state: State<'_, AppState>) -> CmdResult<EditorP
 #[command]
 async fn set_editor_preferences(
     preferences: EditorPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_editor_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Editor]);
+    Ok(())
 }
 
 /// The user's own editor snippets (SDB-384), by name.
@@ -569,13 +613,16 @@ async fn shortcut_overrides(state: State<'_, AppState>) -> CmdResult<Vec<Shortcu
 #[command]
 async fn set_shortcut_overrides(
     overrides: Vec<ShortcutOverrideItem>,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_shortcut_overrides(overrides.into_iter().map(Into::into).collect())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Shortcuts]);
+    Ok(())
 }
 
 /// Why some keys cannot be a command's shortcut, or `None` when they can (ADR-064): the
@@ -592,23 +639,32 @@ fn check_shortcut(keys: String) -> Option<String> {
 #[command]
 async fn save_editor_snippet(
     snippet: EditorSnippetItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .save_editor_snippet(snippet.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Snippets]);
+    Ok(())
 }
 
 /// Deletes the editor snippet of that name; whether there was one.
 #[command]
-async fn delete_editor_snippet(name: String, state: State<'_, AppState>) -> CmdResult<bool> {
-    state
+async fn delete_editor_snippet(
+    name: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<bool> {
+    let saved = state
         .history
         .delete_editor_snippet(name)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Snippets]);
+    Ok(saved)
 }
 
 /// The text a new script starts with; empty when there is none.
@@ -623,12 +679,18 @@ async fn new_script_template(state: State<'_, AppState>) -> CmdResult<String> {
 
 /// Saves the text a new script starts with (empty: none), checked by the core.
 #[command]
-async fn set_new_script_template(template: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn set_new_script_template(
+    template: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     state
         .history
         .set_new_script_template(template)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Snippets]);
+    Ok(())
 }
 
 /// The core's limits for editor snippets and the template, for the settings page.
@@ -667,6 +729,7 @@ async fn get_display_format(state: State<'_, AppState>) -> CmdResult<DisplayForm
 #[command]
 async fn set_display_format(
     format: DisplayFormatItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     let display = state
@@ -675,6 +738,7 @@ async fn set_display_format(
         .await
         .map_err(|e| e.to_string())?;
     *state.display.write().map_err(|_| "lock poisoned")? = Arc::new(display);
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::DisplayFormat]);
     Ok(())
 }
 
@@ -687,13 +751,16 @@ async fn time_zones() -> CmdResult<Vec<String>> {
 #[command]
 async fn set_grid_preferences(
     preferences: GridPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_grid_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Grid]);
+    Ok(())
 }
 
 /// The map view's background (ADR-045): tiles from the user's tile server, off by default.
@@ -729,17 +796,30 @@ async fn set_side_panel(hidden: bool, width: u32, state: State<'_, AppState>) ->
         .map_err(|e| e.to_string())
 }
 
-/// Saves the map's preferences; the core checks the tile server first.
+/// Saves the map's preferences; the core checks the tile server first. Answers what the core
+/// stored, and tells every window (`PreferencesChanged`, SDB-533): a window opened before the
+/// change would otherwise keep the old value, draw tiles that were turned off and save them on
+/// again with its next change.
 #[command]
 async fn set_map_preferences(
     preferences: MapPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
-) -> CmdResult<()> {
+) -> CmdResult<MapPreferencesItem> {
     state
         .history
         .set_map_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let stored = MapPreferencesItem::from(
+        state
+            .history
+            .map_preferences()
+            .await
+            .map_err(|e| e.to_string())?,
+    );
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Map]);
+    Ok(stored)
 }
 
 /// Every geometry of a result's column, in the current view, for one map (ADR-045): GeoJSON
@@ -795,13 +875,16 @@ async fn get_script_preferences(state: State<'_, AppState>) -> CmdResult<ScriptP
 #[command]
 async fn set_script_preferences(
     preferences: ScriptPreferencesItem,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     state
         .history
         .set_script_preferences(preferences.into())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::Script]);
+    Ok(())
 }
 
 #[command]
@@ -814,12 +897,18 @@ async fn get_update_check(state: State<'_, AppState>) -> CmdResult<bool> {
 }
 
 #[command]
-async fn set_update_check(enabled: bool, state: State<'_, AppState>) -> CmdResult<()> {
+async fn set_update_check(
+    enabled: bool,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     state
         .history
         .set_update_check(enabled)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    preferences_sync::announce(&app, &[preferences_sync::PreferenceKind::UpdateCheck]);
+    Ok(())
 }
 
 /// The page chose a folder (it shows one at a time, ADR-075): every other open folder closes,
@@ -2312,12 +2401,23 @@ async fn connect(
                 message,
                 ..
             })) if code.starts_with("28") => {
+                state.log(
+                    LogLevel::Warning,
+                    &format!("the server refused the login of {id}: {message}"),
+                );
                 return Ok(ConnectOutcome::AuthFailed {
                     message,
                     can_remember: save_to.is_some(),
                 });
             }
-            Err(e) => return Err(e.to_string()),
+            Err(e) => {
+                let message = e.to_string();
+                state.log(
+                    LogLevel::Warning,
+                    &format!("could not connect to {id}: {message}"),
+                );
+                return Err(message);
+            }
         };
     // Remember in the keychain only if it was asked for and the connection worked.
     if remember && let (Some(account), Some(secret)) = (save_to, &password) {
@@ -2373,6 +2473,7 @@ async fn connect(
     if let Some(old) = old.and_then(|o| Arc::try_unwrap(o.open).ok()) {
         old.close().await;
     }
+    state.log(LogLevel::Info, &format!("connected to {id}"));
     Ok(ConnectOutcome::Connected {
         server_version,
         engine_mark,
@@ -3070,7 +3171,7 @@ async fn run_script(
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
     start_script(
-        &state, &session, sql, confirmed, options, placement, on_event, None,
+        &state, &session, sql, confirmed, options, placement, on_event, None, None,
     )
     .await
 }
@@ -3090,22 +3191,27 @@ async fn answer_script_error(
         .map_err(|e| e.to_string())
 }
 
+/// `results`: the key the run's results are kept under, when it is not the session's own (a
+/// notebook cell's, ADR-087).
 #[allow(clippy::too_many_arguments)]
-async fn start_script(
+pub(crate) async fn start_script(
     state: &AppState,
     session: &str,
     sql: String,
     confirmed: bool,
-    options: RunOptionsItem,
+    mut options: RunOptionsItem,
     placement: ResultPlacementItem,
     on_event: Channel<ScriptEvent>,
     page: Option<(String, Vec<SortKeyItem>)>,
+    results: Option<String>,
 ) -> CmdResult<()> {
+    let echoes = std::mem::take(&mut options.echoes);
+    let included = std::mem::take(&mut options.files);
     let (original, page_sort) = match page {
         Some((original, sort)) => (Some(original), Some(sort)),
         None => (None, None),
     };
-    let editor = session;
+    let editor = results.as_deref().unwrap_or(session);
     let (open, workspace) = {
         let sessions = state.sessions.lock().await;
         let session = sessions
@@ -3119,6 +3225,16 @@ async fn start_script(
     // is refused by the core, whatever its error mode.
     spelaion_core::check_run(&open.session, &sql, &open.resolved.safeguards(), confirmed)
         .map_err(|e| e.to_string())?;
+    // What runs is what was checked: a file the run included that changed since the guard's
+    // question refuses it before anything runs (ADR-078, point 4). Only hashed, never read again.
+    if !included.is_empty() {
+        let files: Vec<spelaion_core::IncludedFile> =
+            included.into_iter().map(Into::into).collect();
+        tokio::task::spawn_blocking(move || spelaion_core::check_included_files(&files))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+    }
     // Only a run the core accepted replaces results, and the core decides which (SDB-378).
     let mut placed = RunEvents::new(
         state
@@ -3141,12 +3257,8 @@ async fn start_script(
             connection: open.resolved.id.to_string(),
             database: (!open.resolved.params.database.is_empty())
                 .then(|| open.resolved.params.database.clone()),
-            switchable_database: matches!(
+            switchable_database: spelaion_core::statement_database::switches_database(
                 open.resolved.engine,
-                spelaion_config::Engine::Mysql
-                    | spelaion_config::Engine::Mariadb
-                    | spelaion_config::Engine::Sqlserver
-                    | spelaion_config::Engine::Duckdb
             ),
         },
         original,
@@ -3163,14 +3275,26 @@ async fn start_script(
     );
     // A big result streams hundreds of batches a second: the window gets its row count a few
     // times a second, so redrawing it never keeps Cancel from answering.
-    let mut events = spelaion_core::coalesce_rows(events, spelaion_core::ROWS_PROGRESS_INTERVAL);
+    let events = spelaion_core::coalesce_rows(events, spelaion_core::ROWS_PROGRESS_INTERVAL);
+    // The script's `@echo` lines, each when the run reaches it (ADR-078).
+    let mut events =
+        spelaion_core::with_echoes(events, echoes.into_iter().map(Into::into).collect());
     tauri::async_runtime::spawn(async move {
         // `open` lives while the script runs, even if the UI closes the tab halfway.
         let _keep = open;
-        while let Some(event) = events.next().await {
+        while let Some(item) = events.next().await {
             // Keep consuming after the tab closes: executed statements still need their
             // completion/error recorded, and later statements must not be silently aborted.
-            let _ = on_event.send(placed.event(event));
+            let event = match item {
+                spelaion_core::RunItem::Event(event) => placed.event(event),
+                spelaion_core::RunItem::Echo(spelaion_core::EchoLine::Echo(text)) => {
+                    ScriptEvent::Echo { text }
+                }
+                spelaion_core::RunItem::Echo(spelaion_core::EchoLine::Included(file)) => {
+                    ScriptEvent::Included { file }
+                }
+            };
+            let _ = on_event.send(event);
         }
     });
     Ok(())
@@ -3226,7 +3350,7 @@ async fn run_query_page(
         None => (sql, None),
     };
     start_script(
-        &state, &session, sql, confirmed, options, placement, on_event, page,
+        &state, &session, sql, confirmed, options, placement, on_event, page, None,
     )
     .await
 }
@@ -3454,23 +3578,82 @@ async fn variable_values(
     Ok((open, values))
 }
 
+/// The folder tree a file tab's `@include` lines may read (ADR-078, point 7): the innermost
+/// open folder holding `file`, else its own folder; `None` for a console (no file).
+async fn script_tree(
+    state: &AppState,
+    file: Option<String>,
+) -> CmdResult<Option<spelaion_core::ScriptTree>> {
+    let Some(file) = file else {
+        return Ok(None);
+    };
+    let folders = state.folders.read().await.paths();
+    tokio::task::spawn_blocking(move || {
+        spelaion_core::ScriptTree::for_file(Path::new(&file), &folders)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map(Some)
+    .map_err(|e| e.to_string())
+}
+
 /// The `${name}` variables of a script's statements, in order, and which of them have no
-/// value yet (neither the tab's nor its connection's), so the UI can ask for those.
+/// value yet (neither the tab's nor its connection's, nor an earlier `@set`'s, in the script or
+/// a file it includes), so the UI can ask for those. `file`: the tab's `.sql` file, `null` for
+/// a console.
 #[command]
 async fn script_variables(
     session: String,
     sql: String,
     tab: HashMap<String, String>,
+    file: Option<String>,
     state: State<'_, AppState>,
 ) -> CmdResult<ScriptVariablesItem> {
     let (open, values) = variable_values(&state, &session, tab).await?;
-    let names = spelaion_core::script_variables(open.session.dialect().as_ref(), &sql);
-    let missing = names
-        .iter()
-        .filter(|name| !values.contains_key(*name))
-        .cloned()
-        .collect();
+    let dialect = open.session.dialect();
+    let names = spelaion_core::script_variables(dialect.as_ref(), &sql);
+    let tree = script_tree(&state, file).await?;
+    // A name an earlier `@set` gives is not asked for, nor one an `@unset` removed (ADR-078);
+    // included files are read for it, on a blocking thread.
+    let missing = tokio::task::spawn_blocking(move || {
+        spelaion_core::missing_variables(dialect.as_ref(), &sql, &values, tree.as_ref())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(ScriptVariablesItem { names, missing })
+}
+
+/// The script with its client commands resolved and its variables' values written in, by the
+/// core, before anything else reads it (ADR-078): `@set` and `@unset` change the values from
+/// their line on for this run only (never the tab's or the connection's), `@echo` lines and
+/// included files' names come back to be shown when the run reaches them, and `@include` puts
+/// a `.sql` file of the tab's folder tree in place, read here once. The run sends the text, and
+/// its guard and read-only check read it. `file`: the tab's `.sql` file, `null` for a console,
+/// which refuses `@include`. Refused as `substitute_variables` refuses a value, and for what
+/// `@include` refuses.
+#[command]
+async fn resolve_script(
+    session: String,
+    sql: String,
+    tab: HashMap<String, String>,
+    file: Option<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<ResolvedScriptItem> {
+    let (open, values) = variable_values(&state, &session, tab).await?;
+    let dialect = open.session.dialect();
+    let tree = script_tree(&state, file).await?;
+    let resolved = tokio::task::spawn_blocking(move || {
+        spelaion_core::resolve_script(dialect.as_ref(), &sql, &values, tree.as_ref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    Ok(ResolvedScriptItem {
+        text: resolved.text,
+        echoes: resolved.echoes.into_iter().map(Into::into).collect(),
+        origins: resolved.origins.into_iter().map(Into::into).collect(),
+        files: resolved.files.into_iter().map(Into::into).collect(),
+    })
 }
 
 /// The script with its variables' values written in, by the core, before anything else reads
@@ -3573,7 +3756,7 @@ async fn set_session_read_only(
 const MAX_COPY_ROWS: u32 = 100_000;
 
 /// Name used in `INSERT` statements when the source table is unknown.
-const INSERT_TABLE: &str = "table_name";
+pub(crate) const INSERT_TABLE: &str = "table_name";
 
 fn export_format(format: TextFormat) -> ExportFormat {
     match format {
@@ -3879,7 +4062,7 @@ async fn export_rerun_check(
 }
 
 /// A streaming export's file options, for the core.
-fn stream_export(options: &ExportFileOptions, table: &str) -> CmdResult<StreamExport> {
+pub(crate) fn stream_export(options: &ExportFileOptions, table: &str) -> CmdResult<StreamExport> {
     Ok(StreamExport {
         format: match options.format {
             TextFormat::SqlInsert => ExportFormat::SqlInsert {
@@ -6688,10 +6871,52 @@ async fn answer_interaction(
     id: u32,
     accept: bool,
     secret: Option<String>,
+    remember: bool,
     state: State<'_, AppState>,
 ) -> CmdResult<()> {
-    state.pending.answer(id, accept, secret.map(Secret::new));
+    state
+        .pending
+        .answer(id, accept, secret.map(Secret::new), remember);
     Ok(())
+}
+
+/// The key file a hop's `identity_file` names, as the core reads it, in the shown folder's
+/// personal layer or repository (ADR-090).
+async fn hop_key(state: &AppState, personal: bool, identity_file: &str) -> Option<PathBuf> {
+    let config = state.config().await;
+    let source = if personal {
+        Source::User
+    } else {
+        Source::Workspace
+    };
+    spelaion_config::hop_key_path(&config, source, identity_file)
+}
+
+/// Whether a passphrase is remembered for the key file a hop names (ADR-090): only whether,
+/// never the passphrase.
+#[command]
+async fn key_passphrase_remembered(
+    personal: bool,
+    identity_file: String,
+    state: State<'_, AppState>,
+) -> CmdResult<bool> {
+    Ok(hop_key(&state, personal, &identity_file)
+        .await
+        .is_some_and(|key| spelaion_config::key_passphrase_remembered(&SystemBackend, &key)))
+}
+
+/// Forgets the passphrase remembered for the key file a hop names (ADR-090): it is asked the
+/// next time the key is used.
+#[command]
+async fn forget_key_passphrase(
+    personal: bool,
+    identity_file: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    match hop_key(&state, personal, &identity_file).await {
+        Some(key) => spelaion_config::forget_key_passphrase(&SystemBackend, &key),
+        None => Ok(()),
+    }
 }
 
 /// Window of rows as binary Arrow IPC (no JSON), with every cell already converted to the
@@ -6800,6 +7025,14 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             backup::run_duckdb_import,
             backup::plan_sql_file,
             backup::run_sql_file,
+            tasks::tasks,
+            tasks::task_runs,
+            tasks::task_run_log,
+            tasks::save_task,
+            tasks::edit_task,
+            tasks::duplicate_task,
+            tasks::delete_task,
+            tasks::run_task,
             get_language,
             set_language,
             get_theme,
@@ -6840,6 +7073,15 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             file_dialog::choose_path,
             clipboard_text::read_clipboard_text,
             files::open_sql_file,
+            notebook::parse_notebook,
+            notebook::notebook_text,
+            notebook::notebook_markdown,
+            notebook::new_notebook_cell_name,
+            notebook::check_notebook_cell_name,
+            notebook::expand_notebook_cell,
+            notebook::run_notebook_cell,
+            notebook::release_notebook_cell,
+            notebook::export_notebook_html,
             files::save_sql_file,
             files::recent_files,
             files::forget_recent_file,
@@ -6996,6 +7238,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             bind_params,
             script_variables,
             substitute_variables,
+            resolve_script,
             connection_variables,
             set_connection_variable,
             variable_is_valid,
@@ -7022,6 +7265,14 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             set_tunnel_ports,
             user_masking,
             set_user_masking,
+            settings_transfer::export_settings,
+            settings_transfer::preview_settings_import,
+            settings_transfer::import_settings,
+            log_viewer::read_log,
+            log_viewer::export_log,
+            connection_transfer::export_personal_connections,
+            connection_transfer::preview_connections_file,
+            connection_transfer::import_connections_file,
             list_connections,
             list_history,
             library::history_page,
@@ -7087,6 +7338,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             join_sql,
             query_key_table,
             answer_interaction,
+            key_passphrase_remembered,
+            forget_key_passphrase,
             transaction_status,
             set_auto_commit,
             commit_transaction,
@@ -7115,6 +7368,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             QuitRequested,
             plugins::PluginInstallChanged,
             plugins::PluginsChanged,
+            preferences_sync::PreferencesChanged,
             launch::LaunchRequested,
             update_state::UpdateChanged,
             windows::WindowCloseRequested,
@@ -7265,6 +7519,7 @@ fn open_history(user_dir: &Path, log: &AppLog) -> QueryHistory {
             StartupAction::StartOver => match start_over(&failure, std::time::SystemTime::now()) {
                 Ok(moved) => startup::note(
                     log,
+                    LogLevel::Info,
                     &format!(
                         "moved the local store to {}; starting with a new one",
                         moved.display()
@@ -7318,12 +7573,13 @@ pub fn run() {
     // From here on, where any panic happens goes to the log (SDB-163).
     panics::install(log.clone());
     if let Some(message) = copy_failed {
-        startup::note(&log, &message);
+        startup::note(&log, LogLevel::Warning, &message);
     }
     // Query history and audit live there: other local users must not read them.
     if let Err(e) = spelaion_config::ensure_private_dir(&user_dir) {
         startup::note(
             &log,
+            LogLevel::Warning,
             &format!("could not make the personal folder private: {e}"),
         );
     }
@@ -7338,6 +7594,7 @@ pub fn run() {
         spelaion_core::instance::Claim::Alone(why) => {
             startup::note(
                 &log,
+                LogLevel::Info,
                 &format!("a second launch will open another window: {why}"),
             );
             None
@@ -7392,6 +7649,7 @@ pub fn run() {
         .unwrap_or(spelaion_core::DEFAULT_INTERFACE_SIZE);
     let tile_cache = Arc::new(tiles::cache(&user_dir));
     let state = AppState {
+        log: log.clone(),
         user_dir,
         folders: RwLock::new(folders),
         folder: app_lifecycle::Folder::default(),
@@ -7449,6 +7707,16 @@ pub fn run() {
                 startup::ask(&StartupFailure::window(&e), &setup_log);
                 std::process::exit(1);
             }
+            // Where each session of the log starts, with what was running (SDB-31).
+            let _ = setup_log.append(
+                LogLevel::Info,
+                &format!(
+                    "SpelaionDB {} started on {} {}",
+                    app.package_info().version,
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                ),
+            );
             Ok(())
         })
         .build(tauri::generate_context!());

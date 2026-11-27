@@ -61,8 +61,7 @@ fn login(host: &str, port: u16, user: &str, password: &str, database: &str) -> C
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("spelaion-copy-updates-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::support::run_dir("spelaion-copy-updates");
     let path = dir.join(name);
     let _ = std::fs::remove_file(&path);
     path

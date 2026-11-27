@@ -292,3 +292,67 @@ fn a_change_in_another_open_folder_stops_reusing_a_personal_connections_session(
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// SDB-527: a team change to the folder's `known_hosts` (a server's new key) stops a session of
+/// a tunnelled connection from being made from one opened before: it is opened from the saved
+/// configuration, which goes through ADR-022's review. A connection without a tunnel keeps
+/// reusing its source's.
+#[test]
+fn a_changed_team_known_hosts_stops_reusing_a_tunnelled_connections_session() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let base = std::env::temp_dir().join(format!(
+        "spelaion-session-source-known-hosts-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let write = |relative: &str, content: &str| {
+        let path = base.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    };
+    write(
+        "repo/.spelaion/tunnels/bastion.toml",
+        "schema_version = 1\n\n[[hops]]\nhost = \"bastion.internal\"\nuser = \"ops\"\nauth = [\"agent\"]\n",
+    );
+    write(
+        "repo/.spelaion/connections/orders.toml",
+        "schema_version = 1\nengine = \"postgres\"\nhost = \"db.internal\"\ndatabase = \"orders\"\nuser = \"app\"\ntunnel = \"bastion\"\n",
+    );
+    write(
+        "repo/.spelaion/connections/local.toml",
+        "schema_version = 1\nengine = \"sqlite\"\ndatabase = \"app.db\"\n",
+    );
+    write(
+        "repo/.spelaion/known_hosts",
+        "bastion.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC0Cx5aAdFPmIIPx6ZxdIYFKbARZbBbB5NV0QIO3Qdp2\n",
+    );
+    std::fs::create_dir_all(base.join("user")).unwrap();
+    let definition = |path: &str| {
+        let config = load(Some(&base.join("repo")), &base.join("user"));
+        assert!(config.problems.is_empty(), "{:?}", config.problems);
+        let id = ConnectionId {
+            source: Source::Workspace,
+            path: path.into(),
+        };
+        config.connection_definition(&id, true)
+    };
+    let (orders, local) = (definition("orders").unwrap(), definition("local").unwrap());
+    assert_eq!(
+        source_session(&orders, definition("orders").as_ref()),
+        SourceSession::Current
+    );
+
+    write(
+        "repo/.spelaion/known_hosts",
+        "bastion.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA6rWI3G1sz07DnfFlrouTcysQlj2P+jpNSOEWD9OJ3X\n",
+    );
+    assert_eq!(
+        source_session(&orders, definition("orders").as_ref()),
+        SourceSession::Changed
+    );
+    assert_eq!(
+        source_session(&local, definition("local").as_ref()),
+        SourceSession::Current
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

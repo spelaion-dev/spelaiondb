@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use spelaion_config::SystemBackend;
 use spelaion_driver_api::Secret;
-use spelaion_ssh::{HostInfo, Interaction, SecretRequest};
+use spelaion_ssh::{HostInfo, Interaction, KeyPassphraseAnswer, SecretRequest};
 use tauri::AppHandle;
 use tauri_specta::Event;
 use tokio::sync::oneshot;
@@ -18,7 +19,9 @@ use crate::dto::{InteractionClosed, InteractionKind, InteractionRequest, SecretL
 /// Without an answer within this time, it is taken as "no".
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(300);
 
-type Answer = (bool, Option<Secret>);
+/// Whether the person accepted, the secret typed, and whether they asked to remember it (a key
+/// passphrase, ADR-090).
+type Answer = (bool, Option<Secret>, bool);
 
 /// Questions waiting for an answer from the UI.
 #[derive(Clone, Default)]
@@ -35,9 +38,9 @@ impl Pending {
         (id, rx)
     }
 
-    pub fn answer(&self, id: u32, accept: bool, secret: Option<Secret>) {
+    pub fn answer(&self, id: u32, accept: bool, secret: Option<Secret>, remember: bool) {
         if let Some(tx) = self.waiting.lock().expect("lock poisoned").remove(&id) {
-            let _ = tx.send((accept, secret));
+            let _ = tx.send((accept, secret, remember));
         }
     }
 
@@ -99,11 +102,11 @@ impl AppInteraction {
         };
         let event = InteractionRequest { id, request };
         if self.send(&event).is_err() {
-            return (false, None);
+            return (false, None, false);
         }
         match tokio::time::timeout(ANSWER_TIMEOUT, rx).await {
             Ok(Ok(answer)) => answer,
-            _ => (false, None),
+            _ => (false, None, false),
         }
     }
 }
@@ -123,8 +126,50 @@ impl Interaction for AppInteraction {
     }
 
     async fn ask_secret(&self, request: &SecretRequest) -> Option<Secret> {
+        self.ask_question(request).await.map(|(secret, _)| secret)
+    }
+
+    async fn ask_key_passphrase(&self, request: &SecretRequest) -> Option<KeyPassphraseAnswer> {
+        self.ask_question(request)
+            .await
+            .map(|(passphrase, remember)| KeyPassphraseAnswer {
+                passphrase,
+                remember,
+            })
+    }
+
+    /// A key's passphrase may be remembered where there is a system keychain (ADR-090); the
+    /// core decides the entry's name and writes it (`spelaion-config`'s `secrets.rs`).
+    fn passphrases_kept(&self) -> bool {
+        use spelaion_config::SecretBackend as _;
+        SystemBackend.keychain_available()
+    }
+
+    async fn remembered_passphrase(&self, key: &std::path::Path) -> Option<Secret> {
+        spelaion_config::remembered_key_passphrase(&SystemBackend, key)
+    }
+
+    /// A keychain that refuses it only means it is asked again next time: the connection goes on.
+    async fn remember_passphrase(&self, key: &std::path::Path, passphrase: &Secret) {
+        let _ = spelaion_config::remember_key_passphrase(&SystemBackend, key, passphrase);
+    }
+
+    async fn forget_passphrase(&self, key: &std::path::Path) {
+        let _ = spelaion_config::forget_key_passphrase(&SystemBackend, key);
+    }
+}
+
+impl AppInteraction {
+    /// Shows a question for a secret and waits for it: the secret, and whether the person asked
+    /// to remember it (offered only for a key's passphrase that may be kept).
+    async fn ask_question(&self, request: &SecretRequest) -> Option<(Secret, bool)> {
         let (title, prompt, echo, label) = match request {
-            SecretRequest::KeyPassphrase { path, retry, .. } => (
+            SecretRequest::KeyPassphrase {
+                path,
+                retry,
+                can_remember,
+                ..
+            } => (
                 "SSH key passphrase".to_string(),
                 format!(
                     "{}{}",
@@ -135,6 +180,7 @@ impl Interaction for AppInteraction {
                 SecretLabel::KeyPassphrase {
                     path: path.display().to_string(),
                     retry: *retry,
+                    can_remember: *can_remember,
                 },
             ),
             SecretRequest::Password { user, host, .. } => (
@@ -178,7 +224,7 @@ impl Interaction for AppInteraction {
                 )
             }
         };
-        let (accept, secret) = self
+        let (accept, secret, remember) = self
             .ask(InteractionKind::Secret {
                 title,
                 prompt,
@@ -186,6 +232,10 @@ impl Interaction for AppInteraction {
                 label,
             })
             .await;
-        if accept { secret } else { None }
+        if accept {
+            secret.map(|secret| (secret, remember))
+        } else {
+            None
+        }
     }
 }

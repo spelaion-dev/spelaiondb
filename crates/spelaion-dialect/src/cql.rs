@@ -13,7 +13,9 @@
 //! - `USE` is refused before it is sent ([`refuse_statement`]): the tab's keyspace is chosen
 //!   above the editor, and the core keeps it as the session knows it.
 
-use spelaion_driver_api::{Dialect, RequestClass, RequestError, StatementSpan, code_ranges};
+use spelaion_driver_api::{Dialect, RequestClass, RequestError, StatementSpan};
+
+use crate::scanner::{self, Region, RegionKind};
 
 /// Cassandra's language.
 #[derive(Debug, Clone, Copy, Default)]
@@ -44,7 +46,7 @@ impl Dialect for CqlDialect {
     }
 
     fn code_ranges(&self, script: &str) -> Vec<std::ops::Range<usize>> {
-        code_ranges(script, skip)
+        scanner::code_ranges(CqlScanner::new(script))
     }
 
     fn is_sql(&self) -> bool {
@@ -141,11 +143,17 @@ const RESERVED: &[&str] = &[
 
 // ------------------------------------------------------------------------------ splitting
 
-/// Where a string, a quoted name, a `$$` body or a comment that starts at `i` ends, or `None`.
-fn skip(script: &str, i: usize) -> Option<usize> {
+/// The string, quoted name, `$$` body or comment that starts at byte `i`, with the byte after it;
+/// `None` when none starts there. The scanner's one reading of them.
+fn opening(script: &str, i: usize) -> Option<(RegionKind, usize)> {
     let b = script.as_bytes();
-    match b[i] {
+    match *b.get(i)? {
         quote @ (b'\'' | b'"') => {
+            let kind = if quote == b'\'' {
+                RegionKind::String
+            } else {
+                RegionKind::QuotedName
+            };
             let mut j = i + 1;
             while j < b.len() {
                 if b[j] == quote {
@@ -153,24 +161,26 @@ fn skip(script: &str, i: usize) -> Option<usize> {
                         j += 2;
                         continue;
                     }
-                    return Some(j + 1);
+                    return Some((kind, j + 1));
                 }
                 j += 1;
             }
-            Some(b.len())
+            Some((kind, b.len()))
         }
-        b'$' if b.get(i + 1) == Some(&b'$') => Some(
+        b'$' if b.get(i + 1) == Some(&b'$') => Some((
+            RegionKind::QuotedBody,
             script[i + 2..]
                 .find("$$")
                 .map_or(b.len(), |end| i + 2 + end + 2),
-        ),
-        b'-' if b.get(i + 1) == Some(&b'-') => Some(line_end(script, i)),
-        b'/' if b.get(i + 1) == Some(&b'/') => Some(line_end(script, i)),
-        b'/' if b.get(i + 1) == Some(&b'*') => Some(
+        )),
+        b'-' if b.get(i + 1) == Some(&b'-') => Some((RegionKind::Comment, line_end(script, i))),
+        b'/' if b.get(i + 1) == Some(&b'/') => Some((RegionKind::Comment, line_end(script, i))),
+        b'/' if b.get(i + 1) == Some(&b'*') => Some((
+            RegionKind::Comment,
             script[i + 2..]
                 .find("*/")
                 .map_or(b.len(), |end| i + 2 + end + 2),
-        ),
+        )),
         _ => None,
     }
 }
@@ -179,11 +189,145 @@ fn line_end(script: &str, i: usize) -> usize {
     script[i..].find('\n').map_or(script.len(), |end| i + end)
 }
 
+/// CQL's lexical scanner (ADR-065): the script as regions. Strings, names, `$$` bodies and
+/// comments are read by [`opening`]; a statement ends at a `;` outside them, unless it is a batch
+/// (`BEGIN [UNLOGGED | COUNTER] BATCH`) not yet applied (`APPLY BATCH`), which the scanner tells
+/// from the statement's words as [`words`] reads them, kept as it goes. A statement is one only
+/// when it holds a word. The splitter, `code_ranges`, [`words`] and the batch's reading all read
+/// it.
+struct CqlScanner<'a> {
+    script: &'a str,
+    /// Where the next region starts.
+    i: usize,
+    /// Where the current statement starts.
+    start: usize,
+    /// The current statement's words so far, uppercased, `;` among them: what [`words`] gives
+    /// for its text.
+    words: Vec<String>,
+    /// The word being read.
+    word: String,
+    /// The end of the script was reached.
+    ended: bool,
+}
+
+impl<'a> CqlScanner<'a> {
+    fn new(script: &'a str) -> Self {
+        Self {
+            script,
+            i: 0,
+            start: 0,
+            words: Vec::new(),
+            word: String::new(),
+            ended: false,
+        }
+    }
+
+    /// Ends the word being read: a string, a comment or a byte that is not a word's ends it.
+    fn end_word(&mut self) {
+        if !self.word.is_empty() {
+            self.words.push(std::mem::take(&mut self.word));
+        }
+    }
+
+    /// Whether the statement so far is a batch not yet applied: its `;` do not end it.
+    fn in_batch(&self) -> bool {
+        let so_far = &self.words;
+        so_far.first().is_some_and(|w| w == "BEGIN")
+            && so_far.iter().take(3).any(|w| w == "BATCH")
+            && !so_far
+                .windows(2)
+                .any(|w| w[0] == "APPLY" && w[1] == "BATCH")
+    }
+
+    /// The statement that ends at `end`, if it held a word; the next one starts at `next`.
+    fn statement(&mut self, end: usize, next: usize) -> Option<StatementSpan> {
+        let has_word = self.words.iter().any(|w| w != ";");
+        self.words.clear();
+        let statement = crate::trimmed(self.script, self.start, end).filter(|_| has_word);
+        self.start = next;
+        statement
+    }
+}
+
+impl Iterator for CqlScanner<'_> {
+    type Item = Region;
+
+    fn next(&mut self) -> Option<Region> {
+        let script = self.script;
+        let b = script.as_bytes();
+        let len = b.len();
+        let code = self.i;
+        while self.i < len {
+            let i = self.i;
+            if let Some((kind, end)) = opening(script, i) {
+                if code < i {
+                    return Some(Region {
+                        kind: RegionKind::Code,
+                        range: code..i,
+                    });
+                }
+                self.end_word();
+                self.i = end.max(i + 1);
+                return Some(Region {
+                    kind,
+                    range: i..self.i,
+                });
+            }
+            let c = b[i];
+            if c.is_ascii_alphanumeric() || c == b'_' {
+                self.word.push(c.to_ascii_uppercase() as char);
+                self.i += 1;
+                continue;
+            }
+            self.end_word();
+            if c == b';' {
+                if !self.in_batch() {
+                    if code < i {
+                        return Some(Region {
+                            kind: RegionKind::Code,
+                            range: code..i,
+                        });
+                    }
+                    let statement = self.statement(i, i + 1);
+                    self.i = i + 1;
+                    return Some(Region {
+                        kind: RegionKind::StatementEnd { statement },
+                        range: i..i + 1,
+                    });
+                }
+                self.words.push(";".into());
+            }
+            self.i += 1;
+        }
+        if code < len {
+            // A word at the end of the text ends with it.
+            self.end_word();
+            return Some(Region {
+                kind: RegionKind::Code,
+                range: code..len,
+            });
+        }
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        self.end_word();
+        // The end of the script ends the last statement.
+        let statement = self.statement(len, len)?;
+        Some(Region {
+            kind: RegionKind::StatementEnd {
+                statement: Some(statement),
+            },
+            range: len..len,
+        })
+    }
+}
+
 /// The words of `text`'s code, uppercased, in order (names, numbers and keywords; strings and
 /// comments left out).
 fn words(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for range in code_ranges(text, skip) {
+    for range in scanner::code_ranges(CqlScanner::new(text)) {
         let mut word = String::new();
         for c in text[range].chars() {
             if c.is_ascii_alphanumeric() || c == '_' {
@@ -205,42 +349,7 @@ fn words(text: &str) -> Vec<String> {
 }
 
 fn split(script: &str) -> Vec<StatementSpan> {
-    let b = script.as_bytes();
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut i = 0;
-    let push = |from: usize, to: usize, spans: &mut Vec<StatementSpan>| {
-        let text = &script[from..to];
-        if words(text).iter().any(|w| w != ";") {
-            let lead = text.len() - text.trim_start().len();
-            let body = text.trim();
-            spans.push(StatementSpan {
-                start: from + lead,
-                end: from + lead + body.len(),
-            });
-        }
-    };
-    while i < b.len() {
-        if let Some(end) = skip(script, i) {
-            i = end.max(i + 1);
-            continue;
-        }
-        if b[i] == b';' {
-            let so_far = words(&script[start..i]);
-            let in_batch = so_far.first().is_some_and(|w| w == "BEGIN")
-                && so_far.iter().take(3).any(|w| w == "BATCH")
-                && !so_far
-                    .windows(2)
-                    .any(|w| w[0] == "APPLY" && w[1] == "BATCH");
-            if !in_batch {
-                push(start, i, &mut spans);
-                start = i + 1;
-            }
-        }
-        i += 1;
-    }
-    push(start, b.len(), &mut spans);
-    spans
+    scanner::statements(CqlScanner::new(script))
 }
 
 // ------------------------------------------------------------------------------ the guard
@@ -272,16 +381,30 @@ pub fn statement_class(statement: &str) -> RequestClass {
             Some("OR") => RequestClass::Drop,
             _ => RequestClass::Write,
         },
-        "BEGIN" => batch_class(statement),
+        // Only a batch's header opens a batch (SDB-540): any other `BEGIN` is unknown, never
+        // read again as a batch, so its reading always ends.
+        "BEGIN" if is_batch_header(&words) => batch_class(statement),
+        "BEGIN" => RequestClass::Unknown,
         // `GRANT`, `REVOKE`, `USE` (refused anyway) and anything else.
         _ => RequestClass::Unknown,
     }
 }
 
-/// A batch is as serious as its most serious statement; it holds only writes in CQL.
+/// Whether `words` start with a batch's header: `BEGIN [UNLOGGED | COUNTER] BATCH`.
+fn is_batch_header(words: &[String]) -> bool {
+    let word = |i: usize| words.get(i).map(String::as_str);
+    word(0) == Some("BEGIN")
+        && (word(1) == Some("BATCH")
+            || (matches!(word(1), Some("UNLOGGED" | "COUNTER")) && word(2) == Some("BATCH")))
+}
+
+/// A batch is as serious as its most serious statement; it holds only writes in CQL. A piece
+/// that still starts with `BEGIN` once the batch's own words are left out (a batch inside a
+/// batch, or a header written twice) is unknown: it is never read as a batch again, so reading
+/// a batch never leads back to itself (SDB-540).
 fn batch_class(statement: &str) -> RequestClass {
     let mut worst = RequestClass::Write;
-    let ranges = code_ranges(statement, skip);
+    let ranges = scanner::code_ranges(CqlScanner::new(statement));
     let mut from = 0;
     let mut pieces = Vec::new();
     for range in ranges {
@@ -310,7 +433,11 @@ fn batch_class(statement: &str) -> RequestClass {
             continue;
         }
         let text: Vec<&str> = words.iter().map(|w| w.as_str()).collect();
-        let class = statement_class(&text.join(" "));
+        let class = if text.first() == Some(&"BEGIN") {
+            RequestClass::Unknown
+        } else {
+            statement_class(&text.join(" "))
+        };
         worst = more_serious(worst, class);
     }
     worst
@@ -385,6 +512,89 @@ mod tests {
         let unlogged =
             "begin unlogged batch insert into t (a) values (1); apply batch; select 1 from t";
         assert_eq!(texts(unlogged).len(), 2);
+    }
+
+    /// SDB-540: a statement that starts with `BEGIN` but is no batch is unknown, read once, and
+    /// a batch inside a batch never leads back to the batch reading. Before, each of these
+    /// overflowed the stack, which aborts the app.
+    #[test]
+    fn a_begin_that_is_no_batch_is_unknown_and_never_read_again() {
+        for text in [
+            "BEGIN",
+            "BEGIN;",
+            "begin x",
+            "BEGIN UNLOGGED",
+            "BEGIN COUNTER INSERT INTO t (a) VALUES (1)",
+            "BEGIN TRANSACTION",
+        ] {
+            assert_eq!(statement_class(text), RequestClass::Unknown, "{text}");
+        }
+        // A batch whose pieces start with BEGIN again: unknown, the batch's worst.
+        for text in [
+            "BEGIN BEGIN BATCH INSERT INTO t (a) VALUES (1); APPLY BATCH",
+            "BEGIN BATCH BEGIN BATCH INSERT INTO t (a) VALUES (1); APPLY BATCH; APPLY BATCH",
+            "BEGIN BATCH BEGIN; BEGIN x; APPLY BATCH",
+        ] {
+            assert_eq!(statement_class(text), RequestClass::Unknown, "{text}");
+        }
+        // A header written again at the start of a later piece is left out like the batch's
+        // own, as before: the piece is read as its statement, never as a batch.
+        assert_eq!(
+            statement_class(
+                "BEGIN BATCH INSERT INTO t (a) VALUES (1); BEGIN BATCH UPDATE t SET b = 1 WHERE a = 1; APPLY BATCH"
+            ),
+            RequestClass::Write
+        );
+    }
+
+    /// Real batches keep their classes: as serious as their most serious statement.
+    #[test]
+    fn real_batches_keep_their_classes() {
+        for (text, class) in [
+            (
+                "BEGIN BATCH INSERT INTO t (a) VALUES (1); UPDATE t SET b = 2 WHERE a = 1; APPLY BATCH",
+                RequestClass::Write,
+            ),
+            (
+                "BEGIN UNLOGGED BATCH INSERT INTO t (a) VALUES (1); APPLY BATCH",
+                RequestClass::Write,
+            ),
+            (
+                "begin counter batch UPDATE c SET n = n + 1 WHERE k = 1; apply batch",
+                RequestClass::Write,
+            ),
+            (
+                "BEGIN BATCH INSERT INTO t (a) VALUES (1); TRUNCATE t; APPLY BATCH",
+                RequestClass::DeleteAll,
+            ),
+            ("BEGIN BATCH APPLY BATCH", RequestClass::Write),
+        ] {
+            assert_eq!(statement_class(text), class, "{text}");
+        }
+    }
+
+    proptest::proptest! {
+        /// No text makes the guard's reading run forever (SDB-540): it returns a class for
+        /// anything, BEGIN and BATCH words included.
+        #[test]
+        fn the_guard_returns_on_any_text(
+            words in proptest::collection::vec(
+                proptest::prop_oneof![
+                    proptest::strategy::Just("BEGIN".to_string()),
+                    proptest::strategy::Just("BATCH".to_string()),
+                    proptest::strategy::Just("UNLOGGED".to_string()),
+                    proptest::strategy::Just("COUNTER".to_string()),
+                    proptest::strategy::Just("APPLY".to_string()),
+                    proptest::strategy::Just(";".to_string()),
+                    proptest::strategy::Just("INSERT INTO t (a) VALUES (1)".to_string()),
+                    "[ -~]{0,12}",
+                ],
+                0..24,
+            ),
+        ) {
+            let text = words.join(" ");
+            let _ = statement_class(&text);
+        }
     }
 
     #[test]

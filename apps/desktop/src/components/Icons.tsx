@@ -36,6 +36,7 @@ import {
   Link,
   Link2,
   List,
+  ListChecks,
   ListVideo,
   LoaderCircle,
   type LucideIcon,
@@ -44,6 +45,7 @@ import {
   Minimize2,
   Minus,
   Network,
+  NotebookText,
   PanelLeftClose,
   PanelRight,
   PictureInPicture2,
@@ -120,14 +122,17 @@ const ICONS = {
   search: Search,
   history: History,
   saved: Bookmark,
+  // The Tasks view (ADR-089).
+  tasks: ListChecks,
   mcp: Cpu,
   settings: Settings,
-  // A tab's kind: a query, a SQL file, table data, a table's details, an ER diagram.
+  // A tab's kind: a query, a SQL file, table data, a table's details, an ER diagram, a notebook.
   query: Terminal,
   file: FileText,
   table: Table,
   details: Info,
   diagram: Workflow,
+  notebook: NotebookText,
   // The editor's action column (cancel is `stopped`, filled).
   run: Play,
   runScript: ListVideo,
