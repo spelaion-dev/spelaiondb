@@ -39,6 +39,11 @@ impl Dialect for StandardDialect {
     fn quote_identifier(&self, ident: &str) -> String {
         format!("\"{}\"", ident.replace('"', "\"\""))
     }
+
+    /// The reading the guard knows servers may leave (ADR-079, point 6).
+    fn standard_reading(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

@@ -171,6 +171,22 @@ async fn gizmosql_runs_scripts_and_browses_as_named_and_as_generic() {
             matches!(refused, Err(ReadError::Unsupported(_))),
             "{engine}: {refused:?}"
         );
+
+        // ADR-079, point 6: read as standard SQL, text its server may read otherwise asks on any
+        // connection type. One statement to the core; three to a server that reads `\'` as an
+        // escaped quote.
+        let example = r"SELECT 'a\'b'; DROP TABLE t; SELECT 'c\'d'";
+        let plain = spelaion_config::Safeguards::default();
+        let asked = spelaion_core::check_run(&open.session, example, &plain, false);
+        assert!(
+            matches!(
+                &asked,
+                Err(spelaion_core::RunRefused::NeedsConfirmation(needs))
+                    if needs.risks.iter().all(|r| r.risk == spelaion_core::Risk::OtherReading)
+            ),
+            "{engine}: {asked:?}"
+        );
+        assert!(spelaion_core::check_run(&open.session, "SELECT 'a''b'", &plain, false).is_ok());
         open.close().await;
     }
 }

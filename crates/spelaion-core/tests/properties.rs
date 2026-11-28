@@ -633,6 +633,117 @@ proptest! {
     }
 }
 
+// ----------------------------------------------------------- another reading (ADR-079)
+
+/// The engines read with the standard reading, which some servers leave (ADR-079, point 6).
+const STANDARD_ENGINES: &[&str] = &["flightsql", "dremio", "gizmosql"];
+
+/// A statement that runs unasked on its own: a read, or a write that asks nothing without a
+/// connection type.
+fn quiet_statement() -> S {
+    prop::sample::select(vec![
+        "select 1",
+        "insert into t values (1)",
+        "update t set a = 1 where b = 2",
+        "delete from t where id = 3",
+        "create table u (a int)",
+    ])
+    .prop_map(str::to_string)
+    .boxed()
+}
+
+/// A dollar quote's tag, as PostgreSQL reads one: none, or a letter or `_` and then letters,
+/// digits or `_`.
+fn dollar_tag() -> S {
+    prop_oneof![
+        Just(String::new()),
+        ("[a-z_]", "[a-z0-9_]{0,4}").prop_map(|(first, rest)| format!("{first}{rest}")),
+    ]
+    .boxed()
+}
+
+/// `hidden`, behind a marker of another reading: text the standard reading takes for one
+/// statement (or a string, or a comment) where such a server reads `hidden` as a statement of its
+/// own.
+fn behind_a_marker() -> BoxedStrategy<(&'static str, String, String)> {
+    let filler = text_of("ab ;", 6);
+    let backslash = (
+        prop::sample::select(vec!["'", "\""]),
+        filler.clone(),
+        quiet_statement(),
+        filler.clone(),
+    )
+        .prop_map(|(quote, before, hidden, after)| {
+            let script = format!(
+                "select {quote}a\\{quote}{before}; {hidden}; select {quote}c\\{quote}{after}"
+            );
+            (hidden, script)
+        });
+    let dollar =
+        (dollar_tag(), filler.clone(), quiet_statement()).prop_map(|(tag, before, hidden)| {
+            let script = format!("select ${tag}${before}; {hidden}; ${tag}$");
+            (hidden, script)
+        });
+    let comment = (
+        prop::sample::select(vec!["\\'", "\\\"", "$$", "$x$"]),
+        quiet_statement(),
+    )
+        .prop_map(|(marker, hidden)| (hidden.clone(), format!("-- {marker}\n{hidden}")));
+    (
+        prop::sample::select(STANDARD_ENGINES),
+        prop_oneof![backslash, dollar, comment],
+    )
+        .prop_map(|(engine, (hidden, script))| (engine, hidden, script))
+        .boxed()
+}
+
+proptest! {
+    #![proptest_config(config(512))]
+
+    /// On the standard reading, a statement behind a backslash before a quote, or behind a dollar
+    /// quote, never runs unasked: the guard asks whatever the connection's type, and a run that
+    /// skipped the question is refused by the core.
+    #[test]
+    fn a_statement_behind_another_readings_marker_never_runs_unasked(
+        (engine, hidden, script) in behind_a_marker()
+    ) {
+        let _turn = crate::serial::file_turn(module_path!());
+        let dialect = dialect(engine);
+        prop_assert!(
+            script_risks(dialect.as_ref(), &script, &Safeguards::default())
+                .iter()
+                .any(|risky| risky.risk == Risk::OtherReading),
+            "{}: {:?} (hiding {:?}) asked nothing about its reading", engine, script, hidden
+        );
+        prop_assert!(
+            check_script(dialect.as_ref(), &script, &Safeguards::default(), false).is_err(),
+            "{}: {:?} passed the guard unasked", engine, script
+        );
+    }
+
+    /// No engine with a dialect of its own is asked about another reading, whatever its text.
+    #[test]
+    fn an_engine_with_a_dialect_is_never_asked_about_another_reading(
+        which in 0..sql_dialects().len(),
+        sql in text_of("selct drop;'\"`$\\ \nab_1-/*", 40),
+    ) {
+        let _turn = crate::serial::file_turn(module_path!());
+        let (label, dialect) = sql_dialects().swap_remove(which);
+        if dialect.standard_reading() {
+            return Ok(());
+        }
+        for production in [false, true] {
+            let safeguards = Safeguards { confirm_data_changes: production, ..Safeguards::default() };
+            prop_assert!(
+                script_risks(dialect.as_ref(), &sql, &safeguards)
+                    .iter()
+                    .all(|risky| risky.risk != Risk::OtherReading),
+                "{}: {:?} was asked about another reading", label, sql
+            );
+        }
+    }
+}
+
 // ------------------------------------------------------------------------- untrusted files
 
 /// A value of an imported column: shaped like the numbers, dates and timestamps detection

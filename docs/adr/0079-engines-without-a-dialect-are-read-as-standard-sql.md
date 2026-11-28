@@ -1,6 +1,7 @@
 # ADR-079: An engine with no dialect of ours is read as standard SQL under its own name: no opaque submissions, no dialect picked by the user
 
-- **Status:** Accepted (the reading is implemented, SDB-175; point 6's question is not)
+- **Status:** Accepted (the reading is implemented, SDB-175; point 6's question too,
+  SDB-469: `Risk::OtherReading` in `guard.rs`, asked where `Dialect::standard_reading` is true)
 - **Date:** 2026-11-24
 - **Builds on:** ADR-020 (each engine's own read barrier), ADR-041 (dialects and barriers stay
   in the core; a plugin names one of the core's dialects, or none), ADR-056 (what the guard

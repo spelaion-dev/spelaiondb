@@ -181,7 +181,20 @@
   no barrier answers to). **They have no read barrier of ours** (`Engine::has_read_barrier`,
   false for them as for MongoDB and Redis): `read_only` is refused when the file loads, agents
   never see them (`AgentView::EngineWithoutBarrier`) and the form offers neither (the engine
-  list's `read_barrier`). Tests: `tests/flightsql.rs` with
+  list's `read_barrier`). **Where servers leave the standard, the guard asks** (ADR-079,
+  point 6, SDB-469): `Dialect::standard_reading` is true only for this reading, and on it a
+  statement holding a backslash right before a quote (`\'`, `\"`) or a dollar quote (`$$`,
+  `$tag$`) asks before the script runs, on every connection type (`Risk::OtherReading`, unless
+  the statement asks for worse; `guard.rs`'s `other_reading_marker`). The markers are looked
+  for in the raw text, inside strings and comments too, and in what the splitter skips (each
+  statement answers for the text since the previous one, the last for the rest), after `:name`
+  values are written in, so a value ending in a backslash asks. No engine with a dialect of its
+  own is asked anything new (`tests/properties.rs`, `guard.rs`'s tests). **Known differences
+  that are not marked**, because ordinary text does not hold them: a `;` or a quote inside a
+  backticked (`` `a;b` ``) or bracketed (`[a;b]`) name, which the standard reading takes for
+  code; `#` comments (MySQL's family, Hive), which it takes for code; and nested block comments
+  (`/* /* */ */`, PostgreSQL's family and DuckDB), which it ends at the first `*/`. Tests:
+  `tests/flightsql.rs` with
   `SPELAION_TEST_GIZMOSQL=127.0.0.1:31337` (GizmoSQL, as `gizmosql` and `flightsql`); Dremio is
   tested in the plugin's repository. **InfluxDB 3** is a kind of `flightsql` connection in the
   picker (`catalog.rs`): the plugin sends the connection's database as a `database` header on

@@ -310,6 +310,8 @@
     "uncheckedWrite": "DELETE o UPDATE en el que no se pudo comprobar el WHERE",
     "dataChange": "Cambia datos donde el tipo de la conexión pide confirmación",
     "execution": "Se ejecuta en una conexión que pregunta antes de cada ejecución",
+    "otherReading": "Puede no ser la sentencia que se ejecuta: contiene una barra invertida antes de una comilla o una comilla de dólar, que algunos servidores leen de otra forma que el SQL estándar",
+    "otherReadingExplanation": "El SQL de {{connection}} se lee como SQL estándar, y su servidor puede leer estas sentencias de otra forma: lo que se ejecute puede no estar dividido como se muestra. Todavía no se ha ejecutado nada.",
     "executionExplanation": "{{connection}} pregunta antes de ejecutar nada. Todavía no se ha ejecutado nada.",
     "more_one": "…y {{count}} sentencia más",
     "more_other": "…y {{count}} sentencias más",

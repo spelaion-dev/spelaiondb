@@ -491,6 +491,10 @@ fn risk_text(risk: Risk) -> &'static str {
         Risk::UncheckedWrite => "a write whose WHERE could not be checked",
         Risk::DataChange => "a data change, which this connection's type asks about",
         Risk::Execution => "this connection's type asks before anything runs",
+        Risk::OtherReading => {
+            "text the server may read otherwise than standard SQL (a backslash before a quote, or \
+             a dollar quote)"
+        }
     }
 }
 

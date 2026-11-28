@@ -119,6 +119,14 @@ pub trait Dialect: Send + Sync {
     fn refuse_statement(&self, _statement: &str) -> Option<RequestError> {
         None
     }
+
+    /// Whether this is the standard reading of an engine the core has no dialect for
+    /// (ADR-079): standard SQL's lexical rules, which some servers leave. The guard then asks
+    /// before a statement holding text such a server may read otherwise (point 6). False for
+    /// every engine with a dialect of its own.
+    fn standard_reading(&self) -> bool {
+        false
+    }
 }
 
 /// Why a statement of a language that is not SQL could not be read (ADR-056): nothing is sent.
