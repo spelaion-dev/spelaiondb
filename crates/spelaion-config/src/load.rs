@@ -495,6 +495,25 @@ pub(crate) fn validate_connection(
             "engine_kind must name a kind of the connection engine",
         ));
     }
+    // ADR-041, point 5: an engine of someone else's plugin is named, never the plugin.
+    match (file.engine, file.external_engine.as_deref()) {
+        (Engine::External, Some(name)) => {
+            crate::check_external_engine(name).map_err(|e| ConfigError::new(path, e))?;
+        }
+        (Engine::External, None) => {
+            return Err(ConfigError::new(
+                path,
+                "an external engine's connection names its engine: add `external_engine`",
+            ));
+        }
+        (_, Some(_)) => {
+            return Err(ConfigError::new(
+                path,
+                "`external_engine` goes only with `engine = \"external\"`",
+            ));
+        }
+        (_, None) => {}
+    }
     // A SQL Server LocalDB instance in place of a host (SDB-312, ADR-068): its owner logs in
     // with the Windows account when no user is given.
     let localdb = crate::localdb_instance(file.engine, file.host.as_deref());
@@ -595,6 +614,8 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
+        // What another person's engine needs is its plugin's to say, when it connects.
+        Engine::External => Vec::new(),
     };
     if !missing.is_empty() {
         return Err(ConfigError::new(
@@ -783,6 +804,14 @@ pub(crate) fn validate_connection(
             "libSQL has no read-only mode in SpelaionDB yet: use a read-only token, and remove `read_only`",
         ));
     }
+    // ADR-041 and ADR-055: an engine of a plugin that is not ours never has a read-only mode,
+    // not even a weaker one: its barrier is not ours to vouch for.
+    if file.engine == Engine::External && file.read_only {
+        return Err(ConfigError::new(
+            path,
+            "an engine whose plugin is not part of SpelaionDB has no read-only mode: its barrier is not SpelaionDB's to vouch for. Remove `read_only`",
+        ));
+    }
     // ADR-056, point 6: an engine whose language is not SQL has no read-only mode yet, and
     // its sessions run no SQL. Opening it anyway would let writes through or fail later.
     // ADR-020: no barrier of ours, no read-only mode (the Flight SQL engines too, ADR-041).
@@ -825,7 +854,8 @@ pub(crate) fn validate_connection(
             | Engine::Solr
             | Engine::Meilisearch
             | Engine::Databend
-            | Engine::Spanner => {}
+            | Engine::Spanner
+            | Engine::External => {}
             Engine::Sqlserver => {
                 return Err(ConfigError::new(
                     path,

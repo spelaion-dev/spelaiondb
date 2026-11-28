@@ -50,10 +50,10 @@ use super::pins::{
 pub const MAX_PROGRAM_BYTES: u64 = 512 << 20;
 
 /// The most an archive may unpack to, all its members together.
-const MAX_UNPACKED_BYTES: u64 = 1 << 30;
+pub(super) const MAX_UNPACKED_BYTES: u64 = 1 << 30;
 
 /// The most members an archive may have: ours hold the program and its licence.
-const MAX_MEMBERS: usize = 16;
+pub(super) const MAX_MEMBERS: usize = 16;
 
 /// What this build of SpelaionDB is, for deciding which builds of a plugin it can use.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +238,12 @@ impl PluginStore {
 
     fn ours(&self) -> PathBuf {
         self.folder.join("ours")
+    }
+
+    /// The plugins of other people's the user added (ADR-055, point 5): `theirs/`, apart from
+    /// ours and never named by a catalogue.
+    pub fn theirs(&self) -> super::external::TheirPlugins {
+        super::external::TheirPlugins::at(self.folder.join("theirs"))
     }
 
     /// Where the program of a build of ours is, installed or not.
@@ -675,7 +681,7 @@ impl Drop for Work {
 /// its release) to `to`, and returns the SHA-256 of what was written. The archive must be what
 /// a plugin's release holds: a few ordinary files at its top, by their own names, the program
 /// among them once. Nothing else is written, and nothing is read past the bounds.
-fn unpack_program(
+pub(super) fn unpack_program(
     archive: &Path,
     archive_name: &str,
     file: &str,
@@ -770,7 +776,7 @@ fn make_executable(_file: &std::fs::File) -> std::io::Result<()> {
 }
 
 /// A file's own name: no folder, nothing that climbs out of one.
-fn is_plain_name(member: &str) -> bool {
+pub(super) fn is_plain_name(member: &str) -> bool {
     !member.is_empty()
         && member.len() <= 200
         && member != "."

@@ -37,6 +37,7 @@ fn position(engine: Engine) -> usize {
         Engine::Opensearch => 26,
         Engine::Solr => 27,
         Engine::Meilisearch => 28,
+        Engine::External => 29,
     }
 }
 

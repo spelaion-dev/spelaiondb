@@ -30,6 +30,7 @@ fn resolved(read_only: bool) -> Option<ResolvedConnection> {
         },
         name: "Babelfish test".into(),
         engine: Engine::Sqlserver,
+        external_engine: None,
         env: None,
         kind: None,
         params: ConnectParams {

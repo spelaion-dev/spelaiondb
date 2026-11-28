@@ -26,12 +26,12 @@ use crate::process::Process;
 
 /// A plugin chose a version of the protocol older than what this needs.
 fn older_protocol(process: &Process, what: &str) -> DriverError {
-    DriverError::Other(format!(
+    process.shared().attributed(DriverError::Other(format!(
         "the plugin {} speaks version {} of the plugin protocol, and {what} need version \
          {REQUESTS}: install a newer build of it",
         process.name(),
         process.info().protocol
-    ))
+    )))
 }
 
 pub(crate) struct PluginConnection {

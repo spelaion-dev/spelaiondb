@@ -4403,6 +4403,9 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             tags: item.tags,
             engine,
             engine_kind: item.engine_kind,
+            // The form makes connections of our engines only; one of an external engine is
+            // written by the Plugins page (ADR-055).
+            external_engine: None,
             env: item.env,
             host: item.host,
             port: item.port,

@@ -17,6 +17,7 @@ pub mod clickhouse;
 pub mod cql;
 pub mod databend;
 pub mod duckdb;
+pub mod external;
 pub mod hive;
 pub mod http;
 pub mod mongodb;
@@ -37,6 +38,7 @@ pub use clickhouse::ClickhouseDialect;
 pub use cql::CqlDialect;
 pub use databend::DatabendDialect;
 pub use duckdb::DuckdbDialect;
+pub use external::{EXTERNAL, ExternalDialect};
 pub use hive::HiveDialect;
 pub use http::HttpDialect;
 pub use mongodb::MongodbDialect;
@@ -185,6 +187,10 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "opensearch" => Some(Arc::new(HttpDialect::named("opensearch"))),
         "solr" => Some(Arc::new(HttpDialect::named("solr"))),
         "meilisearch" => Some(Arc::new(HttpDialect::named("meilisearch"))),
+        // An engine of someone else's plugin, before its manifest is known (the editor's own
+        // reading): standard SQL under the one name no barrier answers to. A session reads its
+        // script with the dialect its manifest names (`ExternalDialect`).
+        "external" => Some(Arc::new(StandardDialect::named(EXTERNAL))),
         _ => None,
     }
 }

@@ -540,6 +540,7 @@ fn the_connection_form_keeps_the_profile_and_writes_only_its_own_fields() {
         port: Some(5432),
         database: "app".into(),
         engine_kind: None,
+        external_engine: None,
         file_folder: false,
         pooler: None,
         cleartext_password: false,

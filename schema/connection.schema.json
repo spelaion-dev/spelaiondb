@@ -41,6 +41,13 @@
         "null"
       ]
     },
+    "external_engine": {
+      "description": "With `engine = \"external\"` only, and always there: the engine, by the name its plugin's\nmanifest gives it (`foodb`), served by a plugin the user added themselves that is not\npart of SpelaionDB (ADR-041, ADR-055). It names an engine, never a plugin: no file,\naddress or hash, so nothing here can install one or point to one. A connection whose\nengine no added plugin serves says so and does not open.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "env": {
       "description": "Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type\nin `connection-types.toml`; its badge and safeguards apply. Any other text is a plain\nlabel with no behaviour.",
       "type": [
@@ -278,6 +285,11 @@
           "description": "Google Cloud Spanner (GoogleSQL), served only by its plugin over its REST API. The\naccess token is the password. No read-only mode and no agents yet.",
           "type": "string",
           "const": "spanner"
+        },
+        {
+          "description": "An engine served by a plugin the user added themselves, which is not part of\nSpelaionDB (ADR-041, point 5; ADR-055, point 5): the connection's `external_engine`\nnames which. It has no read-only mode and agents never see it.",
+          "type": "string",
+          "const": "external"
         }
       ]
     },

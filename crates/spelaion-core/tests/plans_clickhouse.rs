@@ -30,6 +30,7 @@ async fn open(read_only: bool) -> Option<OpenConnection> {
         },
         name: "ClickHouse plans test".into(),
         engine: Engine::Clickhouse,
+        external_engine: None,
         env: None,
         kind: None,
         params: ConnectParams {

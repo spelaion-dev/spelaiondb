@@ -98,7 +98,9 @@ impl AgentFailure {
         }
         match error {
             OpenError::PasswordRequired { .. } => unavailable(false),
-            OpenError::UnknownEngine(_) => Self::new(FailureCode::PluginMissing, false),
+            OpenError::UnknownEngine(_) | OpenError::ExternalEngineMissing { .. } => {
+                Self::new(FailureCode::PluginMissing, false)
+            }
             OpenError::Tunnel(e) => Self::from_tunnel(e),
             OpenError::Kube(e) => match e {
                 KubeError::Spawn { .. } | KubeError::Kubectl(_) => unavailable(false),

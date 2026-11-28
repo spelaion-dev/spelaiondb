@@ -6006,11 +6006,13 @@ dependencies = [
  "flate2",
  "futures-util",
  "serde_json",
+ "spelaion-config",
  "spelaion-core",
  "spelaion-driver-api",
  "spelaion-plugin-host",
  "spelaion-plugin-protocol",
  "spelaion-plugin-sdk",
+ "spelaion-ssh",
  "tar",
  "tokio",
 ]

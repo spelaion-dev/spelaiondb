@@ -31,6 +31,9 @@ pub struct Engines {
     /// `with_plugin_states`), so that agents are told "plugin missing" rather than a connection
     /// failure (SDB-374).
     unavailable: std::collections::HashSet<String>,
+    /// The engines of other people's plugins the user added (ADR-055, point 5), by the name a
+    /// connection's `external_engine` gives. Apart from ours: no name here is ever one of ours.
+    external: HashMap<String, crate::plugins::external::ExternalEngine>,
 }
 
 impl Engines {
@@ -52,10 +55,99 @@ impl Engines {
     /// The pinned builds that came inside the installer as archives are installed into
     /// `store` first (ADR-057, [`crate::plugins::install_bundled`]).
     pub fn builtin_with(store: &crate::plugins::installed::PluginStore) -> Self {
+        Self::builtin_for_agents(store).with_their_plugins(&store.theirs())
+    }
+
+    /// [`Engines::builtin_with`] without the plugins of other people's the user added: what
+    /// `spelaiondb mcp` uses. Agents get nothing on an engine that is not ours (ADR-041), so
+    /// the program that serves them never starts one.
+    pub fn builtin_for_agents(store: &crate::plugins::installed::PluginStore) -> Self {
         crate::plugins::install_bundled(store);
         Self::compiled_in()
             .with_our_plugins(Some(store))
             .with_dev_plugins()
+    }
+
+    /// These engines with the plugins of other people's in `theirs` (ADR-055, point 5): each
+    /// started only while its program has the hash the user trusted, or saying why not.
+    pub fn with_their_plugins(mut self, theirs: &crate::plugins::external::TheirPlugins) -> Self {
+        for engine in theirs.engines(&crate::plugins::installed::AppBuild::this()) {
+            let name = engine
+                .plugin
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.engine.clone());
+            if let Some(name) = name {
+                self.external.insert(name, engine);
+            }
+        }
+        self
+    }
+
+    /// The engines of other people's plugins the user added, by name.
+    pub fn external_engines(
+        &self,
+    ) -> impl Iterator<Item = &crate::plugins::external::ExternalEngine> {
+        self.external.values()
+    }
+
+    /// The engine of someone else's plugin a connection's `external_engine` names.
+    pub fn external(&self, name: &str) -> Option<&crate::plugins::external::ExternalEngine> {
+        self.external.get(name)
+    }
+
+    /// The driver a connection opens with: for an engine of someone else's plugin, the one its
+    /// `external_engine` names, which the user must have added (ADR-055, point 9: a connection
+    /// that needs one the user does not have says so and stops).
+    pub fn driver_for(&self, resolved: &ResolvedConnection) -> Result<Arc<dyn Driver>, OpenError> {
+        match resolved.engine {
+            Engine::External => {
+                let name = resolved.external_engine.clone().unwrap_or_default();
+                self.external
+                    .get(&name)
+                    .map(|engine| engine.driver.clone())
+                    .ok_or(OpenError::ExternalEngineMissing { engine: name })
+            }
+            engine => self
+                .get(engine)
+                .ok_or_else(|| OpenError::UnknownEngine(engine.as_str().into())),
+        }
+    }
+
+    /// The dialect a connection's scripts are read with: the core's own for each engine, and
+    /// for an engine of someone else's plugin the one its manifest names, under the name
+    /// `external` (ADR-041).
+    pub fn dialect_for(
+        &self,
+        resolved: &ResolvedConnection,
+    ) -> Result<Arc<dyn Dialect>, OpenError> {
+        match resolved.engine {
+            Engine::External => {
+                let name = resolved.external_engine.clone().unwrap_or_default();
+                self.external
+                    .get(&name)
+                    .map(|engine| engine.dialect.clone())
+                    .ok_or(OpenError::ExternalEngineMissing { engine: name })
+            }
+            engine => {
+                dialect_of(engine).ok_or_else(|| OpenError::UnknownEngine(engine.as_str().into()))
+            }
+        }
+    }
+
+    /// What goes before the connection test's diagnostics of a connection whose engine is
+    /// someone else's: whose plugin serves it, and that it is not part of SpelaionDB.
+    pub fn engine_note(&self, resolved: &ResolvedConnection) -> Option<String> {
+        if resolved.engine != Engine::External {
+            return None;
+        }
+        let name = resolved.external_engine.as_deref().unwrap_or_default();
+        Some(match self.external.get(name) {
+            Some(engine) => format!("Engine: {name}, from the {}", engine.plugin.attribution()),
+            None => format!(
+                "Engine: {name}, which is not part of SpelaionDB, and none of the plugins you added serves it"
+            ),
+        })
     }
 
     /// The drivers compiled into the core.
@@ -67,6 +159,7 @@ impl Engines {
                 .map(|d| (d.engine().to_string(), d))
                 .collect(),
             unavailable: Default::default(),
+            external: HashMap::new(),
         }
     }
 
@@ -233,7 +326,8 @@ impl Engines {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala => {
+            | Engine::Impala
+            | Engine::External => {
                 return Err(not_a_file());
             }
         }
@@ -307,6 +401,13 @@ pub enum OpenError {
 
     #[error("engine not available: {0}")]
     UnknownEngine(String),
+
+    /// The connection's engine is served by a plugin that is not part of SpelaionDB, and the
+    /// user added none that serves it (ADR-055, point 9): nothing is offered, it stops here.
+    #[error(
+        "this connection needs the engine {engine:?}, which is not part of SpelaionDB, and none of the plugins you added serves it: it was not opened"
+    )]
+    ExternalEngineMissing { engine: String },
 
     #[error("{0}")]
     Tunnel(#[from] SshError),
@@ -595,11 +696,8 @@ pub async fn open_connection(
     options: OpenOptions,
     results: Arc<ResultStore>,
 ) -> Result<OpenConnection, OpenError> {
-    let driver = engines
-        .get(resolved.engine)
-        .ok_or_else(|| OpenError::UnknownEngine(resolved.engine.as_str().into()))?;
-    let dialect = dialect_of(resolved.engine)
-        .ok_or_else(|| OpenError::UnknownEngine(resolved.engine.as_str().into()))?;
+    let driver = engines.driver_for(&resolved)?;
+    let dialect = engines.dialect_for(&resolved)?;
     if let Password::Prompt { save_to } = &resolved.password
         && options.password.is_none()
     {

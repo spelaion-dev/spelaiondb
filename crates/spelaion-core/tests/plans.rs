@@ -34,6 +34,7 @@ async fn open_with_setup(
         },
         name: "Plans test".into(),
         engine: Engine::Postgres,
+        external_engine: None,
         env: None,
         kind: None,
         params: ConnectParams {

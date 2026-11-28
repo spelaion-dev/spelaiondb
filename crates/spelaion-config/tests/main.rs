@@ -20,6 +20,7 @@ mod datagrip;
 mod descriptive_keys;
 mod engine_change;
 mod engine_names;
+mod external_engines;
 mod file_writes;
 mod flightsql;
 mod hive;

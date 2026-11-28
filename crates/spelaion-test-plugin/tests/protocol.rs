@@ -1527,3 +1527,56 @@ async fn a_plugin_of_requests_is_checked_through_requests() {
     );
     let _ = std::fs::remove_file(program);
 }
+
+/// A plugin that is not part of SpelaionDB (ADR-055, point 5) says whose it is before each of
+/// its errors: what it reports, what the host says about it, and why it was not started. Its
+/// secrets are still taken out, and a cancellation stays a cancellation.
+#[tokio::test]
+async fn a_plugin_with_an_attribution_says_whose_it_is_in_its_errors() {
+    const WHOSE: &str = "plugin acme 1.0.0 (not part of SpelaionDB)";
+    let plugin = Plugin::new(PROGRAM).with_attribution(WHOSE);
+    assert_eq!(plugin.attribution(), Some(WHOSE));
+    let Err(DriverError::Connection(message)) =
+        within(plugin.driver("test").connect(&params("refuse"))).await
+    else {
+        panic!("it connected");
+    };
+    assert_eq!(message, format!("{WHOSE}: no database for app"));
+    let Err(DriverError::Connection(message)) =
+        within(plugin.driver("test").connect(&params("leak"))).await
+    else {
+        panic!("it connected");
+    };
+    assert!(message.starts_with(WHOSE), "{message}");
+    assert!(!message.contains(PASSWORD), "{message}");
+    let Err(error) = within(plugin.driver("postgres").connect(&params("made"))).await else {
+        panic!("it connected");
+    };
+    assert!(error.to_string().contains(WHOSE), "{error}");
+    // One that may not be started says so with whose it is.
+    let refused = Plugin::new(PROGRAM)
+        .with_check(Arc::new(|_: &std::path::Path| {
+            Err("its file changed".to_string())
+        }))
+        .with_attribution(WHOSE);
+    let Err(error) = within(refused.driver("test").connect(&params("made"))).await else {
+        panic!("it was started");
+    };
+    assert!(error.to_string().contains(WHOSE), "{error}");
+    assert!(error.to_string().contains("its file changed"), "{error}");
+    assert!(matches!(
+        spelaion_plugin_host::attribute(Some(WHOSE), DriverError::Cancelled),
+        DriverError::Cancelled
+    ));
+    // Ours say nothing more.
+    let Err(DriverError::Connection(message)) = within(
+        Plugin::new(PROGRAM)
+            .driver("test")
+            .connect(&params("refuse")),
+    )
+    .await
+    else {
+        panic!("it connected");
+    };
+    assert_eq!(message, "no database for app");
+}

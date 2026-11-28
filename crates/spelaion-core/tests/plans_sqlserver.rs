@@ -26,6 +26,7 @@ async fn open(read_only: bool) -> Option<OpenConnection> {
         },
         name: "SQL Server plans test".into(),
         engine: Engine::Sqlserver,
+        external_engine: None,
         env: None,
         kind: None,
         params: ConnectParams {

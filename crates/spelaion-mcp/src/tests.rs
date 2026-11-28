@@ -2375,3 +2375,26 @@ async fn an_agents_statement_is_recorded_with_the_database_it_ran_in() {
         assert_eq!(last.tool.as_deref(), Some("execute_write"), "{engine}");
     }
 }
+
+/// ADR-041 and ADR-055: an engine of someone else's plugin gets nothing from agents, whatever
+/// its `[mcp]` says: it is not listed, nothing reads or writes it, and the server never starts
+/// such a plugin (its engines are not even built here).
+#[tokio::test]
+async fn an_engine_of_someone_elses_plugin_gets_nothing_from_agents() {
+    let user_dir = temp("theirs");
+    std::fs::create_dir_all(user_dir.join("connections")).unwrap();
+    std::fs::write(
+        user_dir.join("connections/theirs.toml"),
+        "schema_version = 1\nname = \"Theirs\"\nengine = \"external\"\nexternal_engine = \"acme-testdb\"\nhost = \"db.internal\"\n\n[mcp]\nexposed = true\nwrites = \"allow\"\n",
+    )
+    .unwrap();
+    let server = server(None, &user_dir, false);
+    assert!(server.state.engines.external("acme-testdb").is_none());
+    assert!(!listed(&server).await.contains("~/theirs"));
+    let read = query(&server, "~/theirs", "select 1").await;
+    // Not even told it exists.
+    assert_eq!(code(&read).0, "not_exposed", "{}", body(&read));
+    let written = write(&server, "~/theirs", "delete from t").await;
+    assert!(refused(&written), "{}", body(&written));
+    assert!(server.state.sessions.lock().await.is_empty());
+}

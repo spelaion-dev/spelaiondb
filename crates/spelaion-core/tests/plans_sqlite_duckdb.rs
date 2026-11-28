@@ -64,6 +64,7 @@ async fn open(engine: Engine, path: &Path, read_only: bool) -> OpenConnection {
         },
         name: "Plans test".into(),
         engine,
+        external_engine: None,
         env: None,
         kind: None,
         params: ConnectParams {

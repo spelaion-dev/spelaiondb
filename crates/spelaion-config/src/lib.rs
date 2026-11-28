@@ -99,10 +99,11 @@ pub use masking::{MASK_EVERYTHING, MaskingRules, check_pattern, check_patterns};
 pub use migrate::{LEGACY_WORKSPACE_DIR, legacy_user_dir, migrate_user_dir, state_db};
 pub use model::{
     ConnectionFile, ConnectionTypeConfig, ConnectionTypesFile, Engine, HopConfig, IsolationLevel,
-    KubernetesConfig, KubernetesProfileConfig, MaskingConfig, McpConfig, PoolerMode, ProxyConfig,
-    ProxyType, SCHEMA_VERSION, SecretSpec, SessionConfig, SshAuth, SsmConfig, TlsConfig,
-    TlsModeConfig, Tone, TunnelFile, TunnelPreferences, UserFile, UserMasking, WritePolicy,
-    check_localdb_name, engine_kind_base, localdb_instance,
+    KubernetesConfig, KubernetesProfileConfig, MAX_EXTERNAL_ENGINE, MaskingConfig, McpConfig,
+    PoolerMode, ProxyConfig, ProxyType, SCHEMA_VERSION, SecretSpec, SessionConfig, SshAuth,
+    SsmConfig, TlsConfig, TlsModeConfig, Tone, TunnelFile, TunnelPreferences, UserFile,
+    UserMasking, WritePolicy, check_external_engine, check_localdb_name, engine_kind_base,
+    localdb_instance,
 };
 pub use name_pattern::{
     DEFAULT_NAME_PATTERN, MAX_NAME_PATTERN, NAME_VARIABLES, NamePattern, NamePatternError,

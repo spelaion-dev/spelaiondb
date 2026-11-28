@@ -437,7 +437,7 @@ pub(crate) fn version_of(text: &str) -> Option<(u32, u32, u32)> {
     ))
 }
 
-fn protocol_of(text: &str) -> Option<(u32, u32)> {
+pub(crate) fn protocol_of(text: &str) -> Option<(u32, u32)> {
     let (major, minor) = text.split_once('.')?;
     if !is_number(major) || !is_number(minor) {
         return None;
@@ -449,7 +449,7 @@ fn is_number(text: &str) -> bool {
     !text.is_empty() && text.len() <= 5 && text.chars().all(|c| c.is_ascii_digit())
 }
 
-fn is_sha256(text: &str) -> bool {
+pub(crate) fn is_sha256(text: &str) -> bool {
     text.len() == 64
         && text
             .chars()

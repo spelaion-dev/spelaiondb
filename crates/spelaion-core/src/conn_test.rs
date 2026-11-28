@@ -348,7 +348,7 @@ pub async fn test_connection(
             let run = Run::new(vec![StepKind::Resolve], redactor, observer);
             run.start(0);
             run.fail((FailureKind::Config, error.to_string()));
-            return run.report(options.scope, &options.name, None, false);
+            return run.report(options.scope, &options.name, None, None, false);
         }
     };
     learn_connection_secrets(&redactor, &resolved);
@@ -374,7 +374,15 @@ pub async fn test_connection(
     } else {
         options.name.clone()
     };
-    run.report(options.scope, &name, server_version, stopped)
+    // Whose plugin an engine that is not ours comes from, so a report goes to its author.
+    let note = engines.engine_note(&resolved);
+    run.report(
+        options.scope,
+        &name,
+        note.as_deref(),
+        server_version,
+        stopped,
+    )
 }
 
 /// Tests a network profile (a tunnel file) on its own: the proxy and every hop, without a
@@ -397,7 +405,7 @@ pub async fn test_network_profile(
             let run = Run::new(vec![StepKind::Resolve], redactor, observer);
             run.start(0);
             run.fail((FailureKind::Config, error.to_string()));
-            return run.report(TestScope::Network, "", None, false);
+            return run.report(TestScope::Network, "", None, None, false);
         }
     };
     learn_tunnel_secrets(&redactor, &tunnel);
@@ -421,6 +429,7 @@ pub async fn test_network_profile(
     run.report(
         TestScope::Network,
         &format!("network profile {}", tunnel.name),
+        None,
         None,
         stopped,
     )
@@ -685,12 +694,9 @@ async fn connection_steps(
             );
         }
     }
-    let driver = engines.get(resolved.engine).ok_or_else(|| {
-        (
-            FailureKind::Other,
-            format!("engine not available: {}", resolved.engine.as_str()),
-        )
-    })?;
+    let driver = engines
+        .driver_for(resolved)
+        .map_err(|error| open_failure(&error))?;
     let connection = connect_driver(driver.as_ref(), resolved, &params)
         .await
         .map_err(|e| open_failure(&e))?;
@@ -702,7 +708,7 @@ async fn connection_steps(
     // keep it from writing cannot open (SDB-169, SDB-170): the test says so at the login, as
     // opening would.
     if resolved.params.read_only
-        && let Some(dialect) = crate::dialect_of(resolved.engine)
+        && let Ok(dialect) = engines.dialect_for(resolved)
         && let Some(family) =
             crate::server_family::read_family(connection.as_ref(), dialect.name()).await
         && let Some(reason) = family.read_only_sessions_refusal()
@@ -712,7 +718,7 @@ async fn connection_steps(
     // A folder of files: set up as opening would, so a path that is not a folder, or one
     // DuckDB cannot be limited to, fails here (SDB-316).
     if let Some(folder) = &resolved.file_folder
-        && let Some(dialect) = crate::dialect_of(resolved.engine)
+        && let Ok(dialect) = engines.dialect_for(resolved)
     {
         crate::file_folder::prepare(connection.as_ref(), dialect.as_ref(), folder)
             .await
@@ -721,9 +727,9 @@ async fn connection_steps(
     run.ok_running();
     if let Some(step) = plan.session_setup {
         run.start(step);
-        let dialect = crate::dialect_of(resolved.engine).ok_or_else(|| {
-            open_failure(&OpenError::UnknownEngine(resolved.engine.as_str().into()))
-        })?;
+        let dialect = engines
+            .dialect_for(resolved)
+            .map_err(|error| open_failure(&error))?;
         let session = Session::new(connection, dialect, Arc::new(ResultStore::new()))
             .with_read_only(resolved.params.read_only)
             .with_masking(crate::masking::MaskPolicy::new(&resolved.masking));
@@ -926,7 +932,9 @@ fn open_failure(error: &OpenError) -> Failure {
         OpenError::PasswordRequired { save_to: None } => {
             (FailureKind::PasswordRequired, error.to_string())
         }
-        OpenError::UnknownEngine(_) => (FailureKind::Other, error.to_string()),
+        OpenError::UnknownEngine(_) | OpenError::ExternalEngineMissing { .. } => {
+            (FailureKind::Other, error.to_string())
+        }
         OpenError::Setup(_)
         | OpenError::NoReadOnlyBarrier(_)
         | OpenError::FileFolder(_)
@@ -1031,6 +1039,7 @@ impl<'a> Run<'a> {
         &self,
         scope: TestScope,
         name: &str,
+        note: Option<&str>,
         server_version: Option<String>,
         stopped: bool,
     ) -> TestReport {
@@ -1040,6 +1049,7 @@ impl<'a> Run<'a> {
         let diagnostics = self.redactor.redact(&diagnostics(
             scope,
             &self.redactor.redact(name),
+            note,
             ok,
             stopped,
             server_version.as_deref(),
@@ -1060,6 +1070,7 @@ impl<'a> Run<'a> {
 fn diagnostics(
     scope: TestScope,
     name: &str,
+    note: Option<&str>,
     ok: bool,
     stopped: bool,
     server_version: Option<&str>,
@@ -1073,6 +1084,9 @@ fn diagnostics(
     );
     if !name.is_empty() {
         out.push_str(&format!("Connection: {name}\n"));
+    }
+    if let Some(note) = note {
+        out.push_str(&format!("{note}\n"));
     }
     out.push_str(match scope {
         TestScope::Full => "Scope: full (network and login)\n",
@@ -1574,6 +1588,7 @@ mod tests {
             },
             name: "local".into(),
             engine: Engine::Sqlserver,
+            external_engine: None,
             env: None,
             kind: None,
             params: spelaion_driver_api::ConnectParams {
