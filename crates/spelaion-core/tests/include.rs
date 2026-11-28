@@ -39,6 +39,8 @@ const SQL_ENGINES: &[&str] = &[
     "flightsql",
     "dremio",
     "gizmosql",
+    "h2",
+    "hsqldb",
 ];
 
 fn dialect(engine: &str) -> Arc<dyn Dialect> {

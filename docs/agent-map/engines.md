@@ -237,3 +237,21 @@
   or transaction they enforce), as for the Flight SQL engines: no read-only mode, no agents.
   Tests: `tests/hive.rs` with `SPELAION_TEST_HIVE=127.0.0.1:11010` (Hive, and `SPELAION_TEST_SSH`
   for the tunnel); Spark, Kyuubi and Impala are tested in the plugin's repository.
+- **H2 and HSQLDB are files opened through the JDBC bridge** (ADR-059, SDB-317):
+  `spelaion-dev/spelaiondb-plugin-jdbc`, one plugin for both (engines `h2` and `hsqldb`), a
+  native launcher that checks the bridge's jar and starts the user's Java runtime (17 or later)
+  on it. **Not pinned in `plugins.toml` yet**: until it is, no build has their driver and the
+  picker lists them as planned (`catalog.rs`). What the core has of them: `Engine::H2` and
+  `Engine::Hsqldb` (`is_file`: `database` is the file's path, no host, tunnel or login in the
+  form), standard SQL under each name (`spelaion-dialect`, ADR-079), and **`jdbc.rs`, which
+  builds every JDBC URL**: the engine's `file:` prefix and the file's absolute path without its
+  extension (`.mv.db`; `.script`, `.properties`…), refusing a `;` (H2's `INIT` and every other
+  setting come after one), a relative path, a shared folder or a control character before the
+  plugin sees it (`connect_driver`, `create_file_database`); a connection without a user logs
+  in as the engine's administrator (`sa`, `SA`). Any change to `jdbc.rs` needs a test that tries
+  to get around it. **No read-only mode and no agents** (`has_read_barrier`): no dialect of ours
+  and no barrier tested. What the bridge turns off inside a file (Java functions and triggers,
+  H2's source code and linked tables) is the plugin's, with its own adversarial tests there. Its
+  tests here: `spelaion-core`'s `tests/jdbc_bridge.rs` and `spelaion-config`'s
+  `tests/jdbc_bridge.rs`, with `SPELAION_DEV_PLUGIN_H2` and `SPELAION_DEV_PLUGIN_HSQLDB` pointing at
+  a build of the plugin (and a Java runtime); without them the core's are skipped.

@@ -29,7 +29,8 @@ const SQL: Case = Case {
 fn cases(dialect: &str) -> Vec<Case> {
     match dialect {
         "sqlite" | "duckdb" | "clickhouse" | "trino" | "databend" | "spanner" | "tdengine"
-        | "flightsql" | "dremio" | "gizmosql" | "hive" | "spark" | "kyuubi" | "impala" => {
+        | "flightsql" | "dremio" | "gizmosql" | "h2" | "hsqldb" | "hive" | "spark" | "kyuubi"
+        | "impala" => {
             vec![SQL]
         }
         "postgres" => vec![

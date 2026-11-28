@@ -120,7 +120,9 @@ impl ToolFamily {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala => None,
+            | Engine::Impala
+            | Engine::H2
+            | Engine::Hsqldb => None,
         }
     }
 
@@ -173,7 +175,9 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Hive
         | Engine::Spark
         | Engine::Kyuubi
-        | Engine::Impala => None,
+        | Engine::Impala
+        | Engine::H2
+        | Engine::Hsqldb => None,
     }
 }
 

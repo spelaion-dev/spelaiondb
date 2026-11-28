@@ -176,6 +176,10 @@ pub fn for_engine(engine: &str) -> Option<Arc<dyn Dialect>> {
         "flightsql" => Some(Arc::new(StandardDialect::named("flightsql"))),
         "dremio" => Some(Arc::new(StandardDialect::named("dremio"))),
         "gizmosql" => Some(Arc::new(StandardDialect::named("gizmosql"))),
+        // The JDBC bridge's engines (ADR-059): standard SQL under each engine's own name, which
+        // no barrier answers to (ADR-079).
+        "h2" => Some(Arc::new(StandardDialect::named("h2"))),
+        "hsqldb" => Some(Arc::new(StandardDialect::named("hsqldb"))),
         // HiveServer2's engines: HiveQL's lexical rules under each engine's own name.
         "hive" => Some(Arc::new(HiveDialect::named("hive"))),
         "spark" => Some(Arc::new(HiveDialect::named("spark"))),
@@ -213,6 +217,8 @@ mod tests {
             ("flightsql", "flightsql"),
             ("dremio", "dremio"),
             ("gizmosql", "gizmosql"),
+            ("h2", "h2"),
+            ("hsqldb", "hsqldb"),
             ("neo4j", "neo4j"),
             ("databend", "databend"),
             ("spanner", "spanner"),
@@ -273,6 +279,8 @@ mod tests {
             "flightsql",
             "dremio",
             "gizmosql",
+            "h2",
+            "hsqldb",
             "hive",
             "spark",
             "kyuubi",

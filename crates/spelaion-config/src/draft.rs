@@ -439,7 +439,9 @@ impl ConnectionDraft {
                     | Engine::Hive
                     | Engine::Spark
                     | Engine::Kyuubi
-                    | Engine::Impala => {
+                    | Engine::Impala
+                    | Engine::H2
+                    | Engine::Hsqldb => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -524,7 +526,9 @@ impl ConnectionDraft {
             database: non_empty(&self.database).map(|d| match self.engine {
                 // A path on the server is the server's: as typed.
                 Engine::Sqlite if remote_sqlite => d,
-                Engine::Sqlite | Engine::Duckdb => portable_path(&d, root),
+                Engine::Sqlite | Engine::Duckdb | Engine::H2 | Engine::Hsqldb => {
+                    portable_path(&d, root)
+                }
                 Engine::Postgres
                 | Engine::Mysql
                 | Engine::Mariadb

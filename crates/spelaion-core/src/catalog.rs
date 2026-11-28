@@ -196,6 +196,23 @@ pub fn engine_catalog() -> Vec<EngineInfo> {
         supported(Engine::Oracle, "Oracle", Relational, Network),
         // SQLite's SQL over HTTP: libSQL's server and Turso (ADR-058).
         supported(Engine::Libsql, "libSQL / Turso", Relational, Network),
+        // Files only Java can open, through the JDBC bridge in the user's Java runtime (ADR-059,
+        // SDB-317). Listed, and pickable once the bridge's plugin is pinned in plugins.toml:
+        // until then no build has its driver.
+        planned(
+            "h2",
+            "H2 (through JDBC)",
+            Relational,
+            EngineAccess::File,
+            None,
+        ),
+        planned(
+            "hsqldb",
+            "HSQLDB (through JDBC)",
+            Relational,
+            EngineAccess::File,
+            None,
+        ),
         // PostgreSQL's protocol, checked with each server's image (`testing/docker/pg-family`).
         kind_of(
             Engine::Postgres,

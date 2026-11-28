@@ -315,12 +315,17 @@ pub enum Engine {
     Opensearch,
     Solr,
     Meilisearch,
+    /// H2's database files, opened through SpelaionDB's JDBC bridge, a plugin that runs the
+    /// user's Java (ADR-059). No read-only mode and no agents.
+    H2,
+    /// HSQLDB's database files, through the same JDBC bridge as H2 (ADR-059).
+    Hsqldb,
 }
 
 impl Engine {
     /// Every engine, in declaration order. `tests/engine_names.rs` checks it against a match
     /// with no `_`, so a new engine fails there until it is listed here.
-    pub const ALL: [Engine; 29] = [
+    pub const ALL: [Engine; 31] = [
         Engine::Postgres,
         Engine::Sqlite,
         Engine::Mysql,
@@ -350,6 +355,8 @@ impl Engine {
         Engine::Opensearch,
         Engine::Solr,
         Engine::Meilisearch,
+        Engine::H2,
+        Engine::Hsqldb,
     ];
 
     /// The engine a connection file names (`as_str`'s text). Read through the same names the
@@ -392,6 +399,8 @@ impl Engine {
             Engine::Opensearch => "opensearch",
             Engine::Solr => "solr",
             Engine::Meilisearch => "meilisearch",
+            Engine::H2 => "h2",
+            Engine::Hsqldb => "hsqldb",
         }
     }
 
@@ -427,6 +436,8 @@ impl Engine {
             Engine::Opensearch => "OpenSearch",
             Engine::Solr => "Solr",
             Engine::Meilisearch => "Meilisearch",
+            Engine::H2 => "H2",
+            Engine::Hsqldb => "HSQLDB",
         }
     }
 
@@ -453,7 +464,9 @@ impl Engine {
             | Engine::Kyuubi
             | Engine::Impala
             | Engine::Databend
-            | Engine::Spanner => true,
+            | Engine::Spanner
+            | Engine::H2
+            | Engine::Hsqldb => true,
             Engine::Mongodb
             | Engine::Redis
             | Engine::Cassandra
@@ -503,7 +516,9 @@ impl Engine {
             | Engine::Elasticsearch
             | Engine::Opensearch
             | Engine::Solr
-            | Engine::Meilisearch => false,
+            | Engine::Meilisearch
+            | Engine::H2
+            | Engine::Hsqldb => false,
         }
     }
 
@@ -541,14 +556,17 @@ impl Engine {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala => false,
+            | Engine::Impala
+            // Reached through the JDBC bridge (ADR-059): no dialect of ours, no barrier tested.
+            | Engine::H2
+            | Engine::Hsqldb => false,
         }
     }
 
     /// Embedded engines: `database` is a file, and there is no server, user or tunnel.
     pub fn is_file(self) -> bool {
         match self {
-            Engine::Sqlite | Engine::Duckdb => true,
+            Engine::Sqlite | Engine::Duckdb | Engine::H2 | Engine::Hsqldb => true,
             Engine::Postgres
             | Engine::Mysql
             | Engine::Mariadb
@@ -582,7 +600,7 @@ impl Engine {
     pub fn default_port(self) -> Option<u16> {
         match self {
             Engine::Postgres => Some(5432),
-            Engine::Sqlite | Engine::Duckdb => None,
+            Engine::Sqlite | Engine::Duckdb | Engine::H2 | Engine::Hsqldb => None,
             Engine::Mysql | Engine::Mariadb => Some(3306),
             Engine::Sqlserver => Some(1433),
             Engine::Mongodb => Some(27017),
@@ -754,7 +772,9 @@ impl IsolationLevel {
             | Engine::Mongodb
             | Engine::Redis
             | Engine::Cassandra
-            | Engine::Tdengine => false,
+            | Engine::Tdengine
+            | Engine::H2
+            | Engine::Hsqldb => false,
             // ClickHouse has no transactions to isolate; Trino and Presto set none per session.
             Engine::Clickhouse
             | Engine::Trino
@@ -812,7 +832,9 @@ impl Engine {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala => false,
+            | Engine::Impala
+            | Engine::H2
+            | Engine::Hsqldb => false,
         }
     }
 }

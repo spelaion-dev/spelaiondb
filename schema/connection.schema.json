@@ -278,6 +278,16 @@
           "description": "Google Cloud Spanner (GoogleSQL), served only by its plugin over its REST API. The\naccess token is the password. No read-only mode and no agents yet.",
           "type": "string",
           "const": "spanner"
+        },
+        {
+          "description": "H2's database files, opened through SpelaionDB's JDBC bridge, a plugin that runs the\nuser's Java (ADR-059). No read-only mode and no agents.",
+          "type": "string",
+          "const": "h2"
+        },
+        {
+          "description": "HSQLDB's database files, through the same JDBC bridge as H2 (ADR-059).",
+          "type": "string",
+          "const": "hsqldb"
         }
       ]
     },

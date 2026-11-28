@@ -92,7 +92,9 @@ pub fn embedded_dump_path(
         | Engine::Hive
         | Engine::Spark
         | Engine::Kyuubi
-        | Engine::Impala => {
+        | Engine::Impala
+        | Engine::H2
+        | Engine::Hsqldb => {
             return Err(BackupError::Invalid(format!(
                 "{} databases are backed up with a client tool",
                 resolved.engine.as_str()
@@ -222,7 +224,9 @@ pub async fn embedded_dump(
         | Engine::Hive
         | Engine::Spark
         | Engine::Kyuubi
-        | Engine::Impala => {
+        | Engine::Impala
+        | Engine::H2
+        | Engine::Hsqldb => {
             unreachable!("embedded_dump_path refused it")
         }
     };

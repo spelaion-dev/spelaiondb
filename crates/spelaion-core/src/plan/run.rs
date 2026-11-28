@@ -166,7 +166,9 @@ impl ExplainPolicy {
                 | Engine::Hive
                 | Engine::Spark
                 | Engine::Kyuubi
-                | Engine::Impala => None,
+                | Engine::Impala
+                | Engine::H2
+                | Engine::Hsqldb => None,
             },
         }
     }
