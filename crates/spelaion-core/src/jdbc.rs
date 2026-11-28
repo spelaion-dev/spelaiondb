@@ -16,7 +16,7 @@ use spelaion_driver_api::{ConnectParams, DriverError};
 
 /// The engines reached through the JDBC bridge.
 pub fn is_bridged(engine: Engine) -> bool {
-    matches!(engine, Engine::H2 | Engine::Hsqldb)
+    shape(engine).is_some()
 }
 
 /// The JDBC subprotocol and the files a database of `engine` is made of, from the one people
@@ -28,7 +28,35 @@ fn shape(engine: Engine) -> Option<(&'static str, &'static [&'static str])> {
             "jdbc:hsqldb:file:",
             &[".script", ".properties", ".data", ".log", ".backup"],
         )),
-        _ => None,
+        Engine::Postgres
+        | Engine::Sqlite
+        | Engine::Mysql
+        | Engine::Mariadb
+        | Engine::Duckdb
+        | Engine::Sqlserver
+        | Engine::Mongodb
+        | Engine::Clickhouse
+        | Engine::Redis
+        | Engine::Trino
+        | Engine::Presto
+        | Engine::Oracle
+        | Engine::Libsql
+        | Engine::Cassandra
+        | Engine::Tdengine
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql
+        | Engine::Neo4j
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala
+        | Engine::Databend
+        | Engine::Spanner
+        | Engine::Elasticsearch
+        | Engine::Opensearch
+        | Engine::Solr
+        | Engine::Meilisearch => None,
     }
 }
 
@@ -37,7 +65,35 @@ pub fn default_user(engine: Engine) -> Option<&'static str> {
     match engine {
         Engine::H2 => Some("sa"),
         Engine::Hsqldb => Some("SA"),
-        _ => None,
+        Engine::Postgres
+        | Engine::Sqlite
+        | Engine::Mysql
+        | Engine::Mariadb
+        | Engine::Duckdb
+        | Engine::Sqlserver
+        | Engine::Mongodb
+        | Engine::Clickhouse
+        | Engine::Redis
+        | Engine::Trino
+        | Engine::Presto
+        | Engine::Oracle
+        | Engine::Libsql
+        | Engine::Cassandra
+        | Engine::Tdengine
+        | Engine::Flightsql
+        | Engine::Dremio
+        | Engine::Gizmosql
+        | Engine::Neo4j
+        | Engine::Hive
+        | Engine::Spark
+        | Engine::Kyuubi
+        | Engine::Impala
+        | Engine::Databend
+        | Engine::Spanner
+        | Engine::Elasticsearch
+        | Engine::Opensearch
+        | Engine::Solr
+        | Engine::Meilisearch => None,
     }
 }
 
