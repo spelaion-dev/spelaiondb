@@ -11,7 +11,8 @@ begin
     execute immediate 'grant create session, create table, create view, create sequence, create procedure, create materialized view, unlimited tablespace to spelaion';
   end if;
   -- Outside the first creation, so a database made before it has it too: the read-only
-  -- user's tests create scheduler jobs as this user (tests/oracle.rs, ADR-080).
-  execute immediate 'grant create job, create synonym to spelaion';
+  -- user's tests create scheduler jobs, synonyms and private database links as this user
+  -- (tests/oracle.rs, ADR-080 and the ADR that supersedes its points 6 to 8).
+  execute immediate 'grant create job, create synonym, create database link to spelaion';
 end;
 /
