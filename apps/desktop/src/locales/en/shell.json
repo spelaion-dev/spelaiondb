@@ -310,6 +310,8 @@
     "uncheckedWrite": "DELETE or UPDATE that could not be checked for a WHERE",
     "dataChange": "Changes data where the connection's type asks first",
     "execution": "Runs on a connection that asks before every run",
+    "otherReading": "May not be the statement that runs: it holds a backslash before a quote or a dollar quote, which some servers read otherwise than standard SQL",
+    "otherReadingExplanation": "{{connection}}'s SQL is read as standard SQL, and its server may read these statements differently: what runs may not be split as shown. Nothing has run yet.",
     "executionExplanation": "{{connection}} asks before running anything. Nothing has run yet.",
     "more_one": "…and {{count}} more statement",
     "more_other": "…and {{count}} more statements",

@@ -5260,6 +5260,9 @@ pub enum RiskKind {
     UncheckedWrite,
     DataChange,
     Execution,
+    /// The engine is read as standard SQL and the statement holds text its server may read
+    /// otherwise (ADR-079, point 6).
+    OtherReading,
 }
 
 impl From<spelaion_core::Risk> for RiskKind {
@@ -5273,6 +5276,7 @@ impl From<spelaion_core::Risk> for RiskKind {
             Risk::UncheckedWrite => Self::UncheckedWrite,
             Risk::DataChange => Self::DataChange,
             Risk::Execution => Self::Execution,
+            Risk::OtherReading => Self::OtherReading,
         }
     }
 }

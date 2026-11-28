@@ -42,6 +42,54 @@ pub enum Risk {
     DataChange,
     /// Any statement, where the connection's type confirms every execution.
     Execution,
+    /// On an engine read with the standard reading (ADR-079, point 6), text that some servers
+    /// read otherwise: a backslash right before a quote, or a dollar quote. The statement may
+    /// not be the one the core split, so every connection type asks.
+    OtherReading,
+}
+
+impl Risk {
+    /// A risk the statement has however its text is read: it outranks the question about the
+    /// reading.
+    fn is_destructive(self) -> bool {
+        match self {
+            Risk::DeleteAll
+            | Risk::UpdateAll
+            | Risk::Drop
+            | Risk::Truncate
+            | Risk::UncheckedWrite => true,
+            Risk::DataChange | Risk::Execution | Risk::OtherReading => false,
+        }
+    }
+}
+
+/// Whether `statement` holds text a server may read otherwise than the standard reading does
+/// (ADR-079, point 6): a backslash directly before a quote (`\'`, `\"`), which MySQL's family,
+/// ClickHouse, Hive, Spark and others read as an escaped quote, or a dollar quote (`$$`,
+/// `$tag$`), which PostgreSQL's family and DuckDB read as a string. Looked for in the raw text,
+/// inside what the standard reading takes for a string or a comment too: that is exactly where
+/// the readings part ways.
+pub(crate) fn other_reading_marker(statement: &str) -> bool {
+    let bytes = statement.as_bytes();
+    bytes
+        .windows(2)
+        .any(|pair| pair[0] == b'\\' && matches!(pair[1], b'\'' | b'"'))
+        || (0..bytes.len()).any(|i| dollar_quote_at(bytes, i))
+}
+
+/// Whether a dollar quote starts at `i`: `$`, a tag (a letter or `_`, then letters, digits or
+/// `_`; or none), `$`, as PostgreSQL reads one.
+fn dollar_quote_at(bytes: &[u8], i: usize) -> bool {
+    if bytes[i] != b'$' {
+        return false;
+    }
+    let tag = &bytes[i + 1..];
+    let length = tag
+        .iter()
+        .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_' || !b.is_ascii())
+        .count();
+    let starts_well = length == 0 || !tag[0].is_ascii_digit();
+    starts_well && tag.get(length) == Some(&b'$')
 }
 
 /// A statement of the script that needs confirmation.
@@ -61,17 +109,38 @@ pub fn script_risks(
     safeguards: &Safeguards,
 ) -> Vec<RiskyStatement> {
     let mode = ModeQuoting::of(dialect);
-    dialect
-        .split_statements(script)
+    let spans = dialect.split_statements(script);
+    let last = spans.len().saturating_sub(1);
+    // Where the text each statement answers for starts: right after the previous one, so what
+    // the splitter skipped (a statement of comments only, the `;`) is looked at too.
+    let mut from = 0;
+    spans
         .into_iter()
         .enumerate()
         .filter_map(|(index, span)| {
             let text = span.text(script);
-            match request_risk(dialect, text, safeguards) {
+            let risk = match request_risk(dialect, text, safeguards) {
                 Some(risk) => risk,
                 None => statement_risk(dialect.name(), text, mode, safeguards),
-            }
-            .map(|risk| RiskyStatement { index, span, risk })
+            };
+            // ADR-079, point 6: on the standard reading, text a server may read otherwise asks
+            // on every connection type, unless the statement asks for worse already. The last
+            // statement answers for the rest of the script as well.
+            let to = if index == last {
+                script.len()
+            } else {
+                span.end.max(from)
+            };
+            let around = script.get(from..to).unwrap_or(text);
+            from = to;
+            let risk = match risk {
+                Some(risk) if risk.is_destructive() => Some(risk),
+                _ if dialect.standard_reading() && other_reading_marker(around) => {
+                    Some(Risk::OtherReading)
+                }
+                other => other,
+            };
+            risk.map(|risk| RiskyStatement { index, span, risk })
         })
         .collect()
 }
@@ -1568,5 +1637,147 @@ mod tests {
             ora("create or replace procedure p as begin delete from t; end;"),
             None
         );
+    }
+
+    /// ADR-079, point 6: the engines read as standard SQL, and the risks a script gets there.
+    const STANDARD: [&str; 3] = ["flightsql", "dremio", "gizmosql"];
+
+    fn standard_risks(engine: &str, script: &str) -> Vec<(usize, Risk)> {
+        let dialect = spelaion_dialect::for_engine(engine).expect("a dialect");
+        assert!(dialect.standard_reading(), "{engine}");
+        script_risks(dialect.as_ref(), script, &Safeguards::default())
+            .into_iter()
+            .map(|risky| (risky.index, risky.risk))
+            .collect()
+    }
+
+    #[test]
+    fn a_statement_hidden_behind_a_backslash_quote_asks_on_the_standard_reading() {
+        // One statement to the core, whose first word is `select`; three to a server that
+        // reads `\'` as an escaped quote.
+        let example = r"SELECT 'a\'b'; DROP TABLE t; SELECT 'c\'d'";
+        for engine in STANDARD {
+            assert_eq!(
+                standard_risks(engine, example),
+                [(0, Risk::OtherReading)],
+                "{engine}"
+            );
+            let dialect = spelaion_dialect::for_engine(engine).unwrap();
+            assert!(
+                check_script(dialect.as_ref(), example, &Safeguards::default(), false).is_err()
+            );
+            // A question, not a refusal: once answered, it runs as it was split.
+            assert!(check_script(dialect.as_ref(), example, &Safeguards::default(), true).is_ok());
+        }
+    }
+
+    #[test]
+    fn each_marker_asks_and_ordinary_text_does_not() {
+        for engine in STANDARD {
+            for asks in [
+                r"select 'C:\data\'",
+                r#"select "a\"b" from t"#,
+                "select $$a; drop table t$$",
+                "select $body$ a; b $body$",
+                "select $_x1$ $_x1$",
+                // In what the standard reading takes for a comment, too.
+                r"select 1 -- it\'s",
+                r#"select 1 /* \" */"#,
+                // In what the splitter skips: a statement of comments only.
+                "/* $$ */;\nselect 1",
+                "select 1;\n-- $$\n",
+            ] {
+                assert!(
+                    standard_risks(engine, asks)
+                        .iter()
+                        .any(|(_, risk)| *risk == Risk::OtherReading),
+                    "{engine}: {asks:?}"
+                );
+            }
+            for quiet in [
+                "select 'a''b', \"c\"\"d\"",
+                r"select '\n', 'a\b'",
+                "select $1, $2 from t",
+                "select '$' || 'x$'",
+                "select 1 $ 2",
+                "select '$1$'",
+            ] {
+                assert_eq!(standard_risks(engine, quiet), [], "{engine}: {quiet:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_risk_that_asks_already_keeps_its_name() {
+        assert_eq!(
+            standard_risks("flightsql", r"drop table t /* \' */"),
+            [(0, Risk::Drop)]
+        );
+        // Every connection type asks: with no safeguards at all.
+        assert_eq!(
+            standard_risks("dremio", r"select 'a\'"),
+            [(0, Risk::OtherReading)]
+        );
+    }
+
+    /// A `:name` value is written in before the guard reads the text: one that ends in a
+    /// backslash asks too.
+    #[test]
+    fn a_value_that_ends_in_a_backslash_asks() {
+        let dialect = spelaion_dialect::for_engine("flightsql").unwrap();
+        let values =
+            std::collections::HashMap::from([("dir".to_string(), r"C:\data\".to_string())]);
+        let bound = crate::bind_params(
+            dialect.as_ref(),
+            "select * from files where dir = :dir",
+            &values,
+        )
+        .unwrap();
+        assert!(bound.contains(r"\'"), "{bound}");
+        assert_eq!(
+            standard_risks("flightsql", &bound),
+            [(0, Risk::OtherReading)]
+        );
+    }
+
+    /// No engine with a dialect of its own is asked anything new.
+    #[test]
+    fn an_engine_with_a_dialect_is_asked_nothing_new() {
+        let texts = [
+            r"SELECT 'a\'b'; DROP TABLE t; SELECT 'c\'d'",
+            r"select 'C:\data\'",
+            "select $$a; b$$",
+            "select $body$ a $body$",
+            r#"select "a\"b""#,
+        ];
+        let mut tried = 0;
+        for engine in spelaion_config::Engine::ALL {
+            let Some(dialect) = spelaion_dialect::for_engine(engine.as_str()) else {
+                continue;
+            };
+            if dialect.standard_reading() {
+                assert!(
+                    STANDARD.contains(&engine.as_str()) || engine.as_str() == "external",
+                    "{engine:?}"
+                );
+                continue;
+            }
+            tried += 1;
+            for text in texts {
+                for production in [false, true] {
+                    let safeguards = Safeguards {
+                        confirm_data_changes: production,
+                        ..Safeguards::default()
+                    };
+                    assert!(
+                        script_risks(dialect.as_ref(), text, &safeguards)
+                            .iter()
+                            .all(|risky| risky.risk != Risk::OtherReading),
+                        "{engine:?}: {text:?}"
+                    );
+                }
+            }
+        }
+        assert!(tried >= 20, "{tried}");
     }
 }

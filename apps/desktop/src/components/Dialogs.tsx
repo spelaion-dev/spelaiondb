@@ -367,6 +367,9 @@ function RiskDialog() {
   useEffect(() => cancel.current?.focus(), []);
   // Only because the connection's type asks before every run (ADR-029): nothing risky as such.
   const onlyExecution = request?.statements.every((s) => s.risk === "execution") ?? true;
+  // The engine is read as standard SQL, and its server may read these statements otherwise
+  // (ADR-079, point 6): the explanation says so instead of "can lose or change data".
+  const onlyOtherReading = request?.statements.every((s) => s.risk === "otherReading") ?? false;
   // The personal pause before "Run anyway" (Settings → Scripts): read once, when it opens. It
   // only delays the button; the core decided that this run must be confirmed (guard.rs).
   const [wait, setWait] = useState(() => (onlyExecution ? 0 : usePreferences.getState().script.confirmDelaySeconds));
@@ -379,7 +382,11 @@ function RiskDialog() {
   const hidden = request.statements.length - SHOWN_STATEMENTS;
   return (
     <Modal title={t("risk.title")} onCancel={() => request.resolve(false)}>
-      <p>{t(onlyExecution ? "risk.executionExplanation" : "risk.explanation", { connection: request.connection })}</p>
+      <p>
+        {t(onlyExecution ? "risk.executionExplanation" : onlyOtherReading ? "risk.otherReadingExplanation" : "risk.explanation", {
+          connection: request.connection,
+        })}
+      </p>
       <ul className="risk-list">
         {request.statements.slice(0, SHOWN_STATEMENTS).map((s, i) => (
           <li key={i}>

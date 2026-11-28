@@ -6947,7 +6947,12 @@ export type RevealedCellItem_Serialize = {
 };
 
 /**  Why a statement asks for confirmation before running (see `spelaion_core::Risk`). */
-export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "dataChange" | "execution";
+export type RiskKind = "deleteAll" | "updateAll" | "drop" | "truncate" | "uncheckedWrite" | "dataChange" | "execution" | 
+/**
+ *  The engine is read as standard SQL and the statement holds text its server may read
+ *  otherwise (ADR-079, point 6).
+ */
+"otherReading";
 
 /**  A statement of a script that needs confirmation; `start`/`end` in UTF-8 bytes. */
 export type RiskyItem = {
