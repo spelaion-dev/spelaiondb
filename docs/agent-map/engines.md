@@ -157,9 +157,11 @@
   that barrier. ADR-080 bases the barrier on a user the database keeps read-only;
   `testing/docker` has one (`spelaion_ro`), and `tests/oracle.rs` keeps what it refuses and the
   write a link to a writable user still lets through (ADR-080's note of 2026-11-28, which
-  contradicts its point 8). ADR-092 (Proposed) answers it: a database with no link at all
-  (`SYS.DBA_DB_LINKS`), no `SET TRANSACTION READ ONLY` on Oracle, and reads that end by the
-  driver's transaction state; nothing is built on ADR-080 until ADR-092 is decided. Its tests:
+  contradicts its point 8). ADR-092 supersedes ADR-080's points 3, 6, 7, 8 and 9: the barrier
+  also needs a database with no link at all (`SYS.DBA_DB_LINKS`, read under a DBA's grant, at
+  open and before each agent read), Oracle gets no `SET TRANSACTION READ ONLY`, and a read ends
+  by the driver's transaction state, never by a `ROLLBACK`; nothing is on until its get-around
+  tests pass. Its tests:
   `tests/oracle.rs` with
   `SPELAION_TEST_ORACLE=127.0.0.1:11521` (and `SPELAION_TEST_SSH` for TLS through the two
   bastions); `SPELAION_DEV_PLUGIN_ORACLE` in a development build.

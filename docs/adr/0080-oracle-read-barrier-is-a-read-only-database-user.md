@@ -1,7 +1,8 @@
 # ADR-080: Oracle's read barrier is a read-only database user: read-only connections and agents' reads only where the database itself keeps the session's user read-only
 
-- **Status:** Accepted (not implemented). The note of 2026-11-28 contradicts point 8: read
-  this decision again before anything is built on it.
+- **Status:** Accepted (not implemented); points 3, 6, 7, 8 and 9 and the work items are
+  superseded by ADR-092 (2026-11-28), after this ADR's note of 2026-11-28 contradicted point
+  8. Points 1, 2, 4 and 5 stand.
 - **Date:** 2026-11-24
 - **Builds on:** ADR-008 (the layers: classifier, the engine's own barrier, limits), ADR-020
   (each engine's barrier, and servers checked when a session opens), ADR-053 (read-only
