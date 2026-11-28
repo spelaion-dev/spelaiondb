@@ -1332,3 +1332,119 @@ async fn oracle_through_two_bastions_with_tls_verified_by_name() {
     assert!(schemas.iter().any(|s| s.name == "SPELAION"));
     open.close().await;
 }
+
+/// One of the channels the decision on Oracle's read barrier left open (SDB-476): Java. A
+/// writable user's Java stored function that opens a new JDBC connection back into this
+/// database, as that user, writes under the read-only user: the new session is not read-only.
+/// It needs only that Java's policy lets the function's owner open the socket
+/// (`java.net.SocketPermission`, granted by a DBA, which `DBA_JAVA_POLICY` shows); network
+/// access control entries play no part. Without that grant Java's policy refuses the call.
+/// Oracle's default policy grants every socket to the roles `JAVAUSERPRIV`, `JAVASYSPRIV`,
+/// `EJBCLIENT` and `JMXSERVER`, so a user given one of them can do the same.
+///
+/// The other two channels cannot run in `testing/docker`'s lite image, so they are not tested
+/// here: `UTL_HTTP` and `UTL_TCP` fail every network access check (ORA-29332, because
+/// `SYS.DBMS_NETWORK_ACL_ADMIN` is missing from the root), and external procedures cannot start
+/// their agent (ORA-28575, because `libagtsh.so` and `$ORACLE_HOME/hs` are missing).
+#[tokio::test]
+async fn a_writable_users_java_writes_under_the_read_only_user_once_it_may_open_a_socket() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-java", &host, port);
+    let owner = ws.open("ora").await;
+    let dba = ws.open_with("dba", DBA_PASSWORD).await;
+    let id = std::process::id();
+    let table = format!("spelaion_ro_java_{id}");
+    let class = format!("SpelaionRoJava{id}");
+    let function = format!("spelaion_ro_java_write_{id}");
+    // The socket permissions granted to `spelaion`, removed before and after the test.
+    let forget_permissions = "begin\n  for p in (select seq from dba_java_policy where grantee = 'SPELAION') loop\n    \
+         dbms_java.disable_permission(p.seq);\n    dbms_java.delete_permission(p.seq);\n  end loop;\nend;\n/";
+    let socket_grants = "select count(*) from dba_java_policy where grantee = 'SPELAION' \
+         and type_name = 'java.net.SocketPermission' and kind = 'GRANT' and enabled = 'ENABLED'";
+    script(&dba, forget_permissions).await;
+    script(
+        &owner,
+        &format!(
+            "begin execute immediate 'drop table {table} purge'; exception when others then null; end;\n/\n\
+             create table {table} (note varchar2(60));\n\
+             begin\n  execute immediate q'[create or replace and compile java source named \"{class}\" as\n\
+             import java.sql.*;\n\
+             public class {class} {{\n\
+             \x20 public static int write(String note) throws Exception {{\n\
+             \x20   Connection c = DriverManager.getConnection(\"jdbc:oracle:thin:@//localhost:1521/FREEPDB1\", \"spelaion\", \"spelaion\");\n\
+             \x20   try {{\n\
+             \x20     c.setAutoCommit(false);\n\
+             \x20     PreparedStatement s = c.prepareStatement(\"insert into spelaion.{table} values (?)\");\n\
+             \x20     s.setString(1, note);\n\
+             \x20     s.executeUpdate();\n\
+             \x20     c.commit();\n\
+             \x20     return 1;\n\
+             \x20   }} finally {{\n\
+             \x20     c.close();\n\
+             \x20   }}\n\
+             \x20 }}\n\
+             }}]';\nend;\n/\n\
+             create or replace function {function}(note varchar2) return number\n\
+             as language java name '{class}.write(java.lang.String) return int';\n/\n\
+             grant execute on {function} to {READ_ONLY_USER}"
+        ),
+    )
+    .await;
+    let call = |note: &str| format!("select spelaion.{function}('{note}') from dual");
+    let written = |note: &str| format!("select count(*) from {table} where note = '{note}'");
+
+    // Without the permission, Java's policy refuses the socket.
+    assert_eq!(value(&dba, socket_grants).await, "0");
+    let ro = ws.open("ro").await;
+    let refused_socket = failure(&ro, &call("no permission")).await;
+    assert!(
+        refused_socket
+            .as_deref()
+            .is_some_and(|e| e.contains("java.net.SocketPermission")),
+        "{refused_socket:?}"
+    );
+    ro.close().await;
+
+    // With it, the read-only session's call writes through a session of its own.
+    script(
+        &dba,
+        "begin\n  dbms_java.grant_permission('SPELAION', 'SYS:java.net.SocketPermission', \
+         'localhost:1521', 'connect,resolve');\nend;\n/",
+    )
+    .await;
+    assert_eq!(value(&dba, socket_grants).await, "1");
+    let ro = ws.open("ro").await;
+    assert_eq!(
+        value(&ro, "select read_only from sys.user_users").await,
+        "YES"
+    );
+    assert_eq!(value(&ro, &call("read-only")).await, "1");
+    ro.close().await;
+    assert_eq!(value(&owner, &written("read-only")).await, "1");
+    assert_eq!(value(&owner, &written("no permission")).await, "0");
+
+    // Oracle's default policy: any socket for these roles.
+    assert_eq!(
+        value(
+            &dba,
+            "select count(distinct grantee) from dba_java_policy \
+             where type_name = 'java.net.SocketPermission' and kind = 'GRANT' \
+             and enabled = 'ENABLED' and name = '*' \
+             and grantee in ('JAVAUSERPRIV', 'JAVASYSPRIV', 'EJBCLIENT', 'JMXSERVER')"
+        )
+        .await,
+        "4"
+    );
+
+    script(&dba, forget_permissions).await;
+    script(
+        &owner,
+        &format!(
+            "drop function {function};\ndrop java source \"{class}\";\ndrop table {table} purge"
+        ),
+    )
+    .await;
+    owner.close().await;
+    dba.close().await;
+}

@@ -36,7 +36,11 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
   may read `spelaion.spelaion_ro_reads` (one row); tests grant it more on their own objects.
   `oracle/startup/02-spelaion-ro.sql` makes it, and sets it read-only again, on every start.
   The tests that need an administrator (to change a user, make a public database link or read
-  `v$session`) connect as `system` with `ORACLE_PWD`. Its TCPS is a TLS proxy in front of it (the lite image has no `orapki`), on
+  `v$session`, or grant a Java permission) connect as `system` with `ORACLE_PWD`. The lite image
+  runs Java stored procedures, but not `UTL_HTTP` or `UTL_TCP` (every network access check fails
+  with ORA-29332: `SYS.DBMS_NETWORK_ACL_ADMIN` is missing from the root), nor external procedures
+  (ORA-28575: no `libagtsh.so`, no `$ORACLE_HOME/hs`), nor XDB's HTTP gateway
+  (`DBMS_XDB_CONFIG`'s body is invalid). Its TCPS is a TLS proxy in front of it (the lite image has no `orapki`), on
   `127.0.0.1:12484` and `oracle-tls:2484`, with a certificate for `localhost` and
   `oracle-tls` signed by `keys/ca.crt` (`gen-keys.sh`).
 - Apache Hive 4.0.1's HiveServer2 (with its embedded metastore; about 3 GB, half a minute to
