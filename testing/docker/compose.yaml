@@ -378,6 +378,33 @@ services:
       - ./keys/oracle.pem:/usr/local/etc/haproxy/server.pem:ro
     networks: [data, direct]
 
+  # Oracle Database Free's full image (the same 23.26.3 release), only for the channel tests
+  # that the lite image cannot run (ADR-092's note of 2026-11-28: UTL_HTTP, UTL_TCP and external
+  # procedures). Profile `oracle-full`: a plain `up` never starts it, and CI never runs it.
+  # Published on 127.0.0.1:11522 (`SPELAION_TEST_ORACLE_FULL`); the same `oracle/startup`
+  # scripts make `spelaion` and `spelaion_ro`. Its prebuilt database has a 1.5 GiB SGA and a
+  # 512 MiB PGA target, and Oracle Free caps the database's memory at 2 GiB; the container limit
+  # leaves room for native work on top of that.
+  oracle-full:
+    profiles: [oracle-full]
+    mem_limit: 3g
+    image: container-registry.oracle.com/database/free@sha256:f5a1791bf5628fd1a97e07584ff5ac5537da5021c23e70f5083f48c8fcd6476e
+    environment:
+      ORACLE_PWD: spelaion-test-Pw1
+      ENABLE_ARCHIVELOG: "false"
+      ENABLE_FORCE_LOGGING: "false"
+    ports:
+      - "127.0.0.1:11522:1521"
+    volumes:
+      - ./oracle/startup:/opt/oracle/scripts/startup:ro
+    healthcheck:
+      test: ["CMD", "/opt/oracle/checkDBStatus.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 120s
+    networks: [data, direct]
+
   # libSQL's server (sqld 0.24.33), served only by its plugin (ADR-058): Hrana over HTTP,
   # published on 127.0.0.1:18095 without authentication; through the tunnels and the proxies it
   # is libsql:8080. Tokens and TLS are tested in its plugin's repository.

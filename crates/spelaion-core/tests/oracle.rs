@@ -1448,3 +1448,98 @@ async fn a_writable_users_java_writes_under_the_read_only_user_once_it_may_open_
     owner.close().await;
     dba.close().await;
 }
+
+/// The Java answer of ADR-092's note of 2026-11-28: how many Java objects (every `JAVA%`
+/// object type) belong to an owner that is not one of Oracle's own (`ORACLE_MAINTAINED = 'Y'`),
+/// asked by full `SYS` names. An owner missing from `DBA_USERS` counts as not Oracle's.
+const JAVA_OUTSIDE_ORACLE: &str = "select count(*) from sys.dba_objects o \
+     where o.object_type like 'JAVA%' and not exists (select 1 from sys.dba_users u \
+     where u.username = o.owner and u.oracle_maintained = 'Y')";
+
+/// ADR-092's note of 2026-11-28: read-only mode and agents on Oracle are refused while any Java
+/// object exists outside Oracle's own schemas. A read-only user that a DBA lets read the
+/// dictionary (here with `SELECT_CATALOG_ROLE`) asks it: none in `testing/docker`'s clean
+/// database, Oracle's own tens of thousands of classes included; the writable user's Java
+/// source, its class and the function over it, once that user loads them; none again once they
+/// are dropped.
+#[tokio::test]
+async fn the_java_answer_finds_a_users_java_and_none_on_a_clean_database() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-java-answer", &host, port);
+    let owner = ws.open("ora").await;
+    let dba = ws.open_with("dba", DBA_PASSWORD).await;
+    let id = std::process::id();
+    let class = format!("SpelaionRoJavaAnswer{id}");
+    let function = format!("spelaion_ro_java_answer_{id}");
+    let checker = format!("spelaion_ro_java_checker_{id}");
+    script(
+        &dba,
+        &format!(
+            "begin execute immediate 'drop user {checker} cascade'; exception when others then null; end;\n/\n\
+             create user {checker} identified by spelaion;\n\
+             grant create session, select_catalog_role to {checker};\n\
+             alter user {checker} read only"
+        ),
+    )
+    .await;
+    ws.write(
+        ".spelaion/connections/checker.toml",
+        &connection_as(&host, port, &checker, ""),
+    );
+    let mine = format!("{JAVA_OUTSIDE_ORACLE} and o.owner = 'SPELAION'");
+
+    let check = ws.open("checker").await;
+    assert_eq!(
+        value(&check, "select read_only from sys.user_users").await,
+        "YES"
+    );
+    assert_eq!(value(&check, JAVA_OUTSIDE_ORACLE).await, "0");
+    assert_ne!(
+        value(
+            &check,
+            "select count(*) from sys.dba_objects where object_type like 'JAVA%'"
+        )
+        .await,
+        "0"
+    );
+
+    script(
+        &owner,
+        &format!(
+            "begin\n  execute immediate q'[create or replace and compile java source named \"{class}\" as\n\
+             public class {class} {{\n\
+             \x20 public static int one() {{\n\
+             \x20   return 1;\n\
+             \x20 }}\n\
+             }}]';\nend;\n/\n\
+             create or replace function {function} return number\n\
+             as language java name '{class}.one() return int';\n/"
+        ),
+    )
+    .await;
+    assert_eq!(
+        value(&owner, &format!("select {function}() from dual")).await,
+        "1"
+    );
+    // The source and its class are Java objects; the PL/SQL function over them is not.
+    assert_eq!(value(&check, &mine).await, "2");
+    assert_eq!(value(&check, JAVA_OUTSIDE_ORACLE).await, "2");
+
+    script(
+        &owner,
+        &format!("drop function {function};\ndrop java source \"{class}\""),
+    )
+    .await;
+    assert_eq!(value(&check, JAVA_OUTSIDE_ORACLE).await, "0");
+    check.close().await;
+    owner.close().await;
+    eventually(
+        &dba,
+        &format!("select count(*) from v$session where username = upper('{checker}')"),
+        "0",
+    )
+    .await;
+    script(&dba, &format!("drop user {checker} cascade")).await;
+    dba.close().await;
+}
