@@ -154,7 +154,11 @@
   stop it (`DISABLE COMMIT IN PROCEDURE`, `READ_ONLY = TRUE`) with an `ALTER SESSION` of its
   own (the 2026-11-23 note; `tests/oracle.rs` keeps that evidence). Do not turn the barrier on
   with a session setting; no exports, column statistics or data search either, which need
-  that barrier. Its tests: `tests/oracle.rs` with
+  that barrier. ADR-080 bases the barrier on a user the database keeps read-only;
+  `testing/docker` has one (`spelaion_ro`), and `tests/oracle.rs` keeps what it refuses and the
+  write a link to a writable user still lets through (ADR-080's note of 2026-11-28, which
+  contradicts its point 8: nothing is built on ADR-080 until it is read again). Its tests:
+  `tests/oracle.rs` with
   `SPELAION_TEST_ORACLE=127.0.0.1:11521` (and `SPELAION_TEST_SSH` for TLS through the two
   bastions); `SPELAION_DEV_PLUGIN_ORACLE` in a development build.
 - **libSQL only exists as a plugin** (ADR-058): `spelaion-dev/spelaiondb-plugin-libsql` (Hrana

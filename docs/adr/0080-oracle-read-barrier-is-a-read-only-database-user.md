@@ -1,6 +1,7 @@
 # ADR-080: Oracle's read barrier is a read-only database user: read-only connections and agents' reads only where the database itself keeps the session's user read-only
 
-- **Status:** Accepted (not implemented)
+- **Status:** Accepted (not implemented). The note of 2026-11-28 contradicts point 8: read
+  this decision again before anything is built on it.
 - **Date:** 2026-11-24
 - **Builds on:** ADR-008 (the layers: classifier, the engine's own barrier, limits), ADR-020
   (each engine's barrier, and servers checked when a session opens), ADR-053 (read-only
@@ -174,6 +175,80 @@ decision: the evidence is SDB-339's.
    check (ADR-032).
 5. **Exports, column statistics, the data search and the session toggle on Oracle** (S,
    after item 2): each asks the session, with a test that a writable user is still refused.
+
+## Notes
+
+**2026-11-28: the experiment of item 1 (SDB-474), and a write that contradicts point 8.**
+`testing/docker` now has a read-only user: `spelaion_ro`, a local user of FREEPDB1 that
+`oracle/startup/02-spelaion-ro.sql` creates and sets `READ ONLY` on every start. Everything
+below was run against Oracle Free 23.26.3 and is kept as a test in `tests/oracle.rs`; nothing
+was turned on (`has_read_barrier`, the configuration's refusal and `agent_view` are unchanged).
+
+- **The ways around a session setting are refused**
+  (`the_read_only_user_refuses_every_way_around_that_writes`). Under the read-only user each of
+  these fails with ORA-28194 and writes nothing: a direct `INSERT`; a function that writes in
+  an autonomous transaction with the session's own rights, and one with the rights of the
+  writable user that owns it; functions that first undo `DISABLE COMMIT IN PROCEDURE` and
+  `READ_ONLY = TRUE`; a write through a database link, directly and from such a function; and
+  a scheduler job created from the query. The job is created all the same, runs, and its own
+  write fails with ORA-28194: the scheduler's records of the job are the only thing left. The
+  same functions write under the writable user.
+
+The five answers:
+
+1. **The dictionary's answer is `SYS.USER_USERS.READ_ONLY`** (`YES` or `NO`), which every user
+   may read (`the_dictionary_says_whether_the_sessions_user_is_read_only`). `DBA_USERS` and
+   `CDB_USERS` have the same column, for a DBA. It must be asked by its full name: a view
+   called `USER_USERS` in the user's own schema answers for the short name, and the test makes
+   one that says `YES` for a writable user. On a release before 23ai the column does not exist
+   and the question fails with ORA-00904. That last part is inferred, not run:
+   `testing/docker` has no older release, so the test shows ORA-00904 for a column 23.26 lacks.
+   Only 23.26 was tried, not the oldest 23ai release.
+2. **The write the check tries is `ROLLBACK`, right after the session connects**
+   (`rollback_is_the_write_a_read_only_session_refuses_and_a_writable_one_ignores`). A
+   read-only session refuses it with ORA-28194, and is left with no transaction and no lock. A
+   writable session that has just connected has nothing to roll back: it changes nothing, opens
+   no transaction and holds no `TX` or `TM` lock (`v$lock`). `COMMIT` and `SAVEPOINT` are
+   refused too. They were not chosen: `COMMIT` would keep anything already open, and a
+   `SAVEPOINT` opens a transaction with a `TX` lock on a writable session. So does
+   `SELECT … FOR UPDATE`, even when it selects no row (`TX` and `TM`). DML that touches no row
+   does the same (seen by hand). "Changes nothing" holds only while no transaction is open, so
+   the check must run before anything that could open one, the session setup (ADR-037)
+   included.
+3. **A read-only session refuses every `ROLLBACK` and `COMMIT`, not only after a refused
+   statement** (`a_refused_rollback_ends_nothing_and_closing_the_session_does`). A statement
+   it refuses leaves no transaction (`DBMS_TRANSACTION.LOCAL_TRANSACTION_ID` is null and the
+   driver reports idle), so there is nothing to end. A read through a database link does open
+   a transaction, which neither `ROLLBACK` nor `COMMIT` can end. The driver reports it open,
+   the session still reads, and closing the session ends it. For point 7 this means the
+   `ROLLBACK` that ends every agent's read is always refused, so as written, point 7 closes the
+   session after every read. The cheaper ending that "What would make us revisit" asks for is
+   there to be weighed: a session with no open transaction has nothing to end. That is for the
+   reading again below, not decided here.
+4. **A session keeps what its user was when it connected, and the dictionary says what the
+   user is now** (`a_session_keeps_what_its_user_was_when_it_connected`). A session that
+   connected before `ALTER USER … READ ONLY` reads `YES`, its `ROLLBACK` goes through, and it
+   writes and commits. One that connected before `ALTER USER … READ WRITE` reads `NO` and still
+   refuses. Each fails one of the two answers, so point 3 needs both, as it says.
+5. **A link to a writable user lets a read-only session write in this same database**
+   (`a_link_to_a_writable_user_lets_a_remote_function_write`). Writing to a table through the
+   link is refused (ORA-28194), whether the statement names the link or a view or a synonym
+   hides it, and reading through it works. But calling a function of the writable user through
+   the link runs it in the link's session, which is not read-only. A function with an
+   autonomous transaction commits its write there. That happened when it was called directly,
+   from a view the read-only user may read, and through a synonym; in the last two the
+   statement names no link. The link was a public one, made by a DBA, back into the same
+   pluggable database as the writable `spelaion`. A writable user's view over its own private
+   link was not tried, and neither was a remote function without an autonomous transaction.
+
+**Answer 5 contradicts point 8**, which says a read-only user cannot change the database the
+session is connected to. It also meets "What would make us revisit": in this test both of point
+3's answers say read-only (`YES` and a refused `ROLLBACK`) and a write goes through. Card
+SDB-474 records it, and nothing more is built on this decision (items 2 to 5) until it is read
+again. Questions for that reading, not decided here: whether the check must also find that
+the session can reach no database link, and how, since a view or a synonym another user owns
+hides the link from the session's `ALL_DB_LINKS`; whether a DBA's promise that no link reaches
+a writable user can count as part of the barrier; and how point 7's ending changes after answer 3.
 
 ## Sources (checked 2026-11-24)
 - ADR-059's notes of 2026-11-15 and 2026-11-23, `crates/spelaion-core/tests/oracle.rs` and pull

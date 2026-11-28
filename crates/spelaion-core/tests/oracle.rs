@@ -1,7 +1,8 @@
 //! Oracle Database, served only by its plugin on Oracle's thin driver (ADR-059), through the
 //! core: scripts split as SQL*Plus reads them (PL/SQL blocks and `/`), the transaction read from
-//! the driver, what Oracle does not offer yet (read-only connections and agents), and a
-//! connection through the two SSH bastions with TLS checked against the database's name.
+//! the driver, what Oracle does not offer yet (read-only connections and agents), what a user
+//! the database keeps read-only refuses and what it does not (ADR-080), and a connection through
+//! the two SSH bastions with TLS checked against the database's name.
 //!
 //! They need `SPELAION_TEST_ORACLE` (`testing/docker`, 127.0.0.1:11521) and the plugin: the
 //! pinned build (`spelaion-fetch-plugins`) or one built on this machine
@@ -54,6 +55,10 @@ impl Workspace {
     }
 
     async fn open(&self, id: &str) -> OpenConnection {
+        self.open_with(id, "spelaion").await
+    }
+
+    async fn open_with(&self, id: &str, password: &str) -> OpenConnection {
         let config = self.config();
         assert!(config.problems.is_empty(), "{:?}", config.problems);
         let mut trust = TrustStore::load(&self.base.join("user")).unwrap();
@@ -75,7 +80,7 @@ impl Workspace {
                     app_file: self.base.join("user/known_hosts"),
                 },
                 interaction: Arc::new(AcceptHosts),
-                password: Some(Secret::new("spelaion")),
+                password: Some(Secret::new(password)),
                 read_only_session: false,
             },
             Arc::new(ResultStore::new()),
@@ -112,8 +117,12 @@ fn keys() -> PathBuf {
 }
 
 fn connection(host: &str, port: u16, extra: &str) -> String {
+    connection_as(host, port, "spelaion", extra)
+}
+
+fn connection_as(host: &str, port: u16, user: &str, extra: &str) -> String {
     format!(
-        "schema_version = 1\nengine = \"oracle\"\nhost = \"{host}\"\nport = {port}\ndatabase = \"FREEPDB1\"\nuser = \"spelaion\"\npassword = {{ secret = \"prompt\" }}\n{extra}"
+        "schema_version = 1\nengine = \"oracle\"\nhost = \"{host}\"\nport = {port}\ndatabase = \"FREEPDB1\"\nuser = \"{user}\"\npassword = {{ secret = \"prompt\" }}\n{extra}"
     )
 }
 
@@ -378,6 +387,635 @@ async fn no_session_setting_stops_a_function_that_undoes_it() {
     )
     .await;
     owner.close().await;
+}
+
+// ADR-080: Oracle's read barrier is a database user the database itself keeps read-only.
+// `testing/docker` makes one (`oracle/startup/02-spelaion-ro.sql`); the tests below are the
+// ways around a session setting that SDB-339 tried by hand, run under that user, and the
+// experiment that settles how a session proves it is read-only (ADR-080's note of 2026-11-28).
+// Nothing here turns a barrier on: `oracle_has_no_read_only_mode_nor_agents_yet` still holds.
+
+/// `testing/docker`'s read-only user, password `spelaion`, with SELECT on `spelaion_ro_reads`.
+const READ_ONLY_USER: &str = "spelaion_ro";
+/// `testing/docker`'s administrator (`system`, `ORACLE_PWD`), for what only a DBA does.
+const DBA_PASSWORD: &str = "spelaion-test-Pw1";
+
+/// A workspace with three connections to FREEPDB1: `ora` (the writable `spelaion`), `ro` (the
+/// read-only user) and `dba` (`system`, opened with `DBA_PASSWORD`).
+fn accounts(label: &str, host: &str, port: u16) -> Workspace {
+    let ws = Workspace::new(label);
+    ws.write(
+        ".spelaion/connections/ora.toml",
+        &connection(host, port, ""),
+    );
+    ws.write(
+        ".spelaion/connections/ro.toml",
+        &connection_as(host, port, READ_ONLY_USER, ""),
+    );
+    ws.write(
+        ".spelaion/connections/dba.toml",
+        &connection_as(host, port, "system", ""),
+    );
+    ws
+}
+
+/// The first statement of `sql` fails with ORA-28194, the read-only user's refusal.
+async fn refused(open: &OpenConnection, sql: &str) {
+    let error = failure(open, sql).await;
+    assert!(
+        error.as_deref().is_some_and(|e| e.contains("ORA-28194")),
+        "{sql}\n→ {error:?}"
+    );
+}
+
+/// Whether the session has a transaction, by the database's own answer.
+async fn in_transaction(open: &OpenConnection) -> bool {
+    value(
+        open,
+        "select case when dbms_transaction.local_transaction_id is null then 'no' else 'yes' end from dual",
+    )
+    .await
+        == "yes"
+}
+
+/// The session's id on the server, for what the administrator asks about it.
+async fn sid(open: &OpenConnection) -> String {
+    value(open, "select sys_context('userenv', 'sid') from dual").await
+}
+
+/// How many transaction and table locks the server holds for session `sid`.
+async fn locks(dba: &OpenConnection, sid: &str) -> String {
+    value(
+        dba,
+        &format!("select count(*) from v$lock where sid = {sid} and type in ('TX', 'TM')"),
+    )
+    .await
+}
+
+/// Waits, up to a minute, until the first cell of `sql` reads `expected`.
+async fn eventually(open: &OpenConnection, sql: &str, expected: &str) {
+    let mut last = String::new();
+    for _ in 0..120 {
+        last = value(open, sql).await;
+        if last == expected {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    panic!("{sql}\n→ {last}, not {expected}");
+}
+
+/// A function that writes `note` into `table` in an autonomous transaction and commits it,
+/// called from a `SELECT`; `body` runs before the write.
+fn writer(name: &str, header: &str, body: &str, write: &str) -> String {
+    format!(
+        "create or replace function {name} return number {header} is\n  pragma autonomous_transaction;\n\
+         begin\n  {body}\n  {write}\n  commit;\n  return 1;\nend;\n/\n"
+    )
+}
+
+/// ADR-080's barrier holds against what got around every session setting (SDB-339; ADR-059's
+/// note of 2026-11-23). Under the read-only user each of these fails with ORA-28194 and writes
+/// nothing: a write in an autonomous transaction with the session's own rights, the same with
+/// the rights of the writable user that owns the function, functions that first undo
+/// `DISABLE COMMIT IN PROCEDURE` and `READ_ONLY = TRUE`, a write through a database link,
+/// directly and from such a function, and a scheduler job created from the query (it is
+/// created, runs and fails with the same error). The same functions write under their owner.
+#[tokio::test]
+async fn the_read_only_user_refuses_every_way_around_that_writes() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-get-around", &host, port);
+    let owner = ws.open("ora").await;
+    let dba = ws.open_with("dba", DBA_PASSWORD).await;
+    let id = std::process::id();
+    let table = format!("spelaion_ro_written_{id}");
+    let link = format!("spelaion_ro_link_{id}");
+    let job = format!("SPELAION_RO_JOB_{id}");
+    let own_rights = format!("spelaion_ro_own_rights_{id}");
+    let definer = format!("spelaion_ro_definer_{id}");
+    let undo_commit = format!("spelaion_ro_undo_commit_{id}");
+    let undo_read_only = format!("spelaion_ro_undo_read_only_{id}");
+    let through_link = format!("spelaion_ro_through_link_{id}");
+    let scheduler = format!("spelaion_ro_job_{id}");
+    let insert = |note: &str| format!("insert into spelaion.{table} values ('{note}');");
+    script(
+        &dba,
+        &format!(
+            "begin execute immediate 'drop public database link {link}'; exception when others then null; end;\n/\n\
+             create public database link {link} connect to spelaion identified by spelaion using '//localhost:1521/FREEPDB1'"
+        ),
+    )
+    .await;
+    script(
+        &owner,
+        &format!(
+            "begin execute immediate 'drop table {table} purge'; exception when others then null; end;\n/\n\
+             create table {table} (note varchar2(60));\n\
+             grant select, insert, update, delete on {table} to {READ_ONLY_USER};\n\
+             {}{}{}{}{}\
+             create or replace function {scheduler}(job_name varchar2) return number is\n  pragma autonomous_transaction;\n\
+             begin\n  dbms_scheduler.create_job(job_name => job_name, job_type => 'PLSQL_BLOCK', \
+             job_action => q'[begin {} commit; end;]', enabled => true);\n  commit;\n  return 1;\nend;\n/\n\
+             grant execute on {own_rights} to {READ_ONLY_USER};\n\
+             grant execute on {definer} to {READ_ONLY_USER};\n\
+             grant execute on {undo_commit} to {READ_ONLY_USER};\n\
+             grant execute on {undo_read_only} to {READ_ONLY_USER};\n\
+             grant execute on {through_link} to {READ_ONLY_USER};\n\
+             grant execute on {scheduler} to {READ_ONLY_USER}",
+            writer(&own_rights, "authid current_user", "null;", &insert(&own_rights)),
+            writer(&definer, "", "null;", &insert(&definer)),
+            writer(
+                &undo_commit,
+                "",
+                "execute immediate 'alter session enable commit in procedure';",
+                &insert(&undo_commit)
+            ),
+            writer(
+                &undo_read_only,
+                "",
+                "execute immediate 'alter session set read_only = false';",
+                &insert(&undo_read_only)
+            ),
+            writer(
+                &through_link,
+                "",
+                "null;",
+                &format!("insert into spelaion.{table}@{link} values ('{through_link}');")
+            ),
+            insert(&scheduler),
+        ),
+    )
+    .await;
+    let written = |note: &str| format!("select count(*) from {table} where note = '{note}'");
+    let functions = [
+        &own_rights,
+        &definer,
+        &undo_commit,
+        &undo_read_only,
+        &through_link,
+    ];
+
+    // Each attempt in a session of its own, after `setting` (a link leaves a transaction open,
+    // and a session setting cannot change while one is).
+    let attempt = async |setting: &str, sql: &str| {
+        let ro = ws.open("ro").await;
+        if !setting.is_empty() {
+            script(&ro, setting).await;
+        }
+        refused(&ro, sql).await;
+        ro.close().await;
+    };
+    attempt(
+        "",
+        &format!("insert into spelaion.{table} values ('direct')"),
+    )
+    .await;
+    attempt(
+        "",
+        &format!("insert into spelaion.{table}@{link} values ('direct_link')"),
+    )
+    .await;
+    for function in functions {
+        attempt("", &format!("select spelaion.{function}() from dual")).await;
+    }
+    // A restricted session's settings, undone by the function: the user still refuses.
+    attempt(
+        "alter session disable commit in procedure",
+        &format!("select spelaion.{undo_commit}() from dual"),
+    )
+    .await;
+    attempt(
+        "alter session set read_only = true",
+        &format!("select spelaion.{undo_read_only}() from dual"),
+    )
+    .await;
+    attempt(
+        "",
+        &format!("select spelaion.{scheduler}('{job}_RO') from dual"),
+    )
+    .await;
+    // The job was created anyway, and ran: its own write was refused too.
+    eventually(
+        &owner,
+        &format!(
+            "select max(status) from user_scheduler_job_run_details where job_name = '{job}_RO'"
+        ),
+        "FAILED",
+    )
+    .await;
+    assert_eq!(
+        value(&owner, &format!("select count(*) from {table}")).await,
+        "0"
+    );
+
+    // Under the writable user that owns them, the same functions write.
+    for function in functions {
+        assert_eq!(
+            value(&owner, &format!("select {function}() from dual")).await,
+            "1"
+        );
+        assert_eq!(value(&owner, &written(function)).await, "1", "{function}");
+    }
+    assert_eq!(
+        value(&owner, &format!("select {scheduler}('{job}_RW') from dual")).await,
+        "1"
+    );
+    eventually(&owner, &written(&scheduler), "1").await;
+
+    script(
+        &owner,
+        &format!(
+            "drop function {own_rights};\ndrop function {definer};\ndrop function {undo_commit};\n\
+             drop function {undo_read_only};\ndrop function {through_link};\ndrop function {scheduler};\n\
+             drop table {table} purge"
+        ),
+    )
+    .await;
+    owner.close().await;
+    script(&dba, &format!("drop public database link {link}")).await;
+    dba.close().await;
+}
+
+/// ADR-080, point 3, the dictionary's answer: `SYS.USER_USERS.READ_ONLY` says whether the
+/// session's own user is read-only (`YES` / `NO`), and needs no privilege. It is asked by the
+/// view's full name because the user's own schema can answer for the short one. On a release
+/// before 23ai the column does not exist and the question fails with ORA-00904, as it does here
+/// for a column this release lacks: a failed question is a no (point 4).
+#[tokio::test]
+async fn the_dictionary_says_whether_the_sessions_user_is_read_only() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-dictionary", &host, port);
+    let question = "select read_only from sys.user_users";
+    let ro = ws.open("ro").await;
+    assert_eq!(value(&ro, question).await, "YES");
+    assert_eq!(
+        value(
+            &ro,
+            "select note from spelaion.spelaion_ro_reads where id = 1"
+        )
+        .await,
+        "read"
+    );
+    ro.close().await;
+
+    let owner = ws.open("ora").await;
+    assert_eq!(value(&owner, question).await, "NO");
+    script(
+        &owner,
+        "create or replace view user_users as select 'YES' read_only from dual",
+    )
+    .await;
+    assert_eq!(
+        value(&owner, "select read_only from user_users").await,
+        "YES"
+    );
+    assert_eq!(value(&owner, question).await, "NO");
+    script(&owner, "drop view user_users").await;
+    let missing = failure(&owner, "select spelaion_no_such_column from sys.user_users").await;
+    assert!(
+        missing.as_deref().is_some_and(|e| e.contains("ORA-00904")),
+        "{missing:?}"
+    );
+    owner.close().await;
+}
+
+/// ADR-080, point 3, the session's answer: the write the check tries is `ROLLBACK`, right after
+/// connecting. A read-only session refuses it with ORA-28194 (and `COMMIT` and `SAVEPOINT`,
+/// even with no transaction) and is left without one. A writable session that has just
+/// connected has nothing to roll back: it changes nothing, opens no transaction and holds no
+/// lock. The other writes a read-only session refuses do leave a writable one holding locks in
+/// a transaction: a `SAVEPOINT`, and `SELECT … FOR UPDATE` even when it selects no row.
+#[tokio::test]
+async fn rollback_is_the_write_a_read_only_session_refuses_and_a_writable_one_ignores() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-probe", &host, port);
+    let dba = ws.open_with("dba", DBA_PASSWORD).await;
+
+    let ro = ws.open("ro").await;
+    for write in ["rollback", "commit", "savepoint spelaion_probe"] {
+        refused(&ro, write).await;
+        assert!(!in_transaction(&ro).await, "{write}");
+    }
+    let ro_sid = sid(&ro).await;
+    assert_eq!(locks(&dba, &ro_sid).await, "0");
+    assert_eq!(
+        ro.session.connection().transaction_state().await.unwrap(),
+        TransactionState::Idle
+    );
+    ro.close().await;
+
+    let owner = ws.open("ora").await;
+    let owner_sid = sid(&owner).await;
+    script(&owner, "rollback").await;
+    assert!(!in_transaction(&owner).await);
+    assert_eq!(locks(&dba, &owner_sid).await, "0");
+    assert_eq!(
+        owner
+            .session
+            .connection()
+            .transaction_state()
+            .await
+            .unwrap(),
+        TransactionState::Idle
+    );
+    for write in [
+        "savepoint spelaion_probe",
+        "select dummy from sys.dual where 1 = 0 for update",
+    ] {
+        script(&owner, write).await;
+        assert!(in_transaction(&owner).await, "{write}");
+        assert_ne!(locks(&dba, &owner_sid).await, "0", "{write}");
+        script(&owner, "rollback").await;
+    }
+    owner.close().await;
+    dba.close().await;
+}
+
+/// ADR-080, point 7: a statement the read-only user refuses leaves no transaction, and the
+/// `ROLLBACK` after it is refused all the same. A read through a database link does open a
+/// transaction, which neither `ROLLBACK` nor `COMMIT` can end in a read-only session: the
+/// session still reads, and closing it is what ends the transaction.
+#[tokio::test]
+async fn a_refused_rollback_ends_nothing_and_closing_the_session_does() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-rollback", &host, port);
+    let owner = ws.open("ora").await;
+    let dba = ws.open_with("dba", DBA_PASSWORD).await;
+    let id = std::process::id();
+    let table = format!("spelaion_ro_ending_{id}");
+    let link = format!("spelaion_ro_ending_link_{id}");
+    script(
+        &dba,
+        &format!(
+            "begin execute immediate 'drop public database link {link}'; exception when others then null; end;\n/\n\
+             create public database link {link} connect to spelaion identified by spelaion using '//localhost:1521/FREEPDB1'"
+        ),
+    )
+    .await;
+    script(
+        &owner,
+        &format!(
+            "begin execute immediate 'drop table {table} purge'; exception when others then null; end;\n/\n\
+             create table {table} (note varchar2(60));\n\
+             grant select, insert on {table} to {READ_ONLY_USER}"
+        ),
+    )
+    .await;
+
+    let ro = ws.open("ro").await;
+    refused(
+        &ro,
+        &format!("insert into spelaion.{table} values ('refused')"),
+    )
+    .await;
+    assert!(!in_transaction(&ro).await);
+    refused(&ro, "rollback").await;
+    assert!(!in_transaction(&ro).await);
+    assert_eq!(
+        ro.session.connection().transaction_state().await.unwrap(),
+        TransactionState::Idle
+    );
+
+    assert_eq!(
+        value(
+            &ro,
+            &format!("select count(*) from spelaion.{table}@{link}")
+        )
+        .await,
+        "0"
+    );
+    assert!(in_transaction(&ro).await);
+    refused(&ro, "rollback").await;
+    refused(&ro, "commit").await;
+    assert!(in_transaction(&ro).await);
+    assert_eq!(
+        ro.session.connection().transaction_state().await.unwrap(),
+        TransactionState::Open
+    );
+    assert_eq!(
+        value(
+            &ro,
+            "select note from spelaion.spelaion_ro_reads where id = 1"
+        )
+        .await,
+        "read"
+    );
+    let ro_sid = sid(&ro).await;
+    let serial = value(
+        &dba,
+        &format!("select serial# from v$session where sid = {ro_sid}"),
+    )
+    .await;
+    ro.close().await;
+    eventually(
+        &dba,
+        &format!("select count(*) from v$session where sid = {ro_sid} and serial# = {serial}"),
+        "0",
+    )
+    .await;
+
+    script(&owner, &format!("drop table {table} purge")).await;
+    owner.close().await;
+    script(&dba, &format!("drop public database link {link}")).await;
+    dba.close().await;
+}
+
+/// ADR-080, point 3: a session keeps what its user was when it connected, and the dictionary
+/// says what the user is now. A session that connected before `ALTER USER … READ ONLY` is told
+/// `YES` by the dictionary and still writes, and its `ROLLBACK` goes through; one that
+/// connected before `ALTER USER … READ WRITE` is told `NO` and still refuses. Each fails one of
+/// the two answers, which is why the check needs both.
+#[tokio::test]
+async fn a_session_keeps_what_its_user_was_when_it_connected() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-switch", &host, port);
+    let owner = ws.open("ora").await;
+    let dba = ws.open_with("dba", DBA_PASSWORD).await;
+    let id = std::process::id();
+    let user = format!("spelaion_switch_{id}");
+    let table = format!("spelaion_switch_written_{id}");
+    ws.write(
+        ".spelaion/connections/switch.toml",
+        &connection_as(&host, port, &user, ""),
+    );
+    script(
+        &dba,
+        &format!(
+            "begin execute immediate 'drop user {user} cascade'; exception when others then null; end;\n/\n\
+             create user {user} identified by spelaion;\n\
+             grant create session to {user}"
+        ),
+    )
+    .await;
+    script(
+        &owner,
+        &format!(
+            "begin execute immediate 'drop table {table} purge'; exception when others then null; end;\n/\n\
+             create table {table} (note varchar2(60));\n\
+             grant select, insert on {table} to {user}"
+        ),
+    )
+    .await;
+    let question = "select read_only from sys.user_users";
+
+    let before_read_only = ws.open("switch").await;
+    assert_eq!(value(&before_read_only, question).await, "NO");
+    script(&dba, &format!("alter user {user} read only")).await;
+    assert_eq!(value(&before_read_only, question).await, "YES");
+    script(&before_read_only, "rollback").await;
+    script(
+        &before_read_only,
+        &format!("insert into spelaion.{table} values ('before read only');\ncommit"),
+    )
+    .await;
+    assert_eq!(
+        value(&owner, &format!("select count(*) from {table}")).await,
+        "1"
+    );
+    before_read_only.close().await;
+
+    let before_read_write = ws.open("switch").await;
+    assert_eq!(value(&before_read_write, question).await, "YES");
+    refused(&before_read_write, "rollback").await;
+    script(&dba, &format!("alter user {user} read write")).await;
+    assert_eq!(value(&before_read_write, question).await, "NO");
+    refused(&before_read_write, "rollback").await;
+    refused(
+        &before_read_write,
+        &format!("insert into spelaion.{table} values ('before read write')"),
+    )
+    .await;
+    before_read_write.close().await;
+    assert_eq!(
+        value(&owner, &format!("select count(*) from {table}")).await,
+        "1"
+    );
+
+    script(&owner, &format!("drop table {table} purge")).await;
+    owner.close().await;
+    eventually(
+        &dba,
+        &format!("select count(*) from v$session where username = upper('{user}')"),
+        "0",
+    )
+    .await;
+    script(&dba, &format!("drop user {user} cascade")).await;
+    dba.close().await;
+}
+
+/// ADR-080, point 8, and what contradicts it (the note of 2026-11-28): a database link that
+/// connects as a writable user lets a read-only session write, in this same database. Writing
+/// to a table through the link is refused (ORA-28194), directly and hidden in a view or a
+/// synonym; but calling the writable user's function through the link runs it in the link's
+/// session, which is not read-only, and a function with an autonomous transaction commits its
+/// write there: called directly, hidden in a view the read-only user may read, or behind a
+/// synonym. The statement names no link in the last two. If this test fails, Oracle has started
+/// refusing that call: read the note again.
+#[tokio::test]
+async fn a_link_to_a_writable_user_lets_a_remote_function_write() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-link", &host, port);
+    let owner = ws.open("ora").await;
+    let dba = ws.open_with("dba", DBA_PASSWORD).await;
+    let id = std::process::id();
+    let table = format!("spelaion_ro_remote_{id}");
+    let link = format!("spelaion_ro_remote_link_{id}");
+    let remote = format!("spelaion_ro_remote_write_{id}");
+    let rows_view = format!("spelaion_ro_rows_view_{id}");
+    let rows_synonym = format!("spelaion_ro_rows_syn_{id}");
+    let call_view = format!("spelaion_ro_call_view_{id}");
+    let call_synonym = format!("spelaion_ro_call_syn_{id}");
+    script(
+        &dba,
+        &format!(
+            "begin execute immediate 'drop public database link {link}'; exception when others then null; end;\n/\n\
+             create public database link {link} connect to spelaion identified by spelaion using '//localhost:1521/FREEPDB1'"
+        ),
+    )
+    .await;
+    script(
+        &owner,
+        &format!(
+            "begin execute immediate 'drop table {table} purge'; exception when others then null; end;\n/\n\
+             create table {table} (note varchar2(60));\n\
+             create or replace function {remote}(note varchar2) return number is\n  pragma autonomous_transaction;\n\
+             begin\n  insert into {table} values (note);\n  commit;\n  return 1;\nend;\n/\n\
+             create or replace view {rows_view} as select note from spelaion.{table}@{link};\n\
+             create or replace synonym {rows_synonym} for spelaion.{table}@{link};\n\
+             create or replace view {call_view} as select spelaion.{remote}@{link}('view') written from dual;\n\
+             create or replace synonym {call_synonym} for spelaion.{remote}@{link};\n\
+             grant select, insert on {rows_view} to {READ_ONLY_USER};\n\
+             grant select on {call_view} to {READ_ONLY_USER}"
+        ),
+    )
+    .await;
+    let written = |note: &str| format!("select count(*) from {table} where note = '{note}'");
+
+    let ro = ws.open("ro").await;
+    refused(
+        &ro,
+        &format!("insert into spelaion.{table}@{link} values ('rows direct')"),
+    )
+    .await;
+    refused(
+        &ro,
+        &format!("insert into spelaion.{rows_view} values ('rows view')"),
+    )
+    .await;
+    refused(
+        &ro,
+        &format!("insert into spelaion.{rows_synonym} values ('rows synonym')"),
+    )
+    .await;
+    assert_eq!(
+        value(&ro, &format!("select count(*) from spelaion.{rows_view}")).await,
+        "0"
+    );
+    assert_eq!(
+        value(
+            &ro,
+            &format!("select spelaion.{remote}@{link}('direct') from dual")
+        )
+        .await,
+        "1"
+    );
+    assert_eq!(
+        value(&ro, &format!("select written from spelaion.{call_view}")).await,
+        "1"
+    );
+    assert_eq!(
+        value(
+            &ro,
+            &format!("select spelaion.{call_synonym}('synonym') from dual")
+        )
+        .await,
+        "1"
+    );
+    ro.close().await;
+    for note in ["rows direct", "rows view", "rows synonym"] {
+        assert_eq!(value(&owner, &written(note)).await, "0", "{note}");
+    }
+    for note in ["direct", "view", "synonym"] {
+        assert_eq!(value(&owner, &written(note)).await, "1", "{note}");
+    }
+
+    script(
+        &owner,
+        &format!(
+            "drop synonym {call_synonym};\ndrop view {call_view};\ndrop synonym {rows_synonym};\n\
+             drop view {rows_view};\ndrop function {remote};\ndrop table {table} purge"
+        ),
+    )
+    .await;
+    owner.close().await;
+    script(&dba, &format!("drop public database link {link}")).await;
+    dba.close().await;
 }
 
 /// Through the two bastions of `testing/docker`, with TLS: the plugin connects to the tunnel's

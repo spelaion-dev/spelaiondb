@@ -337,7 +337,8 @@ services:
 
   # Oracle Database Free (the lite image), served only by its plugin (ADR-059). Its listener is
   # published on 127.0.0.1:11521; through the tunnels it is oracle:1521. User and password
-  # `spelaion`, service FREEPDB1 (`oracle/startup` makes the user on every start).
+  # `spelaion`, service FREEPDB1 (`oracle/startup` makes the user on every start, and the
+  # read-only user `spelaion_ro` of ADR-080's tests).
   oracle:
     # Oracle is native, not a JVM. Size its SGA/PGA before the very first startup,
     # leaving native allocations and startup work room inside the container limit.
