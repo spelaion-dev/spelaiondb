@@ -1018,6 +1018,274 @@ async fn a_link_to_a_writable_user_lets_a_remote_function_write() {
     dba.close().await;
 }
 
+/// Which links a read-only session reaches, and which it can see (ADR-092). A writable user's
+/// private link does not resolve from the read-only session's own statements, even hidden in
+/// that user's view or synonym (ORA-04054). But that user's definer's-rights code resolves it
+/// in its owner's schema and writes through it: a function that calls a remote function with
+/// an autonomous transaction, a procedure that calls a remote procedure that commits (no
+/// autonomous transaction needed), and a function that names the link only inside
+/// `EXECUTE IMMEDIATE`, which leaves no trace in `ALL_DEPENDENCIES`. The session's
+/// `ALL_DB_LINKS` does not show that link; `DBA_DB_LINKS` does, and the read-only user may
+/// read it only if a DBA allows it (here with `SELECT_CATALOG_ROLE`). A remote procedure
+/// called from a PL/SQL block through a public link commits too, and a remote function
+/// without an autonomous transaction is refused inside a query (ORA-14551).
+#[tokio::test]
+async fn a_writable_users_code_reaches_its_private_link_where_the_session_cannot_see_it() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-private-link", &host, port);
+    let owner = ws.open("ora").await;
+    let dba = ws.open_with("dba", DBA_PASSWORD).await;
+    let id = std::process::id();
+    let table = format!("spelaion_ro_reach_{id}");
+    let private = format!("spelaion_ro_private_{id}");
+    let public = format!("spelaion_ro_public_{id}");
+    let remote = format!("spelaion_ro_reach_write_{id}");
+    let plain = format!("spelaion_ro_reach_plain_{id}");
+    let procedure = format!("spelaion_ro_reach_proc_{id}");
+    let definer = format!("spelaion_ro_reach_definer_{id}");
+    let definer_procedure = format!("spelaion_ro_reach_definer_proc_{id}");
+    let dynamic = format!("spelaion_ro_reach_dynamic_{id}");
+    let view = format!("spelaion_ro_reach_view_{id}");
+    let synonym = format!("spelaion_ro_reach_syn_{id}");
+    let checker = format!("spelaion_ro_checker_{id}");
+    let address = "'//localhost:1521/FREEPDB1'";
+    script(
+        &dba,
+        &format!(
+            "begin execute immediate 'drop public database link {public}'; exception when others then null; end;\n/\n\
+             begin execute immediate 'drop user {checker} cascade'; exception when others then null; end;\n/\n\
+             create public database link {public} connect to spelaion identified by spelaion using {address};\n\
+             create user {checker} identified by spelaion;\n\
+             grant create session, select_catalog_role to {checker};\n\
+             alter user {checker} read only"
+        ),
+    )
+    .await;
+    script(
+        &owner,
+        &format!(
+            "begin execute immediate 'drop table {table} purge'; exception when others then null; end;\n/\n\
+             begin execute immediate 'drop database link {private}'; exception when others then null; end;\n/\n\
+             create table {table} (note varchar2(60));\n\
+             create database link {private} connect to spelaion identified by spelaion using {address};\n\
+             create or replace function {remote}(note varchar2) return number is\n  pragma autonomous_transaction;\n\
+             begin\n  insert into {table} values (note);\n  commit;\n  return 1;\nend;\n/\n\
+             create or replace function {plain}(note varchar2) return number is\n\
+             begin\n  insert into {table} values (note);\n  return 1;\nend;\n/\n\
+             create or replace procedure {procedure}(note varchar2) is\n\
+             begin\n  insert into {table} values (note);\n  commit;\nend;\n/\n\
+             create or replace function {definer}(note varchar2) return number is\n\
+             begin\n  return {remote}@{private}(note);\nend;\n/\n\
+             create or replace procedure {definer_procedure}(note varchar2) is\n\
+             begin\n  {procedure}@{private}(note);\nend;\n/\n\
+             create or replace function {dynamic}(note varchar2) return number is\n  written number;\n\
+             begin\n  execute immediate 'select {remote}@{private}(:1) from dual' into written using note;\n  return written;\nend;\n/\n\
+             create or replace view {view} as select spelaion.{remote}@{private}('view') written from dual;\n\
+             create or replace synonym {synonym} for spelaion.{remote}@{private};\n\
+             grant select on {view} to {READ_ONLY_USER};\n\
+             grant execute on {definer} to {READ_ONLY_USER};\n\
+             grant execute on {definer_procedure} to {READ_ONLY_USER};\n\
+             grant execute on {dynamic} to {READ_ONLY_USER}"
+        ),
+    )
+    .await;
+    let written = |note: &str| format!("select count(*) from {table} where note = '{note}'");
+    let link_named = |view: &str, name: &str| {
+        format!("select count(*) from sys.{view} where db_link like upper('{name}') || '%'")
+    };
+
+    let ro = ws.open("ro").await;
+    // What the session sees: the public link, not the writable user's private one.
+    assert_eq!(value(&ro, &link_named("all_db_links", &public)).await, "1");
+    assert_eq!(value(&ro, &link_named("all_db_links", &private)).await, "0");
+    let hidden = failure(&ro, "select count(*) from sys.dba_db_links").await;
+    assert!(
+        hidden.as_deref().is_some_and(|e| e.contains("ORA-00942")),
+        "{hidden:?}"
+    );
+    // The private link does not resolve from the session's own statements.
+    for sql in [
+        format!("select written from spelaion.{view}"),
+        format!("select spelaion.{synonym}('synonym') from dual"),
+    ] {
+        let error = failure(&ro, &sql).await;
+        assert!(
+            error.as_deref().is_some_and(|e| e.contains("ORA-04054")),
+            "{sql}\n→ {error:?}"
+        );
+    }
+    // The writable user's own code resolves it, and writes.
+    assert_eq!(
+        value(
+            &ro,
+            &format!("select spelaion.{definer}('definer function') from dual")
+        )
+        .await,
+        "1"
+    );
+    script(
+        &ro,
+        &format!("begin\n  spelaion.{definer_procedure}('definer procedure');\nend;\n/"),
+    )
+    .await;
+    assert_eq!(
+        value(
+            &ro,
+            &format!("select spelaion.{dynamic}('dynamic') from dual")
+        )
+        .await,
+        "1"
+    );
+    // Only the static call is in the dictionary's dependencies.
+    let depends = |name: &str| {
+        format!(
+            "select count(*) from sys.all_dependencies where owner = 'SPELAION' \
+             and name = upper('{name}') and referenced_link_name like upper('{private}') || '%'"
+        )
+    };
+    assert_eq!(value(&ro, &depends(&definer)).await, "1");
+    assert_eq!(value(&ro, &depends(&dynamic)).await, "0");
+    ro.close().await;
+
+    // Through a public link, from the session's own block: a remote procedure commits.
+    let ro = ws.open("ro").await;
+    script(
+        &ro,
+        &format!("begin\n  spelaion.{procedure}@{public}('public procedure');\nend;\n/"),
+    )
+    .await;
+    ro.close().await;
+    let ro = ws.open("ro").await;
+    let refused_in_query = failure(
+        &ro,
+        &format!("select spelaion.{plain}@{public}('public plain') from dual"),
+    )
+    .await;
+    assert!(
+        refused_in_query
+            .as_deref()
+            .is_some_and(|e| e.contains("ORA-14551")),
+        "{refused_in_query:?}"
+    );
+    ro.close().await;
+
+    for note in [
+        "definer function",
+        "definer procedure",
+        "dynamic",
+        "public procedure",
+    ] {
+        assert_eq!(value(&owner, &written(note)).await, "1", "{note}");
+    }
+    for note in ["view", "synonym", "public plain"] {
+        assert_eq!(value(&owner, &written(note)).await, "0", "{note}");
+    }
+
+    // A read-only user a DBA lets read the dictionary sees every link of the database.
+    ws.write(
+        ".spelaion/connections/checker.toml",
+        &connection_as(&host, port, &checker, ""),
+    );
+    let check = ws.open("checker").await;
+    assert_eq!(
+        value(&check, "select read_only from sys.user_users").await,
+        "YES"
+    );
+    assert_eq!(
+        value(&check, &link_named("dba_db_links", &private)).await,
+        "1"
+    );
+    assert_eq!(
+        value(&check, &link_named("dba_db_links", &public)).await,
+        "1"
+    );
+    check.close().await;
+
+    script(
+        &owner,
+        &format!(
+            "drop synonym {synonym};\ndrop view {view};\ndrop function {dynamic};\n\
+             drop procedure {definer_procedure};\ndrop function {definer};\ndrop procedure {procedure};\n\
+             drop function {plain};\ndrop function {remote};\ndrop database link {private};\n\
+             drop table {table} purge"
+        ),
+    )
+    .await;
+    owner.close().await;
+    eventually(
+        &dba,
+        &format!("select count(*) from v$session where username = upper('{checker}')"),
+        "0",
+    )
+    .await;
+    script(
+        &dba,
+        &format!("drop public database link {public};\ndrop user {checker} cascade"),
+    )
+    .await;
+    dba.close().await;
+}
+
+/// `SET TRANSACTION READ ONLY` in a read-only session (ADR-092, against ADR-080's point 6):
+/// the database allows it, and it opens a transaction that the session can then never end,
+/// since its `ROLLBACK` and `COMMIT` are refused. Every later read sees the data as it was
+/// when that transaction began. Without it, a read leaves no transaction, and the driver
+/// reports the session idle: there is nothing to end.
+#[tokio::test]
+async fn set_transaction_read_only_traps_a_read_only_session_in_its_snapshot() {
+    let _turn = crate::serial::file_turn(module_path!());
+    let Some((host, port)) = server() else { return };
+    let ws = accounts("oracle-ro-snapshot", &host, port);
+    let owner = ws.open("ora").await;
+    let table = format!("spelaion_ro_snapshot_{}", std::process::id());
+    script(
+        &owner,
+        &format!(
+            "begin execute immediate 'drop table {table} purge'; exception when others then null; end;\n/\n\
+             create table {table} (n number);\n\
+             insert into {table} values (1);\n\
+             commit;\n\
+             grant select on {table} to {READ_ONLY_USER}"
+        ),
+    )
+    .await;
+    let count = format!("select count(*) from spelaion.{table}");
+
+    let plain = ws.open("ro").await;
+    assert_eq!(value(&plain, &count).await, "1");
+    assert!(!in_transaction(&plain).await);
+    assert_eq!(
+        plain
+            .session
+            .connection()
+            .transaction_state()
+            .await
+            .unwrap(),
+        TransactionState::Idle
+    );
+
+    // A read-only transaction that begins within seconds of the table's DDL cannot read it
+    // (ORA-01466), and could never begin again: give the snapshot a table older than itself.
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    let trapped = ws.open("ro").await;
+    script(&trapped, "set transaction read only").await;
+    assert_eq!(value(&trapped, &count).await, "1");
+    assert!(in_transaction(&trapped).await);
+    script(&owner, &format!("insert into {table} values (2);\ncommit")).await;
+    assert_eq!(value(&trapped, &count).await, "1");
+    refused(&trapped, "rollback").await;
+    refused(&trapped, "commit").await;
+    assert!(in_transaction(&trapped).await);
+    assert_eq!(value(&trapped, &count).await, "1");
+    assert_eq!(value(&plain, &count).await, "2");
+    trapped.close().await;
+    plain.close().await;
+
+    script(&owner, &format!("drop table {table} purge")).await;
+    owner.close().await;
+}
+
 /// Through the two bastions of `testing/docker`, with TLS: the plugin connects to the tunnel's
 /// local end (127.0.0.1) and checks the certificate against the database's name behind the
 /// bastions, `oracle-tls`, signed by the test authority (ADR-059, ADR-041: a plugin opens no
