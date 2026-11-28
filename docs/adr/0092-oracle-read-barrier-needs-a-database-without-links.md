@@ -1,9 +1,10 @@
 # ADR-092: Oracle's read barrier is a read-only user in a database with no database links; an agent's read on it ends by the driver's transaction state, never by a ROLLBACK
 
-- **Status:** Proposed
-- **Date:** 2026-11-28
-- **Amends:** ADR-080, points 3, 6, 7, 8 and 9, and its work items. Its points 1, 2, 4 and 5
-  stand.
+- **Status:** Accepted (not implemented)
+- **Date:** 2026-11-28 (accepted the same day: Pablo chose the recommendation, (a) with (i),
+  over (c))
+- **Supersedes:** ADR-080, points 3, 6, 7, 8 and 9, and its work items. Its points 1, 2, 4 and
+  5 stand.
 - **Builds on:** ADR-080's note of 2026-11-28 (SDB-474), ADR-020 (each engine's barrier, and
   nothing offered until its get-around tests pass), ADR-031 (the transaction state comes from
   the driver)
@@ -111,7 +112,7 @@ contradict the decision as written.
 - **(iii) Send the `ROLLBACK` and take ORA-28194 as success.** Rejected. The refusal is the
   same whether or not a transaction is open, so it would reuse a session that still holds one.
 
-## Decision (proposed)
+## Decision
 1. **Point 8 becomes option (a).** On Oracle, read-only connections and agents' reads are
    offered only on a session whose user the database keeps read-only (ADR-080, point 3's two
    answers) and whose database has no database link, as `SYS.DBA_DB_LINKS` says when the
@@ -135,15 +136,16 @@ contradict the decision as written.
    above, with the check refusing the session; a link created after the session opened, refused
    at the next read; a database with no link, offered; and the untested channels named under
    (a), each either refused by a check or shown not to write. If one of those writes and no
-   dictionary answer can rule it out, the recommendation falls to (c).
+   dictionary answer can rule it out, Oracle falls back to (c): no read-only mode and no agents.
 
-**Recommendation: (a) with (i). Alternative: (c).**
+**Chosen: (a) with (i)**, the recommendation, by Pablo on 2026-11-28 ("Read-only + no links").
+The alternative was (c).
 
 (a) is the smallest change that answers every way through the tests found. The database
 enforces each part: the user's `READ ONLY` and a dictionary with no link in it. SpelaionDB only
 refuses unless both hold.
 
-What would make me choose (c): a get-around test of item 2 that writes through a channel no
+What would send Oracle to (c): a get-around test of item 2 that writes through a channel no
 dictionary answer can rule out (a definer's `UTL_HTTP` call, an external procedure, Java), or
 evidence that the 23ai databases people use with SpelaionDB nearly all have links, so (a)
 would reach almost nobody.
@@ -163,14 +165,13 @@ above.
   and the window it leaves is weighed again.
 
 ## What follows as work items
-SDB-475 to SDB-478 (ADR-080's items 2 to 5) are rewritten to this decision once it is
-accepted:
+SDB-475 to SDB-478 (ADR-080's items 2 to 5) are rewritten to this decision:
 - **Item 2** (the check, the session's fact and the reads' ending) adds the links answer,
   drops `SET TRANSACTION READ ONLY` for Oracle, and ends reads by the driver's state.
 - **Item 4** names the grant and the no-links condition.
 - **Items 3 and 5** are unchanged except that they wait for item 2.
 
-Until this is accepted, nothing turns on read-only mode or agents on Oracle.
+Until item 2's get-around tests pass, nothing turns on read-only mode or agents on Oracle.
 
 ## Sources
 - `crates/spelaion-core/tests/oracle.rs` (the tests named above), against `testing/docker`'s
