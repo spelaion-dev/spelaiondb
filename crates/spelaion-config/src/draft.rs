@@ -518,7 +518,11 @@ impl ConnectionDraft {
             tags: normalize_tags(&self.tags),
             engine: self.engine,
             engine_kind: self.engine_kind.clone(),
-            external_engine: self.external_engine.clone(),
+            // Only an external engine names one: switching to one of ours drops it.
+            external_engine: self
+                .external_engine
+                .clone()
+                .filter(|_| self.engine == Engine::External),
             env: non_empty(&self.env),
             host: non_empty(&self.host).filter(|_| network),
             // The engine's default port is implied: the file only says what differs.

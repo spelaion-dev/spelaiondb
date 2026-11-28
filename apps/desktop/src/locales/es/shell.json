@@ -1258,5 +1258,7 @@
     "defaultRestoreName": "Restaurar {{name}}",
     "saveExportOnlyAll": "Solo una exportación que vuelve a ejecutar la consulta o a leer la tabla se puede guardar como tarea",
     "saveImportOnlyFile": "Solo una importación desde un archivo se puede guardar como tarea"
-  }
+  },
+  "notOursMark": "Ajeno",
+  "notOursMarkHint": "Su motor, {{engine}}, viene de un plugin que has añadido y que no forma parte de SpelaionDB: comunica sus problemas a su autor."
 }

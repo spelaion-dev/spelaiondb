@@ -43,7 +43,8 @@ import { ConnectionTestLog, TestSummary, useConnectionTest } from "./ConnectionT
 import { installText, openPluginsPage, pluginNeeded, usePlugins } from "../plugins";
 import { keyText } from "../shortcuts";
 
-const CATEGORIES = ["relational", "analytical", "nosql"] as const;
+// "external": the engines of plugins the user added, which are not part of SpelaionDB (ADR-055).
+const CATEGORIES = ["relational", "analytical", "nosql", "external"] as const;
 const TLS_MODES: TlsModeItem[] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -98,7 +99,17 @@ export function AddConnection({ dialog }: { dialog: ConnectionDialog }) {
         setPasswordStored(edited.passwordStored);
         setInitial(draft);
         setSavedEngine(draft.engine);
-        setEngine(catalog.find((e) => e.id === draft.engine) ?? null);
+        // An engine of someone else's plugin is found by its name; one no added plugin serves
+        // cannot be edited here, and says why.
+        const found =
+          draft.engine === "external"
+            ? catalog.find((e) => e.externalEngine != null && e.externalEngine === draft.externalEngine)
+            : catalog.find((e) => e.id === draft.engine);
+        if (!found && draft.engine === "external") {
+          setLoadError(t("externalMissing", { engine: draft.externalEngine ?? "" }));
+          return;
+        }
+        setEngine(found ?? null);
         // A folder of files (SDB-316) is shown as its catalog entry, like when it was added.
         setKind(catalog.find((e) => e.id === (draft.fileFolder ? "file-folder" : draft.engineKind)) ?? null);
       } catch (e) {
@@ -231,6 +242,8 @@ function EngineBadge({ engine }: { engine: EngineItem }) {
 /** The catalog entry whose form a picked entry opens: itself, or for a kind of another
  *  engine's connection (SDB-169), that engine's. */
 function connectionEngine(engines: EngineItem[], picked: EngineItem): EngineItem | null {
+  // An engine of someone else's plugin is its own form.
+  if (picked.externalEngine) return picked;
   if (!picked.engine || picked.engine === picked.id) return picked;
   return engines.find((e) => e.id === picked.engine && e.available) ?? null;
 }
@@ -321,7 +334,10 @@ function EnginePicker({
               <h3 id={`engines-${category}`}>{t(`categories.${category}`)}</h3>
               <div className="engine-grid">
                 {items.map((e) => {
-                  const needed = e.available ? pluginNeeded(plugins, e.engine ?? e.id) : null;
+                  const needed = e.available && !e.notOurs ? pluginNeeded(plugins, e.engine ?? e.id) : null;
+                  const notOurs = e.notOurs
+                    ? t("notOursHint", { engine: e.name, plugin: e.notOurs.plugin, version: e.notOurs.version, author: e.notOurs.author })
+                    : null;
                   // Its plugin's download, when one runs, wherever it was started.
                   const downloading = needed?.install.kind === "downloading" ? installText(needed, settings, i18n.language) : null;
                   return (
@@ -332,7 +348,9 @@ function EnginePicker({
                       // An engine whose plugin is not installed sends to Settings > Plugins.
                       onClick={() => (needed ? openPluginsPage() : onPick(e))}
                       title={
-                        !e.available
+                        e.notOurs
+                          ? [notOurs, e.notOurs.refused].filter(Boolean).join(" ")
+                          : !e.available
                           ? t("comingSoonHint", { engine: e.name })
                           : needed
                             ? [t("needsPluginHint", { engine: e.name, plugin: needed.name }), downloading].filter(Boolean).join(" ")
@@ -343,7 +361,8 @@ function EnginePicker({
                     >
                       <EngineBadge engine={e} />
                       <span className="engine-card-name">{e.name}</span>
-                      {!e.available && <span className="engine-card-soon">{t("comingSoon")}</span>}
+                      {e.notOurs && <span className="engine-card-soon">{t("notOurs")}</span>}
+                      {!e.available && !e.notOurs && <span className="engine-card-soon">{t("comingSoon")}</span>}
                       {needed && <span className="engine-card-soon">{downloading ? t("pluginDownloading") : t("needsPlugin")}</span>}
                     </button>
                   );
@@ -543,8 +562,10 @@ function ConnectionForm(props: {
     name: prefill ? prefill.database.split(/[\\/]/).pop() || prefill.host : "",
     description: "",
     tags: [],
-    engine: engine.id,
+    // An engine of someone else's plugin is saved as `external`, named by `externalEngine`.
+    engine: engine.externalEngine ? "external" : engine.id,
     engineKind: props.engineKind ?? null,
+    externalEngine: engine.externalEngine ?? null,
     env: "",
     host: prefill?.host || (localdb ? `${LOCALDB_PREFIX}${LOCALDB_DEFAULT}` : network ? "localhost" : ""),
     port: prefill?.port ?? null,

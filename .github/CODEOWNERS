@@ -56,6 +56,7 @@
 /crates/spelaion-core/src/plugins/installed.rs  @petilolz @frglez
 /crates/spelaion-core/src/plugins/choice.rs     @petilolz @frglez
 /crates/spelaion-core/src/plugins/fetch.rs      @petilolz @frglez
+/crates/spelaion-core/src/plugins/external.rs   @petilolz @frglez
 /crates/spelaion-plugin-fetch/src/write_catalogue.rs @petilolz @frglez
 
 # The transport that brings the plugin catalogue and plugin archives (ADR-055): HTTPS at every

@@ -1931,6 +1931,9 @@ pub struct ConnectionItem {
     /// Short labels to find the connection; filtered on in the explorer.
     pub tags: Vec<String>,
     pub engine: String,
+    /// With `engine = "external"`: the engine of a plugin that is not part of SpelaionDB it
+    /// uses (ADR-055). Shown as not ours wherever the connection is.
+    pub external_engine: Option<String>,
     /// Presentation identifier. The base engine still drives commands.
     pub engine_mark: String,
     pub env: Option<String>,
@@ -4133,6 +4136,56 @@ pub struct EngineItem {
     /// Agents' writes can run on this engine (`runs_agent_writes`): the form offers them only
     /// here, and says they are not available on the others.
     pub agent_writes: bool,
+    /// For an engine of a plugin the user added (ADR-055): its name as connections give it
+    /// (`external_engine`); `engine` is then `external`.
+    pub external_engine: Option<String>,
+    /// For such an engine: whose plugin serves it. It is not part of SpelaionDB, and the
+    /// picker says so.
+    pub not_ours: Option<NotOursItem>,
+}
+
+/// The plugin, not part of SpelaionDB, that serves an engine (ADR-055, point 5): what the app
+/// shows wherever that engine appears.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NotOursItem {
+    pub plugin: String,
+    pub version: String,
+    /// Who it says it is from.
+    pub author: String,
+    /// Why its engine does not open now, in the core's words (its file changed, or is missing).
+    pub refused: Option<String>,
+}
+
+impl EngineItem {
+    /// An engine of a plugin the user added: no read-only mode, nothing for agents, and said to
+    /// be not ours (ADR-041, ADR-055).
+    pub fn of_external(engine: &spelaion_core::plugins::external::ExternalEngine) -> Option<Self> {
+        let manifest = engine.plugin.manifest.as_ref()?;
+        Some(Self {
+            id: format!("external:{}", manifest.engine),
+            name: manifest.engine_label.clone(),
+            engine: Some(spelaion_config::Engine::External.as_str().into()),
+            default_user: None,
+            default_database: None,
+            category: "external".into(),
+            access: "network".into(),
+            default_port: None,
+            available: engine.plugin.refusal().is_none(),
+            session_schema: false,
+            isolation_levels: Vec::new(),
+            sql: engine.dialect.is_sql(),
+            read_barrier: false,
+            agent_writes: false,
+            external_engine: Some(manifest.engine.clone()),
+            not_ours: Some(NotOursItem {
+                plugin: manifest.name.clone(),
+                version: manifest.version.clone(),
+                author: manifest.author.clone(),
+                refused: engine.plugin.refusal(),
+            }),
+        })
+    }
 }
 
 impl From<spelaion_core::EngineInfo> for EngineItem {
@@ -4156,6 +4209,8 @@ impl From<spelaion_core::EngineInfo> for EngineItem {
             sql: info.engine.is_none_or(|e| e.is_sql()),
             read_barrier: info.engine.is_none_or(spelaion_core::has_read_barrier),
             agent_writes: info.engine.is_some_and(spelaion_core::runs_agent_writes),
+            external_engine: None,
+            not_ours: None,
             isolation_levels: info
                 .engine
                 .map(|engine| {
@@ -4329,6 +4384,9 @@ pub struct ConnectionDraftItem {
     /// An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…).
     pub engine: String,
     pub engine_kind: Option<String>,
+    /// With `engine = "external"`: the engine of a plugin the user added (ADR-055).
+    #[serde(default)]
+    pub external_engine: Option<String>,
     pub env: String,
     pub host: String,
     pub port: Option<u16>,
@@ -4403,9 +4461,7 @@ impl TryFrom<ConnectionDraftItem> for spelaion_config::ConnectionDraft {
             tags: item.tags,
             engine,
             engine_kind: item.engine_kind,
-            // The form makes connections of our engines only; one of an external engine is
-            // written by the Plugins page (ADR-055).
-            external_engine: None,
+            external_engine: item.external_engine,
             env: item.env,
             host: item.host,
             port: item.port,
@@ -4494,6 +4550,7 @@ impl From<spelaion_config::ConnectionDraft> for ConnectionDraftItem {
             tags: draft.tags,
             engine: draft.engine.as_str().into(),
             engine_kind: draft.engine_kind,
+            external_engine: draft.external_engine,
             env: draft.env,
             host: draft.host,
             port: draft.port,

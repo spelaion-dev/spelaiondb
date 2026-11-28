@@ -6002,6 +6002,14 @@ button.value-picker-row.selected { background: var(--accent-soft); }
 .plugin-versions { list-style: none; margin: 0; padding: 0; }
 .plugin-versions li { display: flex; align-items: center; gap: var(--space-md); }
 .plugin-actions { flex: none; display: flex; gap: var(--space-xs); }
+/* Plugins the user added (ADR-055): apart from ours, with the facts the dialog shows in full. */
+.their-plugins { margin-top: var(--space-xl); }
+.their-plugin-address { display: flex; flex-direction: column; gap: var(--space-xs); margin-top: var(--space-md); }
+.their-plugin-address input { flex: 1; min-width: 0; }
+.modal.their-plugin-dialog { width: min(760px, 94vw); }
+.their-plugin-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-sm) var(--space-lg); margin: var(--space-md) 0; font-size: var(--text-sm); }
+.their-plugin-facts dt { color: var(--muted); }
+.their-plugin-facts dd { margin: 0; overflow-wrap: anywhere; }
 .missing-plugin { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-md); padding: var(--space-xs) 0; color: var(--fg); }
 
 /* A connection whose TLS does not check its server (SDB-395): in the form, the connection

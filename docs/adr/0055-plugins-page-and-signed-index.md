@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (it changes how ADR-041's stages 3 and 4 are carried out; the core's
   part is implemented, 2026-11-14: see "Implementation"; the publishing workflow is written
-  and waits for the key; the page and the download are not)
+  and waits for the key; the page and the download are not. Other people's plugins, point 5,
+  are implemented, 2026-11-28: see its "Implementation" note)
 - **Date:** 2026-11-13
 - **Supersedes:** in ADR-041, "No registry or marketplace" for our own plugins, and "from a
   file" as the only way to add someone else's (point 5); in ADR-042, "A plugin fix reaches
@@ -195,6 +196,36 @@ deploy from. What was settled while writing it:
   workflow that runs on every pin instead of only on a release.
 - **Silent plugin updates:** a program that receives passwords replaced without the user
   knowing, and ADR-021 already says no for the app.
+
+## Implementation (2026-11-28): other people's plugins (SDB-154)
+Point 5 and ADR-041's stage 4 are in the core (`crates/spelaion-core/src/plugins/external.rs`)
+and on the Plugins page ("Plugins you added"); the guide for authors is
+`docs/plugin-authors.md`, with a plugin written from it in C# (`examples/plugins/acme-memo`).
+What was settled while writing it:
+
+- **A plugin's archive is a `.tar.gz` of one program and its manifest**, `spelaion-plugin.toml`,
+  at its top (a few other plain files allowed, never unpacked). Only the program is unpacked and
+  pinned, so a plugin that needs other files beside it must be built as one executable.
+- **The dialog is shown from what was read without unpacking**: the manifest is read in memory
+  and every file of the archive hashed. What the user says yes to is given back to the core as
+  the archive's SHA-256, and the core adds nothing if the waiting archive no longer has it.
+- **An address is the archive's, or that plugin's release manifest** (a small TOML file naming,
+  for each platform, an archive's address, size and SHA-256): one step, both `https://`, every
+  redirect too, no user name or password, a host written in ASCII. The dialog shows the address,
+  its host, the archive's address and host, and where the bytes finally came from after a
+  redirect. Bounded at 256 MiB.
+- **A connection names the engine, never the plugin**: `engine = "external"` with
+  `external_engine = "<the manifest's engine>"`. That is what lets a team connection say which
+  engine it needs and stop when nobody added it, while nothing in `.spelaion/` can name a
+  plugin's file, address or hash. An engine name can never be one of ours, nor start with
+  `spelaion`; one plugin serves each engine, and a plugin of the same name replaces the old one
+  after the dialog.
+- **The dialect a manifest names is borrowed for reading only**: its splitter and quoting, under
+  the name `external`, which no barrier, server family or SQL of the core answers to.
+- **"Not part of SpelaionDB" is said by the core**: the plugin host puts the plugin's name,
+  version and author before every error it gives for such a plugin, and the connection test's
+  diagnostics carry a line that says whose it is.
+- **`spelaiondb mcp` never starts one**: it builds its engines without them.
 
 ## Revisit if
 - Users ask for engines we cannot write or test ourselves, and adding them one by one proves

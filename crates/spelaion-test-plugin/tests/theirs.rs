@@ -787,3 +787,101 @@ async fn what_is_not_a_plugins_archive_is_refused() {
     assert!(theirs.inspect_file(&plain, &app()).is_err());
     assert!(folder.unpacked().is_empty());
 }
+
+/// The plugin of `examples/plugins/acme-memo`, written in C# from `docs/plugin-authors.md`,
+/// added from a file and from an address: it connects, browses and answers a SELECT with rows in
+/// Arrow it wrote by hand. `SPELAION_TEST_ACME_MEMO` is the archive its `build.ps1` packs
+/// (Windows); without it this test is skipped, which does not count as tested.
+#[tokio::test]
+async fn a_plugin_written_in_another_language_connects_and_browses() {
+    use futures_util::StreamExt;
+    use spelaion_driver_api::{ExecEvent, ExecOptions};
+    let Ok(archive) = std::env::var("SPELAION_TEST_ACME_MEMO") else {
+        eprintln!("SPELAION_TEST_ACME_MEMO not set: the C# example plugin was not tried");
+        return;
+    };
+    let archive = PathBuf::from(archive);
+    let folder = Folder::new("acme-memo");
+    let theirs = folder.theirs();
+    let engine = "acme-memo";
+
+    for from_address in [false, true] {
+        let pending = if from_address {
+            let network = Network::default();
+            let address = "https://acme.example/memo/release.toml";
+            let archive_address = "https://acme.example/memo/acme-memo.tar.gz";
+            network.serve(
+                address,
+                release_of("acme-memo", archive_address, &archive).into_bytes(),
+            );
+            network.serve(archive_address, std::fs::read(&archive).unwrap());
+            theirs
+                .inspect_address(&network, address, &app())
+                .await
+                .unwrap()
+        } else {
+            theirs.inspect_file(&archive, &app()).unwrap()
+        };
+        assert_eq!(pending.manifest.engine, engine);
+        assert_eq!(pending.manifest.dialect, None);
+        theirs.add(&pending.archive_sha256, &app()).await.unwrap();
+
+        let engines = Engines::builtin_with(&folder.store());
+        let opened = open(&engines, connection(engine, "notes")).await.unwrap();
+        assert_eq!(opened.session.dialect().name(), "external");
+        let wire = opened.session.connection();
+        assert!(wire.server_version().await.unwrap().contains("Acme Memo"));
+        let schemas = wire.list_schemas().await.unwrap();
+        assert_eq!(schemas[0].name, "main");
+        let objects = wire.list_objects("main").await.unwrap();
+        assert_eq!(objects[0].name, "notes");
+        let table = wire.describe_table("main", "notes").await.unwrap();
+        assert_eq!(table.columns.len(), 2);
+        assert_eq!(table.primary_key, ["id"]);
+
+        let events: Vec<_> = wire
+            .execute("select * from \"main\".\"notes\"", &ExecOptions::default())
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        let mut rows = 0;
+        let mut columns = Vec::new();
+        for event in &events {
+            match event {
+                Ok(ExecEvent::Columns(schema)) => {
+                    columns = schema
+                        .columns
+                        .iter()
+                        .map(|c| c.native_type.clone())
+                        .collect();
+                }
+                Ok(ExecEvent::Batch(batch)) => rows += batch.num_rows(),
+                Ok(ExecEvent::Notice(_) | ExecEvent::Done { .. }) => {}
+                Err(error) => panic!("{error}"),
+            }
+        }
+        assert_eq!(rows, 3, "{events:?}");
+        assert_eq!(columns, ["integer", "text"]);
+        // Its errors say whose it is.
+        let error = open(&engines, connection(engine, "refuse"))
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("acme-memo 1.0.0"), "{error}");
+        assert!(error.contains("not part of SpelaionDB"), "{error}");
+        drop(opened);
+        theirs.remove("acme-memo").await.unwrap();
+    }
+}
+
+fn release_of(name: &str, archive_address: &str, archive: &Path) -> String {
+    format!(
+        "schema_version = 1\nname = {name:?}\nversion = \"1.0.0\"\n\n[platform.{}]\narchive = \
+         {archive_address:?}\narchive_sha256 = {:?}\narchive_size = {}\n",
+        platform().unwrap(),
+        sha256_of(archive).unwrap(),
+        std::fs::metadata(archive).unwrap().len()
+    )
+}

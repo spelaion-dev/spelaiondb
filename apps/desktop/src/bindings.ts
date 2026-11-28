@@ -433,6 +433,41 @@ export const commands = {
 	 */
 	pluginsInstallFile: (path: string) => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_install_file", { path })),
 	/**
+	 *  Reads a plugin's archive the user picked in the app's file dialog, to add someone else's
+	 *  plugin: what the dialog shows. Nothing in it is run or unpacked (the core's rule).
+	 */
+	pluginsInspectFile: (path: string) => typedError<PendingPluginItem_Serialize, string>(__TAURI_INVOKE("plugins_inspect_file", { path })),
+	/**
+	 *  Reads, once, the address the user typed or pasted into the Plugins page to add someone
+	 *  else's plugin: the `https://` address of its archive, or of its release manifest. What the
+	 *  dialog shows; nothing that arrives is run or unpacked, every redirect stays on HTTPS and
+	 *  the download is bounded (the core's rules). **The only command that takes an address**:
+	 *  nothing but that field of the Plugins page calls it. Its ticket goes to `job`, and
+	 *  `cancel_job` stops the download.
+	 */
+	pluginsInspectAddress: (job: Channel<JobTicket>, address: string) => typedError<PendingPluginItem_Serialize, string>(__TAURI_INVOKE("plugins_inspect_address", { job, address })),
+	/**
+	 *  Adds the plugin of someone else's waiting with `sha256`, the hash the dialog showed: **the
+	 *  user's yes**. The core adds it only if what waits still has that hash, and pins its program.
+	 *  A plugin of the same name is replaced (stopped first, its sessions lost). The engines are
+	 *  swapped.
+	 */
+	pluginsAddTheirs: (sha256: string) => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_add_theirs", { sha256 })),
+	/**  Drops the archive waiting with `sha256`: the user said no to the dialog. */
+	pluginsDiscardTheirs: (sha256: string) => typedError<null, string>(__TAURI_INVOKE("plugins_discard_theirs", { sha256 })),
+	/**
+	 *  Trusts again the program of the plugin `name` whose file changed, as it is now: only if its
+	 *  SHA-256 is still `sha256`, the hash the dialog showed (**the user's yes**). The engines are
+	 *  swapped.
+	 */
+	pluginsTrustAgain: (name: string, sha256: string) => typedError<PluginsOverview_Serialize, string>(__TAURI_INVOKE("plugins_trust_again", { name, sha256 })),
+	/**
+	 *  Removes the plugin of someone else's `name` and its pin. If sessions are open on its engine,
+	 *  nothing is removed until `confirmed`: removing it stops it and they are lost (ADR-028). The
+	 *  engines are swapped.
+	 */
+	pluginsRemoveTheirs: (name: string, confirmed: boolean) => typedError<PluginRemoval_Serialize, string>(__TAURI_INVOKE("plugins_remove_theirs", { name, confirmed })),
+	/**
 	 *  Removes the build `version` of the plugin `name` from the user's personal folder (one the
 	 *  overview lists in `installed`). If that build is running, nothing is removed until
 	 *  `confirmed`: removing it stops it, and its sessions are lost (ADR-028). The engines are
@@ -448,7 +483,10 @@ export const commands = {
 	 *  transaction open, nothing is stopped until `confirmed` (ADR-031).
 	 */
 	pluginRestart: (name: string, confirmed: boolean) => typedError<PluginRestart, string>(__TAURI_INVOKE("plugin_restart", { name, confirmed })),
-	/**  Engines shown when adding a connection, including the ones not supported yet. */
+	/**
+	 *  Engines shown when adding a connection, including the ones not supported yet, and after
+	 *  them the engines of plugins the user added, which are not part of SpelaionDB (ADR-055).
+	 */
 	engineCatalog: () => __TAURI_INVOKE<EngineItem_Serialize[]>("engine_catalog"),
 	/**
 	 *  Whether there is a system keychain. Without one (Linux with no Secret Service running) the
@@ -2392,6 +2430,8 @@ export type ConnectionDraftItem_Deserialize = {
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	engineKind?: string | null,
+	/**  With `engine = "external"`: the engine of a plugin the user added (ADR-055). */
+	externalEngine?: string | null,
 	env: string,
 	host: string,
 	port?: number | null,
@@ -2467,6 +2507,8 @@ export type ConnectionDraftItem_Serialize = {
 	/**  An available engine id from the catalog (`postgres`, `sqlite`, `duckdb`…). */
 	engine: string,
 	engineKind: string | null,
+	/**  With `engine = "external"`: the engine of a plugin the user added (ADR-055). */
+	externalEngine: string | null,
 	env: string,
 	host: string,
 	port: number | null,
@@ -2558,6 +2600,11 @@ export type ConnectionItem_Deserialize = {
 	/**  Short labels to find the connection; filtered on in the explorer. */
 	tags: string[],
 	engine: string,
+	/**
+	 *  With `engine = "external"`: the engine of a plugin that is not part of SpelaionDB it
+	 *  uses (ADR-055). Shown as not ours wherever the connection is.
+	 */
+	externalEngine?: string | null,
 	/**  Presentation identifier. The base engine still drives commands. */
 	engineMark: string,
 	env?: string | null,
@@ -2599,6 +2646,11 @@ export type ConnectionItem_Serialize = {
 	/**  Short labels to find the connection; filtered on in the explorer. */
 	tags: string[],
 	engine: string,
+	/**
+	 *  With `engine = "external"`: the engine of a plugin that is not part of SpelaionDB it
+	 *  uses (ADR-055). Shown as not ours wherever the connection is.
+	 */
+	externalEngine: string | null,
 	/**  Presentation identifier. The base engine still drives commands. */
 	engineMark: string,
 	env: string | null,
@@ -3621,6 +3673,16 @@ export type EngineItem_Deserialize = {
 	 *  here, and says they are not available on the others.
 	 */
 	agentWrites: boolean,
+	/**
+	 *  For an engine of a plugin the user added (ADR-055): its name as connections give it
+	 *  (`external_engine`); `engine` is then `external`.
+	 */
+	externalEngine?: string | null,
+	/**
+	 *  For such an engine: whose plugin serves it. It is not part of SpelaionDB, and the
+	 *  picker says so.
+	 */
+	notOurs?: NotOursItem_Deserialize | null,
 };
 
 /**  One engine in the "add connection" picker. `available`: it has a driver and can be used. */
@@ -3661,6 +3723,16 @@ export type EngineItem_Serialize = {
 	 *  here, and says they are not available on the others.
 	 */
 	agentWrites: boolean,
+	/**
+	 *  For an engine of a plugin the user added (ADR-055): its name as connections give it
+	 *  (`external_engine`); `engine` is then `external`.
+	 */
+	externalEngine: string | null,
+	/**
+	 *  For such an engine: whose plugin serves it. It is not part of SpelaionDB, and the
+	 *  picker says so.
+	 */
+	notOurs: NotOursItem_Serialize | null,
 };
 
 /**  The answer to a paused run. */
@@ -5456,6 +5528,38 @@ export type NotCopiedItem = {
 	primaryKey: boolean,
 };
 
+/**
+ *  The plugin, not part of SpelaionDB, that serves an engine (ADR-055, point 5): what the app
+ *  shows wherever that engine appears.
+ */
+export type NotOursItem = NotOursItem_Serialize | NotOursItem_Deserialize;
+
+/**
+ *  The plugin, not part of SpelaionDB, that serves an engine (ADR-055, point 5): what the app
+ *  shows wherever that engine appears.
+ */
+export type NotOursItem_Deserialize = {
+	plugin: string,
+	version: string,
+	/**  Who it says it is from. */
+	author: string,
+	/**  Why its engine does not open now, in the core's words (its file changed, or is missing). */
+	refused?: string | null,
+};
+
+/**
+ *  The plugin, not part of SpelaionDB, that serves an engine (ADR-055, point 5): what the app
+ *  shows wherever that engine appears.
+ */
+export type NotOursItem_Serialize = {
+	plugin: string,
+	version: string,
+	/**  Who it says it is from. */
+	author: string,
+	/**  Why its engine does not open now, in the core's words (its file changed, or is missing). */
+	refused: string | null,
+};
+
 export type NotScriptedItem = {
 	object: string,
 	reason: string,
@@ -5912,6 +6016,84 @@ export type PendingEditsItem_Serialize = {
 	changed: number,
 	/**  Pasted values left out past the last row or column. */
 	clipped: number,
+};
+
+/**  Where an archive waiting for the user's answer came from (the core's `Origin`). */
+export type PendingOriginItem = PendingOriginItem_Serialize | PendingOriginItem_Deserialize;
+
+/**  Where an archive waiting for the user's answer came from (the core's `Origin`). */
+export type PendingOriginItem_Deserialize = { kind: "file"; path: string } | 
+/**
+ *  The whole address the user gave, its host and, when it was a release manifest, the
+ *  archive's own address and host; `arrived_from` is where the archive's bytes finally
+ *  came from after a redirect, when that was elsewhere.
+ */
+{ kind: "address"; address: string; host: string; archive?: string | null; archiveHost?: string | null; arrivedFrom?: string | null };
+
+/**  Where an archive waiting for the user's answer came from (the core's `Origin`). */
+export type PendingOriginItem_Serialize = { kind: "file"; path: string } | 
+/**
+ *  The whole address the user gave, its host and, when it was a release manifest, the
+ *  archive's own address and host; `arrived_from` is where the archive's bytes finally
+ *  came from after a redirect, when that was elsewhere.
+ */
+{ kind: "address"; address: string; host: string; archive: string | null; archiveHost: string | null; arrivedFrom: string | null };
+
+/**
+ *  What the dialog shows before someone else's plugin is added: what it says it is, who it
+ *  says it is from, the engine it adds, where it came from and the hash of what arrived.
+ *  Nothing in it was run or unpacked.
+ */
+export type PendingPluginItem = PendingPluginItem_Serialize | PendingPluginItem_Deserialize;
+
+/**
+ *  What the dialog shows before someone else's plugin is added: what it says it is, who it
+ *  says it is from, the engine it adds, where it came from and the hash of what arrived.
+ *  Nothing in it was run or unpacked.
+ */
+export type PendingPluginItem_Deserialize = {
+	name: string,
+	version: string,
+	author: string,
+	description?: string | null,
+	homepage?: string | null,
+	engine: string,
+	engineLabel: string,
+	/**  The core's dialect its scripts are read with; none for standard SQL. */
+	dialect?: string | null,
+	/**  The SHA-256 of the archive that arrived: what `pluginsAddTheirs` is given back. */
+	archiveSha256: string,
+	archiveSize: number | null,
+	/**  The SHA-256 of its program, checked before every start. */
+	programSha256: string,
+	origin: PendingOriginItem_Deserialize,
+	/**  The version of the same plugin it replaces, if one was added before. */
+	replaces?: string | null,
+};
+
+/**
+ *  What the dialog shows before someone else's plugin is added: what it says it is, who it
+ *  says it is from, the engine it adds, where it came from and the hash of what arrived.
+ *  Nothing in it was run or unpacked.
+ */
+export type PendingPluginItem_Serialize = {
+	name: string,
+	version: string,
+	author: string,
+	description: string | null,
+	homepage: string | null,
+	engine: string,
+	engineLabel: string,
+	/**  The core's dialect its scripts are read with; none for standard SQL. */
+	dialect: string | null,
+	/**  The SHA-256 of the archive that arrived: what `pluginsAddTheirs` is given back. */
+	archiveSha256: string,
+	archiveSize: number | null,
+	/**  The SHA-256 of its program, checked before every start. */
+	programSha256: string,
+	origin: PendingOriginItem_Serialize,
+	/**  The version of the same plugin it replaces, if one was added before. */
+	replaces: string | null,
 };
 
 /**  A pending value as the grid draws it: its text (`null` is NULL), or the column's default. */
@@ -6469,6 +6651,8 @@ export type PluginsOverview_Deserialize = {
 	/**  The serial of the catalogue accepted last, if any. */
 	catalogueSerial?: number | null,
 	plugins: PluginItem_Deserialize[],
+	/**  The plugins of other people's the user added, which are not part of SpelaionDB. */
+	theirs: TheirPluginItem_Deserialize[],
 };
 
 /**  What the Plugins page shows. */
@@ -6483,6 +6667,8 @@ export type PluginsOverview_Serialize = {
 	/**  The serial of the catalogue accepted last, if any. */
 	catalogueSerial: number | null,
 	plugins: PluginItem_Serialize[],
+	/**  The plugins of other people's the user added, which are not part of SpelaionDB. */
+	theirs: TheirPluginItem_Serialize[],
 };
 
 /**  A PostgreSQL connection's pooler (SDB-396). */
@@ -8251,6 +8437,69 @@ export type TextSpan = {
 	start: number,
 	end: number,
 };
+
+/**  A plugin of someone else's the user added: not part of SpelaionDB, and not supported. */
+export type TheirPluginItem = TheirPluginItem_Serialize | TheirPluginItem_Deserialize;
+
+/**  A plugin of someone else's the user added: not part of SpelaionDB, and not supported. */
+export type TheirPluginItem_Deserialize = {
+	name: string,
+	version?: string | null,
+	/**  Who it says it is from. */
+	author?: string | null,
+	description?: string | null,
+	/**  Where its author says to look for it: shown as text, never opened by the app. */
+	homepage?: string | null,
+	/**  The engine it adds, as connections name it, and as people write it. */
+	engine?: string | null,
+	engineLabel?: string | null,
+	/**  The SHA-256 of the program the user trusted. */
+	sha256?: string | null,
+	/**  The file or address it was added from: shown, never read again. */
+	source?: string | null,
+	state: TheirPluginState,
+	/**  Why its engine does not open, when it does not (the core's words). */
+	refused?: string | null,
+	/**  Sessions open now on its engine. */
+	openSessions: number,
+};
+
+/**  A plugin of someone else's the user added: not part of SpelaionDB, and not supported. */
+export type TheirPluginItem_Serialize = {
+	name: string,
+	version: string | null,
+	/**  Who it says it is from. */
+	author: string | null,
+	description: string | null,
+	/**  Where its author says to look for it: shown as text, never opened by the app. */
+	homepage: string | null,
+	/**  The engine it adds, as connections name it, and as people write it. */
+	engine: string | null,
+	engineLabel: string | null,
+	/**  The SHA-256 of the program the user trusted. */
+	sha256: string | null,
+	/**  The file or address it was added from: shown, never read again. */
+	source: string | null,
+	state: TheirPluginState,
+	/**  Why its engine does not open, when it does not (the core's words). */
+	refused: string | null,
+	/**  Sessions open now on its engine. */
+	openSessions: number,
+};
+
+/**  What a plugin the user added is now (the core's `ExternalState`). */
+export type TheirPluginState = 
+/**  Its program is the file the user trusted: its engine uses it. */
+{ kind: "trusted" } | 
+/**
+ *  Its program changed since: refused until trusted again. `found` is its SHA-256 now,
+ *  what `pluginsTrustAgain` is given back once the user agreed.
+ */
+{ kind: "changed"; found: string } | 
+/**  Its program is gone. */
+{ kind: "missing" } | 
+/**  It cannot be read or started here, in the core's words. */
+{ kind: "unusable"; why: string };
 
 export type TlsModeItem = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
 

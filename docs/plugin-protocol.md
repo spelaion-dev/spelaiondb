@@ -10,7 +10,9 @@ and guarding statements, secrets, tunnels and the audit are the core's.
 This file is the contract. `spelaion-plugin-protocol` is its types, `spelaion-plugin-sdk` is
 the plugin's side (a Rust plugin implements `spelaion-driver-api`'s `Driver` and `Connection`
 and calls `spelaion_plugin_sdk::run`), and `spelaion-plugin-host` is the core's side. A plugin
-in another language implements what is written here.
+in another language implements what is written here. `docs/plugin-authors.md` is the guide for
+someone who writes a plugin of their own: what to ship, its manifest, how users add it, and what
+SpelaionDB does with a plugin that is not part of it.
 
 ## The process
 - The core starts the plugin with **no arguments and no environment of its own** that carry

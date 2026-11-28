@@ -13,6 +13,11 @@
   The store's keys (`store_scope`, `folder_scope`, `repository_scope`) and the connection's
   keychain name (`keychain_account`, behind `accounts::connection_account`) come from it: never
   build one from `workspace_root` by hand. Never put a database in it (ADR-074).
+  A connection of an engine served by someone else's plugin (ADR-055, point 5) is `engine =
+  "external"` with `external_engine`, the engine's name and never the plugin's (no file, address
+  or hash): `check_external_engine` is its one rule (never one of ours, nothing starting with
+  `spelaion`), shared with the plugin's manifest, and `read_only` is refused on it
+  (`tests/external_engines.rs`, which also tries files that name a plugin or an address).
   `draft.rs` turns the add/edit connection form into a validated file (secrets go to the
   keychain, never to the file); editing touches only the changed keys with `toml_edit`.
   Every password written to the keychain goes through `secrets::store`, which reads it back

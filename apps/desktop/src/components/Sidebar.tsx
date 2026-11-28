@@ -2265,6 +2265,7 @@ function ConnectionNode({
           // The description, then the marks after the name, which may not fit.
           title={connectionTooltip(connection, [
             kind ? t("typeTooltip", { name: kind.name }) : null,
+            connection.externalEngine ? t("notOursMarkHint", { engine: connection.externalEngine }) : null,
             connection.tlsWarning ? tlsWarningText(t, connection.tlsWarning) : null,
             connection.tunnel ? t("tunnel", { name: connection.tunnel }) : null,
             connection.tags.length > 0 ? t("tagsTooltip", { tags: connection.tags.join(", ") }) : null,
@@ -2272,12 +2273,19 @@ function ConnectionNode({
         >
           {connection.name}
         </span>
-        {(kind || connection.tlsWarning || connection.tunnel || connection.tags.length > 0) && (
+        {(kind || connection.externalEngine || connection.tlsWarning || connection.tunnel || connection.tags.length > 0) && (
           // In order of importance: the type (its dot always stays), SSH, then a few quiet tags (a
           // click filters the explorer by one), each shown whole or not at all where it fits
           // (connectionMarks.ts). The name's tooltip has them all.
           <span ref={marksRef} className="connection-marks">
             {kind && <TypeBadge type={kind} small />}
+            {connection.externalEngine && (
+              // Its engine comes from a plugin the user added, which is not part of SpelaionDB
+              // (ADR-055): said wherever the connection is.
+              <span className="tag" title={t("notOursMarkHint", { engine: connection.externalEngine })}>
+                {t("notOursMark")}
+              </span>
+            )}
             {connection.tlsWarning && (
               // Its TLS does not check the server (SDB-395): the core decided it.
               <span className="tls-mark" role="img" aria-label={tlsWarningText(t, connection.tlsWarning)} title={tlsWarningText(t, connection.tlsWarning)}>
