@@ -30,7 +30,13 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
 - Oracle Database Free (Oracle's lite image, about 2 GB; a minute or two to start the first
   time) is on `127.0.0.1:11521` (`SPELAION_TEST_ORACLE`; behind the bastions `oracle:1521`):
   user and password `spelaion`, service `FREEPDB1`, made by `oracle/startup` on every start.
-  Its TCPS is a TLS proxy in front of it (the lite image has no `orapki`), on
+  A second, local user, `spelaion_ro` (password `spelaion`), is kept read-only by the database
+  itself (`ALTER USER spelaion_ro READ ONLY`, 23ai and later; ADR-080): every write its
+  sessions try fails with ORA-28194, and so do their `COMMIT`, `ROLLBACK` and `SAVEPOINT`. It
+  may read `spelaion.spelaion_ro_reads` (one row); tests grant it more on their own objects.
+  `oracle/startup/02-spelaion-ro.sql` makes it, and sets it read-only again, on every start.
+  The tests that need an administrator (to change a user, make a public database link or read
+  `v$session`) connect as `system` with `ORACLE_PWD`. Its TCPS is a TLS proxy in front of it (the lite image has no `orapki`), on
   `127.0.0.1:12484` and `oracle-tls:2484`, with a certificate for `localhost` and
   `oracle-tls` signed by `keys/ca.crt` (`gen-keys.sh`).
 - Apache Hive 4.0.1's HiveServer2 (with its embedded metastore; about 3 GB, half a minute to
