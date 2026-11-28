@@ -190,6 +190,10 @@ impl Engines {
         // Every engine: one added to the configuration is pointed at here without a list to
         // keep in step (`Engine::ALL` is checked to be complete in spelaion-config).
         for engine in Engine::ALL {
+            // An engine of someone else's plugin is found by its own name, never by this one.
+            if engine == Engine::External {
+                continue;
+            }
             let variable = crate::plugins::dev_plugin_variable(engine.as_str());
             let pointed = std::env::var_os(variable);
             if let Some(program) =

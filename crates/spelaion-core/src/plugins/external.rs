@@ -507,6 +507,7 @@ impl TheirPlugins {
     /// Reads the archive the user picked, for the dialog: copied to a place of its own
     /// (bounded), its manifest read and its files hashed. Nothing is run or unpacked.
     pub fn inspect_file(&self, file: &Path, app: &AppBuild) -> Result<Pending, AddError> {
+        self.sweep_pending();
         let incoming = Incoming::new(&self.pending_folder())?;
         let mut source =
             std::fs::File::open(file).map_err(io(format!("reading {}", file.display())))?;
@@ -550,6 +551,7 @@ impl TheirPlugins {
     ) -> Result<Pending, AddError> {
         let address = address.trim();
         let host = check_address(address)?;
+        self.sweep_pending();
         let incoming = Incoming::new(&self.pending_folder())?;
         let what = "the plugin";
         let mut file = std::fs::File::create(&incoming.path).map_err(io("keeping the archive"))?;
@@ -685,6 +687,26 @@ impl TheirPlugins {
             .map_err(io("keeping where the plugin came from"))?;
         incoming.keep_as(&archive)?;
         Ok(pending)
+    }
+
+    /// Drops what waited for an answer that never came (the app closed with the dialog open):
+    /// anything in `.pending` older than a day.
+    fn sweep_pending(&self) {
+        let Ok(entries) = std::fs::read_dir(self.pending_folder()) else {
+            return;
+        };
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        for entry in entries.flatten() {
+            let old = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > day);
+            if old {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
     }
 
     /// Drops an archive that waited for the user's answer, which was no.
