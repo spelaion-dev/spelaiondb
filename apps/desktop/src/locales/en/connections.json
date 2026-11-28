@@ -17,7 +17,8 @@
   "categories": {
     "relational": "Relational",
     "analytical": "Analytical",
-    "nosql": "NoSQL"
+    "nosql": "NoSQL",
+    "external": "Added by you, not part of SpelaionDB"
   },
   "sections": {
     "server": "Server",
@@ -589,5 +590,8 @@
     "transactionHint": "In transaction mode each transaction may run on another server connection: SpelaionDB uses no prepared statements, and the session has no defaults, setup statements, schema of its own or read-only mode.",
     "noSession": "This connection goes through a pooler in transaction mode, which keeps no session settings: these are not saved. Qualify names with their schema, or set what you need inside each transaction.",
     "noReadOnly": "Not available through a pooler in transaction mode: the session's read-only mode would hold for one transaction only. Use a read-only database user, or connect through the pooler in session mode."
-  }
+  },
+  "notOurs": "Not part of SpelaionDB",
+  "notOursHint": "{{engine}} comes from the plugin {{plugin}} {{version}}, which says it is by {{author}}. It is not part of SpelaionDB: no read-only mode, nothing for agents, and its problems go to its author.",
+  "externalMissing": "This connection's engine, {{engine}}, is not part of SpelaionDB, and none of the plugins you added serves it."
 }

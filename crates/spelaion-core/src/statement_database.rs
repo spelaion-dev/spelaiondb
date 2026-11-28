@@ -52,7 +52,8 @@ pub fn database_source(engine: Engine) -> DatabaseSource {
         | Engine::Elasticsearch
         | Engine::Opensearch
         | Engine::Solr
-        | Engine::Meilisearch => DatabaseSource::None,
+        | Engine::Meilisearch
+        | Engine::External => DatabaseSource::None,
     }
 }
 

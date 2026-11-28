@@ -138,6 +138,8 @@ import {
   type PluginsOverview_Serialize,
   type PluginItem_Serialize,
   type PluginRemoval_Serialize,
+  type TheirPluginItem_Serialize,
+  type PendingPluginItem_Serialize,
 } from "./bindings";
 
 export { commands, events };
@@ -145,6 +147,9 @@ export { commands, events };
 export type PluginsOverview = PluginsOverview_Serialize;
 export type PluginItem = PluginItem_Serialize;
 export type PluginRemoval = PluginRemoval_Serialize;
+// Other people's plugins (ADR-055, point 5): added by the user, not part of SpelaionDB.
+export type TheirPluginItem = TheirPluginItem_Serialize;
+export type PendingPluginItem = PendingPluginItem_Serialize;
 // Data search (ADR-043): its events arrive through a channel (the deserialization variant).
 export type DataSearchEventItem = DataSearchEventItem_Deserialize;
 export type SearchHitItem = SearchHitItem_Deserialize;

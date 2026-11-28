@@ -34,6 +34,7 @@ async fn open(variable: &str, engine: Engine, read_only: bool) -> Option<OpenCon
         },
         name: "Plans test".into(),
         engine,
+        external_engine: None,
         env: None,
         kind: None,
         params: ConnectParams {

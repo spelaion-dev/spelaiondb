@@ -113,6 +113,8 @@ pub struct ConnectionDraft {
     pub tags: Vec<String>,
     pub engine: Engine,
     pub engine_kind: Option<String>,
+    /// With `Engine::External`: the engine of someone else's plugin it uses (ADR-055).
+    pub external_engine: Option<String>,
     pub env: String,
     pub host: String,
     pub port: Option<u16>,
@@ -439,7 +441,8 @@ impl ConnectionDraft {
                     | Engine::Hive
                     | Engine::Spark
                     | Engine::Kyuubi
-                    | Engine::Impala => {
+                    | Engine::Impala
+                    | Engine::External => {
                         return Err(ConfigError::new(
                             path,
                             format!(
@@ -515,6 +518,11 @@ impl ConnectionDraft {
             tags: normalize_tags(&self.tags),
             engine: self.engine,
             engine_kind: self.engine_kind.clone(),
+            // Only an external engine names one: switching to one of ours drops it.
+            external_engine: self
+                .external_engine
+                .clone()
+                .filter(|_| self.engine == Engine::External),
             env: non_empty(&self.env),
             host: non_empty(&self.host).filter(|_| network),
             // The engine's default port is implied: the file only says what differs.
@@ -551,7 +559,8 @@ impl ConnectionDraft {
                 | Engine::Hive
                 | Engine::Spark
                 | Engine::Kyuubi
-                | Engine::Impala => d,
+                | Engine::Impala
+                | Engine::External => d,
             }),
             file_folder: self.file_folder && self.engine == Engine::Duckdb,
             pooler: self.pooler.filter(|_| self.engine == Engine::Postgres),
@@ -692,6 +701,7 @@ impl ConnectionDraft {
             port: file.port,
             database: file.database.clone().unwrap_or_default(),
             engine_kind: file.engine_kind.clone(),
+            external_engine: file.external_engine.clone(),
             file_folder: file.file_folder,
             pooler: file.pooler,
             cleartext_password: file.cleartext_password,
@@ -1025,6 +1035,9 @@ pub fn update_connection(
             &["all_databases"],
             new.all_databases.then(|| Value::from(true)),
         );
+    }
+    if old.external_engine != new.external_engine {
+        put(&mut doc, &["external_engine"], text(&new.external_engine));
     }
     if old.engine_kind != new.engine_kind {
         put(&mut doc, &["engine_kind"], text(&new.engine_kind));

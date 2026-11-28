@@ -747,8 +747,8 @@ try {
   // Plugins (ADR-055): the engines' plugins came inside the installer (next to the app);
   // with SPELAION_NO_UPDATES the catalogue is not read, and the page says so.
   await settingsDialog.getByRole("button", { name: "Plugins", exact: true }).click();
-  await settingsDialog.getByRole("heading", { name: "Plugins" }).waitFor();
-  const pluginList = settingsDialog.getByRole("list", { name: "Plugins" });
+  await settingsDialog.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
+  const pluginList = settingsDialog.getByRole("list", { name: "Plugins", exact: true });
   for (const [plugin, engines] of [
     ["spelaiondb-plugin-sqlserver", "SQL Server"],
     ["spelaiondb-plugin-mysql", "MariaDB, MySQL"],

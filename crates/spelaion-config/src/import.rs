@@ -469,6 +469,8 @@ pub fn import_plan(
             tags: importable_tags(&connection.tags),
             engine,
             engine_kind: connection.engine_kind.clone(),
+            // No other tool knows an engine of SpelaionDB's external plugins.
+            external_engine: None,
             env: connection.env.clone(),
             host: if file {
                 String::new()

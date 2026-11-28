@@ -139,6 +139,8 @@ pub(crate) struct Shared {
     next_stream: AtomicU64,
     /// The secrets this plugin was given: taken out of everything it says.
     secrets: Mutex<Vec<String>>,
+    /// Whose plugin it is, when it is not part of SpelaionDB: put before its errors.
+    attribution: Option<Arc<str>>,
 }
 
 /// Whether a process can still be talked to. It only moves from alive to dead, and dead
@@ -156,7 +158,11 @@ enum Failure {
 }
 
 impl Process {
-    pub(crate) async fn start(program: &Path, log: Option<LogSink>) -> Result<Arc<Self>> {
+    pub(crate) async fn start(
+        program: &Path,
+        log: Option<LogSink>,
+        attribution: Option<Arc<str>>,
+    ) -> Result<Arc<Self>> {
         let name = program
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -198,6 +204,7 @@ impl Process {
             next_id: AtomicU64::new(1),
             next_stream: AtomicU64::new(1),
             secrets: Mutex::new(Vec::new()),
+            attribution,
         });
         let thread = |what: &str| std::thread::Builder::new().name(format!("plugin {name} {what}"));
         thread("in")
@@ -545,7 +552,18 @@ impl Shared {
         text
     }
 
+    /// An error the plugin gave, with the secrets taken out and, for a plugin that is not part
+    /// of SpelaionDB, whose it is put before it.
     fn scrub_error(&self, error: DriverError) -> DriverError {
+        crate::attribute(self.attribution.as_deref(), self.scrubbed(error))
+    }
+
+    /// An error of the host's own about this plugin, saying whose it is.
+    pub(crate) fn attributed(&self, error: DriverError) -> DriverError {
+        crate::attribute(self.attribution.as_deref(), error)
+    }
+
+    fn scrubbed(&self, error: DriverError) -> DriverError {
         let clean = |text: String| self.scrub(&text);
         match error {
             DriverError::Connection(message) => DriverError::Connection(clean(message)),
@@ -588,11 +606,11 @@ impl Shared {
 
     /// The error of everything that was waiting on a plugin that stopped.
     pub(crate) fn lost(&self) -> DriverError {
-        DriverError::Connection(format!(
+        self.attributed(DriverError::Connection(format!(
             "the engine's plugin ({}) stopped: {}",
             self.name,
             self.why()
-        ))
+        )))
     }
 
     /// The plugin is gone: every request fails, every result ends with an error and every

@@ -841,7 +841,8 @@ fn tls_of(row: &Row, engine: Option<Engine>) -> Option<ImportedTls> {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala,
+            | Engine::Impala
+            | Engine::External,
         )
         | None => None,
     };

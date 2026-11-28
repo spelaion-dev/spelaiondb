@@ -1258,5 +1258,7 @@
     "defaultRestoreName": "Restore {{name}}",
     "saveExportOnlyAll": "Only an export that runs the query or reads the table again can be saved as a task",
     "saveImportOnlyFile": "Only an import from a file can be saved as a task"
-  }
+  },
+  "notOursMark": "Not ours",
+  "notOursMarkHint": "Its engine, {{engine}}, comes from a plugin you added that is not part of SpelaionDB: report its problems to its author."
 }

@@ -571,8 +571,9 @@ impl SpelaionMcp {
             eprintln!("spelaiondb mcp: {reason}");
         }
         // The plugins the app installed, under the last catalogue it accepted (ADR-055). This
-        // server never downloads one.
-        let engines = Engines::builtin_with(
+        // server never downloads one, and never starts one of other people's: agents get
+        // nothing on an engine that is not ours (ADR-041).
+        let engines = Engines::builtin_for_agents(
             &spelaion_core::plugins::installed::PluginStore::in_user_dir(&options.user_dir),
         );
         Ok(Self {

@@ -17,7 +17,8 @@
   "categories": {
     "relational": "Relacionales",
     "analytical": "Analíticas",
-    "nosql": "NoSQL"
+    "nosql": "NoSQL",
+    "external": "Añadidos por ti, no forman parte de SpelaionDB"
   },
   "sections": {
     "server": "Servidor",
@@ -589,5 +590,8 @@
     "transactionHint": "En modo transacción cada transacción puede ir por otra conexión al servidor: SpelaionDB no usa sentencias preparadas, y la sesión no tiene valores por defecto, sentencias de inicio, esquema propio ni modo de solo lectura.",
     "noSession": "Esta conexión pasa por un pooler en modo transacción, que no conserva ajustes de sesión: estos no se guardan. Cualifica los nombres con su esquema, o fija lo que necesites dentro de cada transacción.",
     "noReadOnly": "No disponible a través de un pooler en modo transacción: el modo de solo lectura de la sesión duraría una sola transacción. Usa un usuario de base de datos de solo lectura, o conecta a través del pooler en modo sesión."
-  }
+  },
+  "notOurs": "No es parte de SpelaionDB",
+  "notOursHint": "{{engine}} viene del plugin {{plugin}} {{version}}, que dice ser de {{author}}. No forma parte de SpelaionDB: sin modo de solo lectura, nada para agentes, y sus problemas van a su autor.",
+  "externalMissing": "El motor de esta conexión, {{engine}}, no forma parte de SpelaionDB, y ninguno de los plugins que has añadido lo sirve."
 }

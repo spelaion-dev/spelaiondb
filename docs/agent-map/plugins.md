@@ -115,3 +115,44 @@
   programs: a change to the protocol's three crates or to a driver is tested both ways. A
   database on another machine (SQLite over SSH, ADR-018) never goes through a plugin: the core
   keeps the driver compiled in for it (`ThroughPlugin` in `open.rs`).
+- **Other people's plugins** (ADR-041 point 5, ADR-055 point 5, SDB-154; the authors' guide is
+  `docs/plugin-authors.md`, its example `examples/plugins/acme-memo`, in C#). Every rule is in
+  `crates/spelaion-core/src/plugins/external.rs` (`TheirPlugins`, the store's `theirs/` folder,
+  apart from `ours/` and never named by a catalogue):
+  - **Added only on the user's yes to a dialog.** `inspect_file` / `inspect_address` bring the
+    archive to `theirs/.pending/<sha256>.tar.gz` and read it without unpacking or running
+    anything (the manifest in memory, every member hashed); what they return (`Pending`) is the
+    dialog. `add` is given back the archive's SHA-256 the dialog showed and reads the archive
+    again: a different file is `Swapped` and nothing is added. Only then is the program
+    unpacked, and its SHA-256 written to `pin.toml`.
+  - **The address**: `inspect_address` is the only function that takes one, and the app's only
+    caller is `plugins_inspect_address`, from the Plugins page's field (`TheirPlugins.tsx`;
+    `scripts/plugin-commands.test.mjs` checks both). HTTPS only (`check_address`: no user or
+    password, an ASCII host), every redirect too (`fetch::download` returns where the bytes
+    came from), bounded by `MAX_ARCHIVE_BYTES`; it is the archive, or that plugin's release
+    manifest naming an archive per platform with its size and SHA-256 (one step). The address
+    is kept in `pin.toml` to be shown and nothing reads it back to fetch.
+  - **The manifest** (`spelaion-plugin.toml`, `Manifest::parse`, unknown fields refused): its
+    name and engine never pass for ours (`spelaion_config::check_external_engine`, one rule for
+    the manifest and the connection file), its dialect is one of the core's or none, and it is
+    read through `spelaion_dialect::ExternalDialect`: that dialect's splitter under the name
+    `external`, which no barrier, server family or SQL of the core answers to. One plugin per
+    engine; the same name replaces the old one after the dialog.
+  - **Pinned**: `Engines::with_their_plugins` starts each with `plugins::their_plugin` (the
+    host's `with_check` against the pin, every start) and `Plugin::with_attribution`, which puts
+    the plugin's name, version and author and "not part of SpelaionDB" before every error the
+    host gives for it (`spelaion_plugin_host::attribute`). A changed program is
+    `ExternalState::Changed`: its engine only says so until `trust_again` is given the hash the
+    dialog showed.
+  - **Connections** name the engine, never the plugin: `engine = "external"` with
+    `external_engine` (`Engine::External`: no read barrier, so no read-only mode and
+    `AgentView::EngineWithoutBarrier`). `Engines::driver_for` and `dialect_for` are how a
+    connection's driver and dialect are found; one whose engine no added plugin serves is
+    `OpenError::ExternalEngineMissing` and stops there. `spelaiondb mcp` uses
+    `Engines::builtin_for_agents`, which never has them. The connection test's diagnostics say
+    whose plugin it is (`Engines::engine_note`).
+  - Tests that try to get around each rule: `crates/spelaion-test-plugin/tests/theirs.rs` (the
+    C# example too, with `SPELAION_TEST_ACME_MEMO` set to the archive its `build.ps1` packs),
+    `crates/spelaion-config/tests/external_engines.rs`, the MCP's
+    `an_engine_of_someone_elses_plugin_gets_nothing_from_agents`, and `tests/protocol.rs`'s
+    attribution test. Any change to `external.rs` needs its test there.

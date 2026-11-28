@@ -1222,6 +1222,7 @@ async fn list_connections(state: State<'_, AppState>) -> CmdResult<Vec<Connectio
             description: c.file.description.clone(),
             tags: c.file.tags.clone(),
             engine: c.file.engine.as_str().into(),
+            external_engine: c.file.external_engine.clone(),
             engine_mark,
             env: c.file.env.clone(),
             kind: c
@@ -1477,12 +1478,20 @@ async fn keychain_available() -> CmdResult<bool> {
     .unwrap_or(false))
 }
 
-/// Engines shown when adding a connection, including the ones not supported yet.
+/// Engines shown when adding a connection, including the ones not supported yet, and after
+/// them the engines of plugins the user added, which are not part of SpelaionDB (ADR-055).
 #[command]
-fn engine_catalog() -> Vec<EngineItem> {
+fn engine_catalog(state: State<'_, AppState>) -> Vec<EngineItem> {
+    let engines = state.engines();
+    let mut theirs: Vec<EngineItem> = engines
+        .external_engines()
+        .filter_map(EngineItem::of_external)
+        .collect();
+    theirs.sort_by(|a, b| a.name.cmp(&b.name));
     spelaion_core::engine_catalog()
         .into_iter()
         .map(EngineItem::from)
+        .chain(theirs)
         .collect()
 }
 
@@ -7101,6 +7110,12 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             plugins::plugins_refresh_catalogue,
             plugins::plugins_install,
             plugins::plugins_install_file,
+            plugins::plugins_inspect_file,
+            plugins::plugins_inspect_address,
+            plugins::plugins_add_theirs,
+            plugins::plugins_discard_theirs,
+            plugins::plugins_trust_again,
+            plugins::plugins_remove_theirs,
             plugins::plugins_remove,
             plugins::plugin_processes,
             plugins::plugin_restart,

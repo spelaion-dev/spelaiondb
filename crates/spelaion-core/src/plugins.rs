@@ -16,6 +16,7 @@
 
 pub mod catalogue;
 pub mod choice;
+pub mod external;
 pub mod fetch;
 pub mod installed;
 pub mod pins;
@@ -38,6 +39,10 @@ fn file_of(program: &Path) -> PathBuf {
 }
 
 fn registered(program: &Path, sha256: Option<&str>) -> Plugin {
+    registered_as(program, sha256, None)
+}
+
+fn registered_as(program: &Path, sha256: Option<&str>, attribution: Option<&str>) -> Plugin {
     let key = (file_of(program), sha256.map(str::to_string));
     let mut plugins = PLUGINS
         .get_or_init(Default::default)
@@ -52,6 +57,10 @@ fn registered(program: &Path, sha256: Option<&str>) -> Plugin {
                 .unwrap_or_else(|| "plugin".into());
             let plugin = Plugin::new(program)
                 .with_log(Arc::new(move |line: &str| eprintln!("[{name}] {line}")));
+            let plugin = match attribution {
+                Some(attribution) => plugin.with_attribution(attribution),
+                None => plugin,
+            };
             match sha256 {
                 Some(sha256) => {
                     let sha256 = sha256.to_string();
@@ -78,6 +87,14 @@ pub fn plugin_at(program: &Path) -> Plugin {
 /// user added the plugin (ADR-055); never from the file itself.
 pub fn pinned_plugin(program: &Path, sha256: &str) -> Plugin {
     registered(program, Some(sha256))
+}
+
+/// The plugin of someone else's that the user added (ADR-055, point 5), whose program is
+/// `program`: started only while that file's SHA-256 is `sha256`, the hash the user trusted
+/// when they added it, and with `attribution` (whose it is, and that it is not part of
+/// SpelaionDB) before every error it gives.
+pub fn their_plugin(program: &Path, sha256: &str, attribution: &str) -> Plugin {
+    registered_as(program, Some(sha256), Some(attribution))
 }
 
 /// The plugins of `program` this program knows, pinned or not.

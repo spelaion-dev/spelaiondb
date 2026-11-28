@@ -37,11 +37,12 @@ fn position(engine: Engine) -> usize {
         Engine::Opensearch => 26,
         Engine::Solr => 27,
         Engine::Meilisearch => 28,
+        Engine::External => 29,
     }
 }
 
 /// The number of arms above: one more than the last position.
-const ENGINES: usize = 29;
+const ENGINES: usize = 30;
 
 #[test]
 fn every_engine_is_listed_once() {

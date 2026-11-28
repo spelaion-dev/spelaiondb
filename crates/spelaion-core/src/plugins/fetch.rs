@@ -107,15 +107,16 @@ pub enum FetchError {
     Io { what: String, error: String },
 }
 
-/// Fetches `address` into `sink`, at most `most` bytes of it. The number of bytes fetched.
-async fn download(
+/// Fetches `address` into `sink`, at most `most` bytes of it. The number of bytes fetched, and
+/// where they finally came from after any redirect (always `https://`).
+pub(super) async fn download(
     transport: &dyn Transport,
     what: &'static str,
     address: &str,
     most: u64,
     // `Send`, so the futures that fetch can run on the app's threads.
     sink: &mut (dyn Write + Send),
-) -> Result<u64, FetchError> {
+) -> Result<(u64, String), FetchError> {
     let not_https = |address: &str| FetchError::NotHttps {
         what,
         address: address.to_string(),
@@ -144,7 +145,7 @@ async fn download(
             .map_err(|_| FetchError::Stalled { what })?
             .map_err(unreachable)?;
         let Some(chunk) = chunk else {
-            return Ok(fetched);
+            return Ok((fetched, from));
         };
         fetched = fetched.saturating_add(chunk.len() as u64);
         if fetched > most {
@@ -158,7 +159,7 @@ async fn download(
 }
 
 /// An address the core fetches from: `https://` and a host, nothing odd in it.
-fn is_https(address: &str) -> bool {
+pub(super) fn is_https(address: &str) -> bool {
     address
         .strip_prefix("https://")
         .is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'))
@@ -229,7 +230,7 @@ pub async fn install_offered(
         what: format!("keeping {what}"),
         error: error.to_string(),
     })?;
-    let fetched = download(
+    let (fetched, _) = download(
         transport,
         what,
         &offered.address,

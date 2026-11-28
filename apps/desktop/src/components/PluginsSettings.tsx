@@ -3,7 +3,9 @@
 // why) or missing. Install, update and remove are one click each; removing a build that runs
 // asks first. Everything shown and every decision is the core's (`src-tauri/src/plugins.rs`):
 // no command here takes an address, a key or a catalogue, only a plugin's name, a version the
-// overview listed, an id this page chose, or a file the user picked.
+// overview listed, an id this page chose, or a file the user picked. The plugins of other
+// people's the user adds themselves are a section of their own (`TheirPlugins.tsx`), the one
+// place in the app where an address is typed.
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -14,6 +16,7 @@ import { engineCatalog } from "../engines";
 import { startJob } from "../jobs";
 import { byteSize, installable, installText, needsInstalling, usePlugins } from "../plugins";
 import { useApp } from "../store";
+import { TheirPlugins } from "./TheirPlugins";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -226,6 +229,7 @@ export function PluginsSettings() {
           {fileError}
         </p>
       )}
+      {overview !== null && <TheirPlugins plugins={overview.theirs} />}
       {restarting && (
         <RestartDialog
           plugin={restarting.plugin}

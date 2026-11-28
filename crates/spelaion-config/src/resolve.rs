@@ -73,6 +73,8 @@ pub struct ResolvedConnection {
     pub id: ConnectionId,
     pub name: String,
     pub engine: Engine,
+    /// With `Engine::External`: the engine of someone else's plugin it uses (ADR-055).
+    pub external_engine: Option<String>,
     pub env: Option<String>,
     /// The connection type `env` names (ADR-029), with every layer applied; `None` for no
     /// label or a plain one.
@@ -652,6 +654,7 @@ impl<'a> Resolver<'a> {
             id: entry.id.clone(),
             name: entry.name(),
             engine: file.engine,
+            external_engine: file.external_engine.clone(),
             env: file.env.clone(),
             kind,
             params,

@@ -5,9 +5,16 @@
 //! is fetched and from where (`fetch`), what is installed (`installed::PluginStore`). Errors
 //! reach the page as the core wrote them.
 //!
-//! - **No command takes an address, a key or a catalogue's text.** They take a plugin's name,
-//!   a version the overview listed, an id the page chose, or the path of a file the user
-//!   picked in the app's file dialog. `scripts/plugin-commands.test.mjs` checks the bindings.
+//! - **No command takes a key or a catalogue's text, and one only takes an address.** They take
+//!   a plugin's name, a version the overview listed, an id the page chose, the hash a dialog
+//!   showed, or the path of a file the user picked in the app's file dialog. The one address is
+//!   [`plugins_inspect_address`]'s: what the user typed or pasted into the Plugins page to add
+//!   someone else's plugin (ADR-055, point 5), which nothing else in the app calls and nothing
+//!   stores to read again. `scripts/plugin-commands.test.mjs` checks the bindings.
+//! - **Other people's plugins** are added only on the user's yes to the dialog
+//!   ([`plugins_add_theirs`], given back the hash the dialog showed), are listed apart and as
+//!   not ours, are never offered an update, and get nothing from agents: every rule is the
+//!   core's (`spelaion_core::plugins::external`).
 //! - **Nothing is fetched without the user** but the catalogue, under the "check for updates"
 //!   setting (and never with `SPELAION_NO_UPDATES`): when the page opens
 //!   ([`plugins_refresh_catalogue`]) and where the app checks for its own updates
@@ -29,6 +36,7 @@ use specta::Type;
 use spelaion_core::Engines;
 use spelaion_core::plugins::catalogue::{CatalogueError, CatalogueKey, MAX_CATALOGUE_BYTES};
 use spelaion_core::plugins::choice::{self, PluginState};
+use spelaion_core::plugins::external;
 use spelaion_core::plugins::fetch::{self, Body, Transport, TransportError};
 use spelaion_core::plugins::installed::{AppBuild, PluginStore};
 use spelaion_core::plugins::pins::Pins;
@@ -299,6 +307,170 @@ pub struct PluginsOverview {
     /// The serial of the catalogue accepted last, if any.
     pub catalogue_serial: Option<f64>,
     pub plugins: Vec<PluginItem>,
+    /// The plugins of other people's the user added, which are not part of SpelaionDB.
+    pub theirs: Vec<TheirPluginItem>,
+}
+
+/// What a plugin the user added is now (the core's `ExternalState`).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TheirPluginState {
+    /// Its program is the file the user trusted: its engine uses it.
+    Trusted,
+    /// Its program changed since: refused until trusted again. `found` is its SHA-256 now,
+    /// what `pluginsTrustAgain` is given back once the user agreed.
+    #[serde(rename_all = "camelCase")]
+    Changed { found: String },
+    /// Its program is gone.
+    Missing,
+    /// It cannot be read or started here, in the core's words.
+    #[serde(rename_all = "camelCase")]
+    Unusable { why: String },
+}
+
+/// A plugin of someone else's the user added: not part of SpelaionDB, and not supported.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TheirPluginItem {
+    pub name: String,
+    pub version: Option<String>,
+    /// Who it says it is from.
+    pub author: Option<String>,
+    pub description: Option<String>,
+    /// Where its author says to look for it: shown as text, never opened by the app.
+    pub homepage: Option<String>,
+    /// The engine it adds, as connections name it, and as people write it.
+    pub engine: Option<String>,
+    pub engine_label: Option<String>,
+    /// The SHA-256 of the program the user trusted.
+    pub sha256: Option<String>,
+    /// The file or address it was added from: shown, never read again.
+    pub source: Option<String>,
+    pub state: TheirPluginState,
+    /// Why its engine does not open, when it does not (the core's words).
+    pub refused: Option<String>,
+    /// Sessions open now on its engine.
+    pub open_sessions: u32,
+}
+
+/// Where an archive waiting for the user's answer came from (the core's `Origin`).
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PendingOriginItem {
+    #[serde(rename_all = "camelCase")]
+    File { path: String },
+    /// The whole address the user gave, its host and, when it was a release manifest, the
+    /// archive's own address and host; `arrived_from` is where the archive's bytes finally
+    /// came from after a redirect, when that was elsewhere.
+    #[serde(rename_all = "camelCase")]
+    Address {
+        address: String,
+        host: String,
+        archive: Option<String>,
+        archive_host: Option<String>,
+        arrived_from: Option<String>,
+    },
+}
+
+/// What the dialog shows before someone else's plugin is added: what it says it is, who it
+/// says it is from, the engine it adds, where it came from and the hash of what arrived.
+/// Nothing in it was run or unpacked.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingPluginItem {
+    pub name: String,
+    pub version: String,
+    pub author: String,
+    pub description: Option<String>,
+    pub homepage: Option<String>,
+    pub engine: String,
+    pub engine_label: String,
+    /// The core's dialect its scripts are read with; none for standard SQL.
+    pub dialect: Option<String>,
+    /// The SHA-256 of the archive that arrived: what `pluginsAddTheirs` is given back.
+    pub archive_sha256: String,
+    pub archive_size: f64,
+    /// The SHA-256 of its program, checked before every start.
+    pub program_sha256: String,
+    pub origin: PendingOriginItem,
+    /// The version of the same plugin it replaces, if one was added before.
+    pub replaces: Option<String>,
+}
+
+impl From<external::Pending> for PendingPluginItem {
+    fn from(pending: external::Pending) -> Self {
+        let manifest = pending.manifest;
+        Self {
+            name: manifest.name,
+            version: manifest.version,
+            author: manifest.author,
+            description: manifest.description,
+            homepage: manifest.homepage,
+            engine: manifest.engine,
+            engine_label: manifest.engine_label,
+            dialect: manifest.dialect,
+            archive_sha256: pending.archive_sha256,
+            archive_size: pending.archive_size as f64,
+            program_sha256: pending.program_sha256,
+            origin: match pending.origin {
+                external::Origin::File { path } => PendingOriginItem::File { path },
+                external::Origin::Address {
+                    address,
+                    host,
+                    archive,
+                    archive_host,
+                    arrived_from,
+                } => PendingOriginItem::Address {
+                    address,
+                    host,
+                    archive,
+                    archive_host,
+                    arrived_from,
+                },
+            },
+            replaces: pending.replaces,
+        }
+    }
+}
+
+fn their_item(
+    plugin: &external::ExternalPlugin,
+    sessions: &HashMap<String, u32>,
+) -> TheirPluginItem {
+    let manifest = plugin.manifest.as_ref();
+    let engine = manifest.map(|manifest| manifest.engine.clone());
+    TheirPluginItem {
+        name: plugin.name.clone(),
+        version: manifest.map(|manifest| manifest.version.clone()),
+        author: manifest.map(|manifest| manifest.author.clone()),
+        description: manifest.and_then(|manifest| manifest.description.clone()),
+        homepage: manifest.and_then(|manifest| manifest.homepage.clone()),
+        engine_label: manifest.map(|manifest| manifest.engine_label.clone()),
+        open_sessions: engine
+            .as_ref()
+            .and_then(|engine| sessions.get(&external_key(engine)).copied())
+            .unwrap_or(0),
+        engine,
+        sha256: plugin.sha256.clone(),
+        source: plugin.source.clone(),
+        state: match &plugin.state {
+            external::ExternalState::Trusted => TheirPluginState::Trusted,
+            external::ExternalState::Changed { found } => TheirPluginState::Changed {
+                found: found.clone(),
+            },
+            external::ExternalState::Missing => TheirPluginState::Missing,
+            external::ExternalState::Unusable(why) => {
+                TheirPluginState::Unusable { why: why.clone() }
+            }
+        },
+        refused: plugin.refusal(),
+    }
+}
+
+/// How `sessions_by_engine` counts the sessions of an engine of someone else's plugin: apart
+/// from ours, whose names it can never have.
+fn external_key(engine: &str) -> String {
+    format!("external:{engine}")
 }
 
 /// What removing a build did.
@@ -464,9 +636,12 @@ fn swap_engines(state: &AppState) {
 pub(crate) async fn sessions_by_engine(state: &AppState) -> HashMap<String, u32> {
     let mut counts = HashMap::new();
     for session in state.sessions.lock().await.values() {
-        *counts
-            .entry(session.open.resolved.engine.as_str().to_string())
-            .or_insert(0) += 1;
+        let resolved = &session.open.resolved;
+        let key = match (resolved.engine, &resolved.external_engine) {
+            (spelaion_config::Engine::External, Some(engine)) => external_key(engine),
+            (engine, _) => engine.as_str().to_string(),
+        };
+        *counts.entry(key).or_insert(0) += 1;
     }
     counts
 }
@@ -500,7 +675,16 @@ pub(crate) async fn overview(state: &AppState) -> PluginsOverview {
     let states = plugin_states(&store, catalogue.as_ref());
     let installed = store.installed();
     let sessions = sessions_by_engine(state).await;
+    // Hashing each program of theirs is not for the runtime's own threads.
+    let theirs_store = store.theirs();
+    let theirs = tokio::task::spawn_blocking(move || theirs_store.plugins(&AppBuild::this()))
+        .await
+        .unwrap_or_default();
     PluginsOverview {
+        theirs: theirs
+            .iter()
+            .map(|plugin| their_item(plugin, &sessions))
+            .collect(),
         accepts_catalogue: CatalogueKey::shipped().is_some(),
         updates_allowed: updates_allowed(state).await,
         catalogue_serial: catalogue
@@ -797,6 +981,130 @@ pub async fn plugins_remove(
         .map_err(|error| format!("{name} {version} could not be removed: {error}"))?;
     swap_engines(&state);
     forget_failures(&app, &state.plugins);
+    Ok(PluginRemoval::Removed {
+        overview: overview(&state).await,
+    })
+}
+
+/// Reads a plugin's archive the user picked in the app's file dialog, to add someone else's
+/// plugin: what the dialog shows. Nothing in it is run or unpacked (the core's rule).
+#[command]
+pub async fn plugins_inspect_file(
+    state: State<'_, AppState>,
+    path: String,
+) -> CmdResult<PendingPluginItem> {
+    let theirs = store_of(&state).theirs();
+    tokio::task::spawn_blocking(move || theirs.inspect_file(Path::new(&path), &AppBuild::this()))
+        .await
+        .map_err(|error| error.to_string())?
+        .map(PendingPluginItem::from)
+        .map_err(|error| error.to_string())
+}
+
+/// Reads, once, the address the user typed or pasted into the Plugins page to add someone
+/// else's plugin: the `https://` address of its archive, or of its release manifest. What the
+/// dialog shows; nothing that arrives is run or unpacked, every redirect stays on HTTPS and
+/// the download is bounded (the core's rules). **The only command that takes an address**:
+/// nothing but that field of the Plugins page calls it. Its ticket goes to `job`, and
+/// `cancel_job` stops the download.
+#[command]
+pub async fn plugins_inspect_address(
+    state: State<'_, AppState>,
+    job: tauri::ipc::Channel<crate::jobs::JobTicket>,
+    address: String,
+) -> CmdResult<PendingPluginItem> {
+    let running = crate::jobs::start(&state, crate::jobs::JobKind::PluginInstall, &job);
+    let work = async {
+        let transport = HttpsTransport::new().map_err(|error| error.0)?;
+        store_of(&state)
+            .theirs()
+            .inspect_address(&transport, &address, &AppBuild::this())
+            .await
+            .map(PendingPluginItem::from)
+            .map_err(|error| error.to_string())
+    };
+    // Stopping drops the download: the core leaves nothing of it behind.
+    let result = tokio::select! {
+        result = work => result,
+        () = running.cancel().cancelled() => Err("reading the address was stopped".to_string()),
+    };
+    drop(running);
+    result
+}
+
+/// Adds the plugin of someone else's waiting with `sha256`, the hash the dialog showed: **the
+/// user's yes**. The core adds it only if what waits still has that hash, and pins its program.
+/// A plugin of the same name is replaced (stopped first, its sessions lost). The engines are
+/// swapped.
+#[command]
+pub async fn plugins_add_theirs(
+    state: State<'_, AppState>,
+    sha256: String,
+) -> CmdResult<PluginsOverview> {
+    let _changing = state.plugins.changing.lock().await;
+    store_of(&state)
+        .theirs()
+        .add(&sha256, &AppBuild::this())
+        .await
+        .map_err(|error| error.to_string())?;
+    swap_engines(&state);
+    Ok(overview(&state).await)
+}
+
+/// Drops the archive waiting with `sha256`: the user said no to the dialog.
+#[command]
+pub async fn plugins_discard_theirs(state: State<'_, AppState>, sha256: String) -> CmdResult<()> {
+    store_of(&state).theirs().discard(&sha256);
+    Ok(())
+}
+
+/// Trusts again the program of the plugin `name` whose file changed, as it is now: only if its
+/// SHA-256 is still `sha256`, the hash the dialog showed (**the user's yes**). The engines are
+/// swapped.
+#[command]
+pub async fn plugins_trust_again(
+    state: State<'_, AppState>,
+    name: String,
+    sha256: String,
+) -> CmdResult<PluginsOverview> {
+    let _changing = state.plugins.changing.lock().await;
+    let theirs = store_of(&state).theirs();
+    tokio::task::spawn_blocking(move || theirs.trust_again(&name, &sha256, &AppBuild::this()))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    swap_engines(&state);
+    Ok(overview(&state).await)
+}
+
+/// Removes the plugin of someone else's `name` and its pin. If sessions are open on its engine,
+/// nothing is removed until `confirmed`: removing it stops it and they are lost (ADR-028). The
+/// engines are swapped.
+#[command]
+pub async fn plugins_remove_theirs(
+    state: State<'_, AppState>,
+    name: String,
+    confirmed: bool,
+) -> CmdResult<PluginRemoval> {
+    let _changing = state.plugins.changing.lock().await;
+    if !confirmed {
+        let open_sessions = overview(&state)
+            .await
+            .theirs
+            .iter()
+            .find(|plugin| plugin.name == name)
+            .map(|plugin| plugin.open_sessions)
+            .unwrap_or(0);
+        if open_sessions > 0 {
+            return Ok(PluginRemoval::NeedsConfirmation { open_sessions });
+        }
+    }
+    store_of(&state)
+        .theirs()
+        .remove(&name)
+        .await
+        .map_err(|error| error.to_string())?;
+    swap_engines(&state);
     Ok(PluginRemoval::Removed {
         overview: overview(&state).await,
     })

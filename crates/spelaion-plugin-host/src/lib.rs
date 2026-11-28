@@ -45,6 +45,38 @@ pub type LogSink = Arc<dyn Fn(&str) + Send + Sync>;
 /// started (the core's pins, ADR-042). An error is why not: nothing is started then.
 pub type StartCheck = Arc<dyn Fn(&Path) -> std::result::Result<(), String> + Send + Sync>;
 
+/// Says whose plugin an error came from (ADR-055, point 5): `attribution` goes before every
+/// message, so a report goes to the plugin's author. A cancellation has no message and stays as
+/// it is.
+pub fn attribute(attribution: Option<&str>, error: DriverError) -> DriverError {
+    let Some(label) = attribution else {
+        return error;
+    };
+    let say = |message: String| format!("{label}: {message}");
+    match error {
+        DriverError::Connection(message) => DriverError::Connection(say(message)),
+        DriverError::Database {
+            code,
+            message,
+            detail,
+            hint,
+            position,
+        } => DriverError::Database {
+            code,
+            message: say(message),
+            detail,
+            hint,
+            position,
+        },
+        DriverError::Cancelled => DriverError::Cancelled,
+        DriverError::Decode { type_name, message } => DriverError::Decode {
+            type_name,
+            message: say(message),
+        },
+        DriverError::Other(message) => DriverError::Other(say(message)),
+    }
+}
+
 /// What a plugin's running process uses (SDB-399), read by the core from the operating
 /// system for that one process. A number that cannot be read is `None`.
 #[derive(Debug, Clone, PartialEq)]
@@ -134,6 +166,9 @@ struct Inner {
     program: PathBuf,
     log: Option<LogSink>,
     check: Option<StartCheck>,
+    /// Whose plugin it is, when it is not part of SpelaionDB: put before each of its errors
+    /// ([`attribute`]).
+    attribution: Option<Arc<str>>,
     /// Its process. Never locked across an `.await`.
     slot: std::sync::Mutex<Slot>,
     /// Held while a process starts or stops, so two connections that arrive together start one
@@ -150,6 +185,7 @@ impl Plugin {
                 program: program.into(),
                 log: None,
                 check: None,
+                attribution: None,
                 slot: std::sync::Mutex::new(Slot::NotStarted),
                 changing: tokio::sync::Mutex::new(()),
                 next_session: AtomicU64::new(1),
@@ -185,6 +221,29 @@ impl Plugin {
             },
             Err(inner) => Self { inner },
         }
+    }
+
+    /// The same plugin, with `attribution` put before every error it gives ([`attribute`]):
+    /// whose it is, for a plugin that is not part of SpelaionDB (ADR-055). Only before it is
+    /// shared, as [`with_log`].
+    ///
+    /// [`with_log`]: Plugin::with_log
+    pub fn with_attribution(self, attribution: impl Into<String>) -> Self {
+        let attribution: Arc<str> = Arc::from(attribution.into());
+        match Arc::try_unwrap(self.inner) {
+            Ok(inner) => Self {
+                inner: Arc::new(Inner {
+                    attribution: Some(attribution),
+                    ..inner
+                }),
+            },
+            Err(inner) => Self { inner },
+        }
+    }
+
+    /// Whose plugin this is, when it is not part of SpelaionDB.
+    pub fn attribution(&self) -> Option<&str> {
+        self.inner.attribution.as_deref()
     }
 
     pub fn program(&self) -> &Path {
@@ -276,15 +335,22 @@ impl Plugin {
             if let Err(why) = checked {
                 let why = format!("the plugin {} was not started: {why}", self.name());
                 starting.end(Slot::Dead { why: why.clone() });
-                return Err(DriverError::Connection(why));
+                return Err(attribute(self.attribution(), DriverError::Connection(why)));
             }
         }
-        match Process::start(&self.inner.program, self.inner.log.clone()).await {
+        match Process::start(
+            &self.inner.program,
+            self.inner.log.clone(),
+            self.inner.attribution.clone(),
+        )
+        .await
+        {
             Ok(process) => {
                 starting.end(Slot::Running(process.clone()));
                 Ok(process)
             }
             Err(error) => {
+                let error = attribute(self.attribution(), error);
                 starting.end(Slot::Dead {
                     why: error.to_string(),
                 });
@@ -318,11 +384,14 @@ impl PluginDriver {
     async fn process(&self) -> Result<Arc<Process>> {
         let process = self.plugin.process().await?;
         if !process.info().engines.iter().any(|e| e == &self.engine) {
-            return Err(DriverError::Other(format!(
-                "the plugin {} does not serve the engine {:?}",
-                self.plugin.name(),
-                self.engine
-            )));
+            return Err(attribute(
+                self.plugin.attribution(),
+                DriverError::Other(format!(
+                    "the plugin {} does not serve the engine {:?}",
+                    self.plugin.name(),
+                    self.engine
+                )),
+            ));
         }
         Ok(process)
     }

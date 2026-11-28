@@ -78,7 +78,8 @@ fn passwordless(engine: Engine) -> bool {
         | Engine::Hive
         | Engine::Spark
         | Engine::Kyuubi
-        | Engine::Impala => false,
+        | Engine::Impala
+        | Engine::External => false,
     }
 }
 

@@ -851,8 +851,10 @@ mod tests {
     #[test]
     fn an_engine_without_its_barrier_is_never_shown_to_agents() {
         // ADR-056, point 6: MongoDB has no agents' barrier yet, whatever `[mcp]` says; nor have
-        // the Flight SQL engines, which run SQL on any server (ADR-041).
+        // the Flight SQL engines, which run SQL on any server (ADR-041); nor, ever, an engine
+        // of someone else's plugin, whose barrier is not ours to vouch for (ADR-055).
         for engine in [
+            "external",
             "mongodb",
             "redis",
             "oracle",

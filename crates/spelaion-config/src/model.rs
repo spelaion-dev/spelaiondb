@@ -31,6 +31,13 @@ pub struct ConnectionFile {
     /// A named protocol-compatible server chosen in the picker. For display only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_kind: Option<String>,
+    /// With `engine = "external"` only, and always there: the engine, by the name its plugin's
+    /// manifest gives it (`foodb`), served by a plugin the user added themselves that is not
+    /// part of SpelaionDB (ADR-041, ADR-055). It names an engine, never a plugin: no file,
+    /// address or hash, so nothing here can install one or point to one. A connection whose
+    /// engine no added plugin serves says so and does not open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_engine: Option<String>,
     /// Connection type (ADR-029): `dev`, `test`, `prod` (or `production`) or the id of a type
     /// in `connection-types.toml`; its badge and safeguards apply. Any other text is a plain
     /// label with no behaviour.
@@ -234,6 +241,43 @@ pub fn engine_kind_base(kind: &str) -> Option<Engine> {
     }
 }
 
+/// The longest name an engine of someone else's plugin may have.
+pub const MAX_EXTERNAL_ENGINE: usize = 40;
+
+/// Whether `name` may name an engine served by a plugin that is not part of SpelaionDB: a
+/// connection's `external_engine`, and the engine a plugin's manifest adds (one rule for both).
+/// Lowercase letters, digits and `-`, starting with a letter, up to 40 characters; never the
+/// name of one of SpelaionDB's own engines or of a server kind of its picker, nor anything that
+/// starts with `spelaion`, so an engine that is not ours can never pass for one that is.
+pub fn check_external_engine(name: &str) -> Result<(), String> {
+    let shaped = name.len() >= 2
+        && name.len() <= MAX_EXTERNAL_ENGINE
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && !name.ends_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !shaped {
+        return Err(format!(
+            "{name:?} is not an engine's name: use lowercase letters, digits and -, starting with \
+             a letter, up to {MAX_EXTERNAL_ENGINE} characters"
+        ));
+    }
+    if Engine::parse(name).is_some() || engine_kind_base(name).is_some() {
+        return Err(format!(
+            "{name:?} is one of SpelaionDB's own engines: a plugin that is not part of SpelaionDB \
+             cannot serve it"
+        ));
+    }
+    if name.starts_with("spelaion") {
+        return Err(format!(
+            "{name:?} starts with \"spelaion\", which only SpelaionDB's own engines and plugins \
+             may"
+        ));
+    }
+    Ok(())
+}
+
 impl ConnectionFile {
     /// Identifier used by the engine-mark catalogue.
     pub fn engine_mark(&self) -> &str {
@@ -315,12 +359,16 @@ pub enum Engine {
     Opensearch,
     Solr,
     Meilisearch,
+    /// An engine served by a plugin the user added themselves, which is not part of
+    /// SpelaionDB (ADR-041, point 5; ADR-055, point 5): the connection's `external_engine`
+    /// names which. It has no read-only mode and agents never see it.
+    External,
 }
 
 impl Engine {
     /// Every engine, in declaration order. `tests/engine_names.rs` checks it against a match
     /// with no `_`, so a new engine fails there until it is listed here.
-    pub const ALL: [Engine; 29] = [
+    pub const ALL: [Engine; 30] = [
         Engine::Postgres,
         Engine::Sqlite,
         Engine::Mysql,
@@ -350,6 +398,7 @@ impl Engine {
         Engine::Opensearch,
         Engine::Solr,
         Engine::Meilisearch,
+        Engine::External,
     ];
 
     /// The engine a connection file names (`as_str`'s text). Read through the same names the
@@ -392,6 +441,7 @@ impl Engine {
             Engine::Opensearch => "opensearch",
             Engine::Solr => "solr",
             Engine::Meilisearch => "meilisearch",
+            Engine::External => "external",
         }
     }
 
@@ -427,6 +477,7 @@ impl Engine {
             Engine::Opensearch => "OpenSearch",
             Engine::Solr => "Solr",
             Engine::Meilisearch => "Meilisearch",
+            Engine::External => "External engine (not part of SpelaionDB)",
         }
     }
 
@@ -453,7 +504,8 @@ impl Engine {
             | Engine::Kyuubi
             | Engine::Impala
             | Engine::Databend
-            | Engine::Spanner => true,
+            | Engine::Spanner
+            | Engine::External => true,
             Engine::Mongodb
             | Engine::Redis
             | Engine::Cassandra
@@ -503,7 +555,8 @@ impl Engine {
             | Engine::Elasticsearch
             | Engine::Opensearch
             | Engine::Solr
-            | Engine::Meilisearch => false,
+            | Engine::Meilisearch
+            | Engine::External => false,
         }
     }
 
@@ -541,7 +594,8 @@ impl Engine {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala => false,
+            | Engine::Impala
+            | Engine::External => false,
         }
     }
 
@@ -575,7 +629,8 @@ impl Engine {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala => false,
+            | Engine::Impala
+            | Engine::External => false,
         }
     }
 
@@ -613,6 +668,8 @@ impl Engine {
             Engine::Elasticsearch | Engine::Opensearch => Some(9200),
             Engine::Solr => Some(8983),
             Engine::Meilisearch => Some(7700),
+            // The plugin's own engine: the connection says its port.
+            Engine::External => None,
         }
     }
 }
@@ -754,7 +811,8 @@ impl IsolationLevel {
             | Engine::Mongodb
             | Engine::Redis
             | Engine::Cassandra
-            | Engine::Tdengine => false,
+            | Engine::Tdengine
+            | Engine::External => false,
             // ClickHouse has no transactions to isolate; Trino and Presto set none per session.
             Engine::Clickhouse
             | Engine::Trino
@@ -812,7 +870,8 @@ impl Engine {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala => false,
+            | Engine::Impala
+            | Engine::External => false,
         }
     }
 }

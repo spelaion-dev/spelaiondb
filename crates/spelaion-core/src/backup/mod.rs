@@ -120,7 +120,8 @@ impl ToolFamily {
             | Engine::Hive
             | Engine::Spark
             | Engine::Kyuubi
-            | Engine::Impala => None,
+            | Engine::Impala
+            | Engine::External => None,
         }
     }
 
@@ -173,7 +174,8 @@ fn preferred_flavor(engine: Engine) -> Option<ToolFlavor> {
         | Engine::Hive
         | Engine::Spark
         | Engine::Kyuubi
-        | Engine::Impala => None,
+        | Engine::Impala
+        | Engine::External => None,
     }
 }
 
