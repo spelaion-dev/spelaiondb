@@ -173,6 +173,43 @@ SDB-475 to SDB-478 (ADR-080's items 2 to 5) are rewritten to this decision:
 
 Until item 2's get-around tests pass, nothing turns on read-only mode or agents on Oracle.
 
+## Notes
+
+**2026-11-28: Java writes, so a fourth answer: no Java outside Oracle's own schemas (SDB-476;
+Pablo chose "No user Java + full image").** The channel tests of point 5 found that a
+writable user's Java stored function writes under the read-only user. It opens a JDBC
+connection back into this database as its owner, and that new session is not read-only
+(`a_writable_users_java_writes_under_the_read_only_user_once_it_may_open_a_socket`). It needs
+only a `java.net.SocketPermission` for its owner. Oracle's default Java policy already gives
+any socket to the roles `JAVAUSERPRIV`, `JAVASYSPRIV`, `EJBCLIENT` and `JMXSERVER`, and network
+access control entries play no part.
+
+- **The answer:** read-only mode and agents on Oracle are refused while any Java object
+  exists outside Oracle's own schemas. The count covers every `JAVA%` object type in
+  `SYS.DBA_OBJECTS` whose owner is not marked `ORACLE_MAINTAINED = 'Y'` in `SYS.DBA_USERS`; an
+  owner missing from `DBA_USERS` counts as not Oracle's. Both views are asked by their full
+  `SYS` names, and the answer must be zero.
+- **When:** like the links answer, when the session opens and again before each agent's read,
+  on the session that will run it.
+- **The grant:** the read-only user reads both views only under a DBA's grant (`SELECT` on
+  each, given by `SYS`, or `SELECT_CATALOG_ROLE`). Without it the question fails, and a failed
+  question is a no.
+- **Tested** (`the_java_answer_finds_a_users_java_and_none_on_a_clean_database`): it is zero on
+  `testing/docker`'s clean database, which holds tens of thousands of Oracle's own Java classes.
+  It counts the writable user's Java source and class once that user loads them, and is zero
+  again once they are dropped.
+- **Why this and not a check of `SocketPermission`:** a Java policy check would have to follow
+  every permission that reaches outside the session, not only sockets. That includes file
+  permissions (a class can write files another process reads) and the permission to run an
+  operating-system process (a class could start SQL*Plus as a writable user; neither of these
+  was tried), and every role that carries them, directly or through other roles. Refusing any user Java covers all of
+  them, and every grant made later, with one count. The cost: a database whose users keep Java
+  of their own is not offered.
+
+`UTL_HTTP`, `UTL_TCP` and external procedures could not run in `testing/docker`'s lite image
+(its README says why). As Pablo decided, they are tested once on the full Oracle Free image,
+an optional service of `testing/docker`, before anything is turned on.
+
 ## Sources
 - `crates/spelaion-core/tests/oracle.rs` (the tests named above), against `testing/docker`'s
   Oracle Free 23.26.3 and its read-only user (`oracle/startup/02-spelaion-ro.sql`). They need

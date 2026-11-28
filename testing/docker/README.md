@@ -36,9 +36,24 @@ host ──127.0.0.1:2221──► bastion1 ──(mid network)──► bastion
   may read `spelaion.spelaion_ro_reads` (one row); tests grant it more on their own objects.
   `oracle/startup/02-spelaion-ro.sql` makes it, and sets it read-only again, on every start.
   The tests that need an administrator (to change a user, make a public database link or read
-  `v$session`) connect as `system` with `ORACLE_PWD`. Its TCPS is a TLS proxy in front of it (the lite image has no `orapki`), on
+  `v$session`, or grant a Java permission) connect as `system` with `ORACLE_PWD`. The lite image
+  runs Java stored procedures, but not `UTL_HTTP` or `UTL_TCP` (every network access check fails
+  with ORA-29332: `SYS.DBMS_NETWORK_ACL_ADMIN` is missing from the root), nor external procedures
+  (ORA-28575: no `libagtsh.so`, no `$ORACLE_HOME/hs`), nor XDB's HTTP gateway
+  (`DBMS_XDB_CONFIG`'s body is invalid). Its TCPS is a TLS proxy in front of it (the lite image has no `orapki`), on
   `127.0.0.1:12484` and `oracle-tls:2484`, with a certificate for `localhost` and
   `oracle-tls` signed by `keys/ca.crt` (`gen-keys.sh`).
+- Oracle Database Free's **full** image (the same 23.26.3 release, about 7 GB) is the optional
+  service `oracle-full`, in the Compose profile `oracle-full`. A plain `up` never starts it, and
+  CI never runs it. It exists for the channel tests the lite image cannot run (`UTL_HTTP`,
+  `UTL_TCP`, external procedures; ADR-092's note of 2026-11-28), which read
+  `SPELAION_TEST_ORACLE_FULL=127.0.0.1:11522` and are skipped without it. The same
+  `oracle/startup` scripts make `spelaion` and `spelaion_ro`; the tests grant what each channel
+  needs as `system` and take it back. Its 3 GiB limit comes on top of the default phase's
+  11.5 GiB, so on a 16 GB machine stop `oracle` and `oracle-tls` while it runs. Start it with
+  `docker compose -f testing/docker/compose.yaml --profile oracle-full up -d --wait oracle-full`
+  and stop it with `docker compose -f testing/docker/compose.yaml --profile oracle-full stop
+  oracle-full`.
 - Apache Hive 4.0.1's HiveServer2 (with its embedded metastore; about 3 GB, half a minute to
   start) is on `127.0.0.1:11010` without authentication (`SPELAION_TEST_HIVE`; behind the
   bastions `hive:10000`). Its JVM is bounded (`mem_limit`), like every new JVM service here.
