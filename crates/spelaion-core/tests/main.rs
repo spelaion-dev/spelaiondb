@@ -50,6 +50,7 @@ mod import;
 mod import_cancel;
 mod imported_setup;
 mod include;
+mod jdbc_bridge;
 mod kept_results;
 mod kube;
 mod late_cancel;

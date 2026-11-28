@@ -41,6 +41,7 @@ mod idle_transaction;
 mod import;
 mod include;
 pub mod instance;
+pub mod jdbc;
 mod job;
 pub mod kube;
 pub mod launch;

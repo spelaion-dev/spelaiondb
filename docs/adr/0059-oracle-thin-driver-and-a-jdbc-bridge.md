@@ -1,6 +1,7 @@
 # ADR-059: Oracle through Oracle's own pure-Rust thin driver; a JDBC bridge only for engines no open native driver reaches
 
-- **Status:** Accepted (the Oracle plugin is implemented, SDB-318; the JDBC bridge is not)
+- **Status:** Accepted (the Oracle plugin is implemented, SDB-318; the JDBC bridge is
+  implemented for H2 and HSQLDB, SDB-317: see the 2026-11-28 note)
 - **Date:** 2026-11-15
 - **Builds on:** ADR-005 (driver contract), ADR-020 (each engine's barriers), ADR-032 (the
   connection test names what is missing), ADR-041 (engines as plugins; a plugin may be written
@@ -162,3 +163,32 @@ session opens, would be a decision of its own, with tests against such a user in
 agents' reads are offered on Oracle only where the database keeps the session's user read-only,
 checked on each session, and closed everywhere else. Not implemented yet: until its tests pass,
 Oracle still has no read-only mode and no agents.
+
+**2026-11-28: the JDBC bridge, for H2 and HSQLDB (SDB-317).** `spelaion-dev/spelaiondb-plugin-jdbc`
+follows point 4:
+
+- **What the core starts and pins is a native launcher** that carries the bridge's jar inside
+  itself, writes it to the user's cache folder and checks its SHA-256 there before every start,
+  then starts the user's Java runtime (17 or later) on it. The runtime is found as the backup
+  tools are, by the launcher: `JAVA_HOME`, `java` on `PATH`, the usual install folders, newest
+  first. Without one, the launcher serves the protocol itself and refuses every connection
+  saying what is missing, which is what the connection test shows.
+- **The bridge is Java**, speaking the protocol (1.4) with rows as Arrow through Arrow's Java
+  library, checked by the conformance set. H2 and HSQLDB's drivers are inside it.
+- **The core builds every URL** (`spelaion-core`'s `jdbc.rs`): the engine's `file:` prefix and
+  the file's absolute path, refusing a `;`, a relative path, a shared folder or a control
+  character before the plugin sees it; the bridge refuses the same and adds its own settings.
+- **What a file could make it run is turned off**, each with tests that try to get around it,
+  H2 and HSQLDB as published being their control: no class a file names is loaded (H2's
+  `h2.allowedClasses`, HSQLDB's `hsqldb.method_class_names`); H2's source compiler and its
+  linked tables' connections, and HSQLDB's loading of a trigger's class, are replaced in the
+  bridge by code that does none of it.
+- **Derby is left out**, as "Revisit if" says: its Java routines, and the jars a database
+  carries with `derby.database.classpath`, have no setting that turns them off.
+- **Not closed yet:** H2's and HSQLDB's own functions that write files or connect elsewhere
+  (`FILE_WRITE`, `CSVWRITE`, `LINK_SCHEMA`…) are not Java code a file defines, and still run when
+  a view, a default or a check of a file someone sent calls them. Whether the bridge refuses
+  them, and how, is left to an item of its own (SDB-543).
+- **Files with a user other than the administrator, or a password,** do not open from the form
+  yet: a connection of these engines is a file, which the form gives no user or password, and
+  logs in as `sa` (`SA`) without one.

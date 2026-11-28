@@ -197,8 +197,9 @@ impl Engines {
         self.drivers.get(engine).cloned()
     }
 
-    /// Creates an empty database file for an embedded engine (SQLite, DuckDB), through that
-    /// engine's driver. An existing file is never touched.
+    /// Creates an empty database file for an embedded engine (SQLite, DuckDB, and H2 and HSQLDB
+    /// through the JDBC bridge, given the URL the core builds), through that engine's driver. An
+    /// existing file is never touched.
     pub async fn create_file_database(
         &self,
         engine: Engine,
@@ -206,7 +207,7 @@ impl Engines {
     ) -> Result<(), DriverError> {
         let not_a_file = || DriverError::Other(format!("{} is not a file", engine.as_str()));
         match engine {
-            Engine::Sqlite | Engine::Duckdb => {}
+            Engine::Sqlite | Engine::Duckdb | Engine::H2 | Engine::Hsqldb => {}
             Engine::Postgres
             | Engine::Mysql
             | Engine::Mariadb
@@ -244,6 +245,11 @@ impl Engines {
                 path.display()
             )));
         };
+        if crate::jdbc::is_bridged(engine) {
+            // The bridge creates the database its URL names (ADR-059).
+            let url = crate::jdbc::file_url(engine, database).map_err(DriverError::Other)?;
+            return driver.create_database(&url).await;
+        }
         driver.create_database(database).await
     }
 }
@@ -995,6 +1001,9 @@ pub(crate) async fn connect_driver(
     if let Some(reason) = crate::cleartext::refusal(resolved, params) {
         return Err(OpenError::Cleartext(reason));
     }
+    // The JDBC bridge's engines get the URL the core builds from the file's path (ADR-059).
+    let bridged = crate::jdbc::bridged_params(resolved.engine, params)?;
+    let params = bridged.as_ref().unwrap_or(params);
     if resolved.engine.is_file() && params.remote.is_none() {
         return Ok(driver.connect(params).await?);
     }

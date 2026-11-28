@@ -15,6 +15,7 @@
     "timescaledb": "timescale.svg",
     "cratedb": "cratedb.svg",
     "duckdb": "duckdb.svg",
+    "h2": "h2database.svg",
     "clickhouse": "clickhouse.svg",
     "trino": "trino.svg",
     "presto": "presto.svg",
@@ -48,6 +49,7 @@
     "gizmosql": { "shows": "database", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0" },
     "kyuubi": { "shows": "database", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0" },
     "impala": { "shows": "database", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0" },
-    "tdengine": { "shows": "database", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0" }
+    "tdengine": { "shows": "database", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0" },
+    "hsqldb": { "shows": "database", "why": "no mark in Simple Icons 16.36.0 or Devicon 2.18.0" }
   }
 }

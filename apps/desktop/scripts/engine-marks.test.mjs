@@ -48,7 +48,7 @@ test("an engine has a mark or a reason, never both, and the list without one sta
     assert.ok(["base", "folder", "database"].includes(entry.shows), `${id}: ${entry.shows}`);
     assert.ok(entry.why.length > 10, `${id} says why it has no mark`);
   }
-  assert.ok(Object.keys(table.without).length <= 12, "most engines have a mark: look for one before adding to the list");
+  assert.ok(Object.keys(table.without).length <= 13, "most engines have a mark: look for one before adding to the list");
   for (const id of table.colored) assert.ok(id in table.marks, id);
 });
 

@@ -17,6 +17,7 @@ policy](https://www.apache.org/foundation/marks).
 | `sqlite.svg` | SQLite | simple-icons@16.36.0 `icons/sqlite.svg` | CC0-1.0 |
 | `mariadb.svg` | MariaDB | simple-icons@16.36.0 `icons/mariadb.svg` | CC0-1.0 |
 | `duckdb.svg` | DuckDB | simple-icons@16.36.0 `icons/duckdb.svg` | CC0-1.0 |
+| `h2database.svg` | H2 | simple-icons@16.36.0 `icons/h2database.svg` | CC0-1.0 |
 | `cockroachlabs.svg` | CockroachDB | simple-icons@16.36.0 `icons/cockroachlabs.svg` | CC0-1.0 |
 | `clickhouse.svg` | ClickHouse | simple-icons@16.36.0 `icons/clickhouse.svg` | CC0-1.0 |
 | `snowflake.svg` | Snowflake | simple-icons@16.36.0 `icons/snowflake.svg` | CC0-1.0 |

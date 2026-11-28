@@ -28,6 +28,8 @@ const SQL_ENGINES: &[&str] = &[
     "flightsql",
     "dremio",
     "gizmosql",
+    "h2",
+    "hsqldb",
 ];
 
 fn dialect(engine: &str) -> std::sync::Arc<dyn Dialect> {

@@ -574,10 +574,12 @@ pub(crate) fn validate_connection(
         .into_iter()
         .filter_map(|(k, m)| m.then_some(k))
         .collect(),
-        Engine::Sqlite | Engine::Duckdb => [("database", file.database.is_none())]
-            .into_iter()
-            .filter_map(|(k, m)| m.then_some(k))
-            .collect(),
+        Engine::Sqlite | Engine::Duckdb | Engine::H2 | Engine::Hsqldb => {
+            [("database", file.database.is_none())]
+                .into_iter()
+                .filter_map(|(k, m)| m.then_some(k))
+                .collect()
+        }
         // MongoDB, Redis, Cassandra and Neo4j may need no login, and the database can be chosen
         // in the explorer.
         Engine::Mongodb
@@ -645,11 +647,7 @@ pub(crate) fn validate_connection(
             path,
             format!(
                 "{} is a local file: it does not support {}",
-                if file.engine == Engine::Sqlite {
-                    "SQLite"
-                } else {
-                    "DuckDB"
-                },
+                file.engine.label(),
                 if file.kubernetes.is_some() {
                     "Kubernetes"
                 } else {
@@ -832,7 +830,7 @@ pub(crate) fn validate_connection(
                     "SQL Server does not log SQL users in with a client certificate: use a password or a token",
                 ));
             }
-            Engine::Sqlite | Engine::Duckdb => {
+            Engine::Sqlite | Engine::Duckdb | Engine::H2 | Engine::Hsqldb => {
                 return Err(ConfigError::new(
                     path,
                     "a local file has no client certificate",

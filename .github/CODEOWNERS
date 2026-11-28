@@ -19,6 +19,9 @@
 # Which files a script's `@include` may read, and how much (ADR-078, point 7).
 /crates/spelaion-core/src/include.rs            @petilolz @frglez
 
+# The JDBC URLs the core builds, so no driver setting that runs code is passed (ADR-059).
+/crates/spelaion-core/src/jdbc.rs               @petilolz @frglez
+
 # Column masking (ADR-051).
 /crates/spelaion-core/src/masking.rs            @petilolz @frglez
 /crates/spelaion-config/src/masking.rs          @petilolz @frglez

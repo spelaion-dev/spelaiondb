@@ -865,6 +865,8 @@ mod tests {
             "spark",
             "kyuubi",
             "impala",
+            "h2",
+            "hsqldb",
         ] {
             let connection = |extra: &str| {
                 ConnectionEntry {
