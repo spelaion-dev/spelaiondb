@@ -412,8 +412,13 @@ fn a_set_value_never_adds_a_statement_nor_hides_one_from_the_guard() {
                         "{engine}: {script:?} -> {:?}",
                         resolved.text
                     );
+                    // On the standard reading, a value with a marker another reading reads
+                    // otherwise (`$$`) asks about that reading (ADR-079, point 6): more asked,
+                    // never less. Nothing else asks.
                     assert!(
-                        risks(d.as_ref(), &resolved.text).is_empty(),
+                        risks(d.as_ref(), &resolved.text)
+                            .iter()
+                            .all(|risk| d.standard_reading() && *risk == Risk::OtherReading),
                         "{engine}: {script:?} made a statement the guard asks about"
                     );
                 }
